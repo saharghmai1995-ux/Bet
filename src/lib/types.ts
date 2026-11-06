@@ -1,3 +1,47 @@
+// ═══════════════════════════════════════════════════════
+// v4.0 — فید زنده چند-API (Live Multi-API Telemetry)
+// ═══════════════════════════════════════════════════════
+
+/** وضعیت سلامت هر منبع داده زنده */
+export interface LiveFeedSourceDTO {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+  latencyMs: number;
+}
+
+/** تیتر خبر زنده ESPN */
+export interface LiveNewsDTO {
+  headline: string;
+  description: string;
+  published: string;
+  url: string;
+  leagueSlug: string;
+}
+
+/** خروجی کامل همگام‌سازی فید زنده */
+export interface LiveFeedDTO {
+  success: boolean;
+  mode: "LIVE" | "FALLBACK";
+  lastSyncAt: number;
+  matchesLive: number;
+  matchesUpcoming: number;
+  matchesInPlay: number;
+  news: LiveNewsDTO[];
+  sources: LiveFeedSourceDTO[];
+  odds: {
+    used: boolean;
+    creditsRemaining: number | null;
+    lastOddsSyncAt: number | null;
+    throttled: boolean;
+  };
+  weatherAdjusted: number;
+  calibrated: number;
+  archived: number;
+  elapsedMs: number;
+}
+
 // ─────────────────────────────────────────────
 // تایپ‌های مشترک فرانت‌اند
 // ─────────────────────────────────────────────
@@ -38,6 +82,17 @@ export interface MatchDTO {
   lineupAnnounced?: boolean;
   lineupShockHome?: number | null;
   lineupShockAway?: number | null;
+  // ─── v4.0 — تلهمتری زنده ───
+  dataSource?: string; // SEED | ESPN | SPORTSDB
+  homeLogo?: string | null;
+  awayLogo?: string | null;
+  venueName?: string | null;
+  venueCity?: string | null;
+  weatherTemp?: number | null;
+  weatherWind?: number | null;
+  weatherPrecip?: number | null;
+  weatherAdjusted?: boolean;
+  oddsSource?: string; // ENGINE | ESPN_DRAFTKINGS | ODDS_API
   status: string;
   latestAnalysis: {
     id: string;

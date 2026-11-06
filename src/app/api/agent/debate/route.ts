@@ -4,6 +4,7 @@ import { ensureSeeded } from "@/lib/seed";
 import { computeMatchEngine, devigRows, sharpOu } from "@/lib/engine/matchEngine";
 import { runBullAgent, runBearAgent, runJudgeAgent, type Brief } from "@/lib/agents/debate";
 import { leagueCalibration } from "@/lib/engine/calibration";
+import { getNewsForTeams } from "@/lib/server/live-ingest";
 import type { AgentBriefDTO, DebateResultDTO } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -85,11 +86,29 @@ export async function POST(req: NextRequest) {
       },
       sharp: sharpProbs,
       notes: engine.notes,
+      // v4.0: اخبار زنده ESPN مرتبط با دو تیم — مستند واقعی برای گاو و خرس
+      liveNews: (await getNewsForTeams(match.homeTeam, match.awayTeam)).map((n) => ({
+        headline: n.headline,
+        description: n.description,
+        url: n.url,
+        side: n.leagueSlug !== "" ? ("HOME" as const) : ("HOME" as const),
+      })),
     };
+    // تعیین سمت خبر بر اساس حضور نام واقعی هر تیم در متن
+    {
+      const norm = (s: string) => s.toLowerCase();
+      for (const doc of context.liveNews ?? []) {
+        const text = norm(`${doc.headline} ${doc.description}`);
+        const hitH = norm(match.homeTeam).split(" ").filter((t) => t.length > 2).some((t) => text.includes(t));
+        const hitA = norm(match.awayTeam).split(" ").filter((t) => t.length > 2).some((t) => text.includes(t));
+        doc.side = hitH && !hitA ? "HOME" : hitA && !hitH ? "AWAY" : "HOME";
+      }
+    }
 
     const [bullRes, bearRes] = await Promise.all([runBullAgent(context), runBearAgent(context)]);
+    // v4.0: تشخیص دقیق fallback (فلگ صریح به‌جای جستجوی رشته)
     const source: "LLM" | "ENGINE_FALLBACK" =
-      bullRes.thesis.includes("fallback") || bearRes.thesis.includes("fallback") ? "ENGINE_FALLBACK" : "LLM";
+      bullRes.fallback || bearRes.fallback ? "ENGINE_FALLBACK" : "LLM";
 
     // ترکیب وزنی: موتور + خط شارپ + دلتاهای ایجنت‌ها (وزن‌دهی با اطمینان)
     const bw = bullRes.confidence;
@@ -167,7 +186,12 @@ export async function POST(req: NextRequest) {
         source,
       },
     });
-    await db.match.update({ where: { id: match.id }, data: { status: "ANALYZED" } });
+    // v4.0: وضعیت‌های ویژه (LIVE/ARCHIVED/FINISHED) نباید با ANALYZED بازنویسی شوند
+    const protectedStatus = ["LIVE", "ARCHIVED", "FINISHED"].includes(match.status);
+    await db.match.update({
+      where: { id: match.id },
+      data: { status: protectedStatus ? match.status : "ANALYZED" },
+    });
 
     const judgeBrief: AgentBriefDTO = {
       role: "JUDGE",

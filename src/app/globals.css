@@ -3,6 +3,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* v4.0: جلوگیری از اسکرول افقی موبایل (تیکر/جدول رادار) — clip جای hidden
+   چون sticky هدر را نمی‌شکند */
+html {
+  overflow-x: clip;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

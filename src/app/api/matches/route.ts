@@ -15,7 +15,8 @@ export async function GET(req: NextRequest) {
     const league = url.searchParams.get("league");
 
     const matches = await db.match.findMany({
-      where: league ? { league } : undefined,
+      // v4.0: بازی‌های آرشیو‌شده (گذشته/جایگزین‌شده با فید زنده) نمایش داده نمی‌شوند
+      where: league ? { league, status: { not: "ARCHIVED" } } : { status: { not: "ARCHIVED" } },
       orderBy: { kickoff: "asc" },
       include: {
         analyses: {

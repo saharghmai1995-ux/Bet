@@ -12,7 +12,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { DebateResultDTO, MatchDTO } from "./types";
+import type { DebateResultDTO, LiveFeedDTO, MatchDTO } from "./types";
 import type { AutopilotConfig, AutopilotMatchState, LiveEventToast } from "./autopilot-types";
 import { DEFAULT_CONFIG } from "./autopilot-types";
 
@@ -110,6 +110,14 @@ interface AppState {
   pushLiveToast: (t: LiveEventToast) => void;
   actionLiveToast: (id: string) => void;
   dismissLiveToast: (id: string) => void;
+
+  // ═══════════ v4.0 — فید زنده چند-API ═══════════
+
+  /** آخرین وضعیت همگام‌سازی ESPN/TheSportsDB/Open-Meteo/The Odds API */
+  liveFeed: LiveFeedDTO | null;
+  liveSyncing: boolean;
+  patchLiveFeed: (feed: LiveFeedDTO | null) => void;
+  setLiveSyncing: (v: boolean) => void;
 }
 
 export const useQuantStore = create<AppState>()(
@@ -210,6 +218,12 @@ export const useQuantStore = create<AppState>()(
       actionLiveToast: (id) =>
         set((st) => ({ liveToasts: st.liveToasts.map((t) => (t.id === id ? { ...t, actioned: true } : t)) })),
       dismissLiveToast: (id) => set((st) => ({ liveToasts: st.liveToasts.filter((t) => t.id !== id) })),
+
+      // ═══════════ v4.0 ═══════════
+      liveFeed: null,
+      liveSyncing: false,
+      patchLiveFeed: (feed) => set({ liveFeed: feed }),
+      setLiveSyncing: (v) => set({ liveSyncing: v }),
     }),
     {
       name: "football-quant-v3",

@@ -11,6 +11,7 @@ import {
   Layers,
   LayoutDashboard,
   LineChart,
+  Newspaper,
   Radio,
   Settings,
   Sparkles,
@@ -37,6 +38,8 @@ import { FlashcardDeck } from "@/components/app/autopilot/flashcard-deck";
 import { PipelineRadar } from "@/components/app/autopilot/radar";
 import { SmartCartDrawer } from "@/components/app/autopilot/cart-drawer";
 import { LiveHedgeToasts } from "@/components/app/autopilot/live-toasts";
+import { LiveSyncBadge, NewsRadar, NewsTickerStrip } from "@/components/app/live-telemetry";
+import { syncLive } from "@/lib/live-client";
 import type { DebateResultDTO } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +49,7 @@ const PRO_TABS = [
   { value: "debate", label: "مناظره ایجنت‌ها", icon: Swords },
   { value: "risk", label: "پرتفوی مکمل", icon: Layers },
   { value: "live", label: "زنده و T-60", icon: Radio },
+  { value: "news", label: "رادار اخبار زنده", icon: Newspaper },
   { value: "calibration", label: "کالیبراسیون", icon: Gauge },
   { value: "engine", label: "موتور احتمالات", icon: Calculator },
   { value: "backtest", label: "بک‌تست و CLV", icon: LineChart },
@@ -86,6 +90,11 @@ export default function Home() {
 
   useEffect(() => {
     loadMatches();
+    // v4.0: به محض باز شدن سایت اتصال خودکار به سرورهای زنده — پس از ingest، فید تازه می‌شود
+    void (async () => {
+      const feed = await syncLive(false);
+      if (feed && feed.mode === "LIVE") await loadMatches();
+    })();
   }, [loadMatches]);
 
   // ─── Spotlight Cursor Border سراسری: ردیابی مختصات ماوس با CSS Variables ───
@@ -153,16 +162,19 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 فوتبال‌کوانت
                 <Badge className="gap-1 border-violet-500/40 bg-violet-500/15 px-1.5 py-0 text-[9px] text-violet-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v3.0 Autopilot
+                  <Sparkles className="size-2.5" /> v4.0 Live Telemetry
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                موتور کمّی تمام‌اتوماتیک پیش‌بینی و مدیریت سرمایه فوتبال
+                موتور کمّی تمام‌اتوماتیک با دیتای زنده واقعی مسابقات، اخبار و ضرایب
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* نشانگر زنده فید چند-API + دکمه همگام‌سازی */}
+            <LiveSyncBadge />
+
             {/* سوییچ دو حالته: Smart Autopilot ↔ Pro Quant Terminal */}
             <div
               className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5"
@@ -243,8 +255,9 @@ export default function Home() {
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
         {isSimple ? (
           /* ═══ حالت ۱: داشبورد سریع و فلش‌کارت‌ها (Smart Autopilot) ═══ */
-          <div className="space-y-6">
+          <div className="space-y-4">
             <FlashcardDeck />
+            <NewsTickerStrip />
             <PipelineRadar onOpenCard={openFlashcardsFor} />
           </div>
         ) : (
@@ -311,6 +324,10 @@ export default function Home() {
               <LiveTab onGoToTab={goToTab} />
             </TabsContent>
 
+            <TabsContent value="news">
+              <NewsRadar />
+            </TabsContent>
+
             <TabsContent value="calibration">
               <CalibrationTab />
             </TabsContent>
@@ -331,7 +348,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۳.۰ — خلبان خودکار: اسکن اتوماتیک ← T-60 ← دیکسون-کولز + شین ← مناظره گاو/خرس ← زوج‌تیپ مکمل ← فلش‌کارت ← کلِی همزمان ← پوشش زنده
+            فوتبال‌کوانت ۴.۰ — فید زنده ESPN/TheSportsDB/Open-Meteo/The Odds API ← اسکن اتوماتیک ← T-60 ← دیکسون-کولز + شین ← مناظره گاو/خرس با اخبار واقعی ← زوج‌تیپ مکمل ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

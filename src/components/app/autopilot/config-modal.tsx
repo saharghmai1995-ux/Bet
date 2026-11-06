@@ -1,8 +1,8 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// مودال تنظیمات اتصال زنده و خلبان خودکار (API & Autopilot Config) — v3.0
-// کلید The Odds API · وب‌هوک SoccerData/FastAPI · بازه اسکن · بودجه روزانه
+// مودال تنظیمات اتصال زنده و خلبان خودکار (API & Autopilot Config) — v4.0
+// کلید The Odds API (کلید پیش‌فرض سرور فعال است) · وب‌هوک · بازه اسکن · بودجه
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { KeyRound, Link2, Timer, Wallet, Bot, RadioTower, Sparkles, Workflow } from "lucide-react";
@@ -40,19 +40,22 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
             </p>
             <div className="space-y-1.5">
               <Label htmlFor="odds-api-key" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <KeyRound className="size-3" /> کلید The Odds API
+                <KeyRound className="size-3" /> کلید The Odds API v4
               </Label>
               <Input
                 id="odds-api-key"
                 dir="ltr"
-                placeholder="xxxxxxxxxxxxxxxx"
+                placeholder="با خالی گذاشتن، کلید سرور استفاده می‌شود"
                 value={config.oddsApiKey}
                 onChange={(e) => patchConfig({ oddsApiKey: e.target.value })}
                 className="h-9 border-white/10 bg-black/30 text-xs"
                 autoComplete="off"
               />
-              <p className="text-[10px] leading-4 text-muted-foreground">
-                در صورت خالی بودن، موتور از فید داخلی شبیه‌سازی‌شده استفاده می‌کند.
+              <p className="flex items-start gap-1 text-[10px] leading-4 text-muted-foreground">
+                <span aria-hidden>🟢</span>
+                <span>
+                  کلید پیش‌فرض سرور (پلن رایگان) فعال است و بازی‌ها با ضرایب زنده ESPN/TheSportsDB بارگذاری می‌شوند. با وارد کردن کلید خودتان، ضرایب Pinnacle و بوک‌میکرهای اروپایی جایگزین خط پایه می‌شوند (فقط با دکمه 🔄 — پلن رایگان ۵۰۰ اعتبار در ماه دارد و سرور آن را در بازه ۱۲ دقیقه throttle می‌کند).
+                </span>
               </p>
             </div>
             <div className="space-y-1.5">

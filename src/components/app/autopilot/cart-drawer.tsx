@@ -56,21 +56,26 @@ export function SmartCartDrawer() {
     return map;
   }, [kelly.allocations]);
 
+  // v4.0: وقتی کلِی همزمان با ضرایب واقعی به رشد ≤ ۰ می‌رسد، استیک بهینه صفر است؛
+  // به‌جای نمایش «۰ واحد»، خودکار به داچینگ سود برابر fallback می‌کنیم
+  const kellyZero = useKelly && kelly.allocations.length > 0 && kelly.allocations.every((a) => a.stakeA + a.stakeB < 0.05);
+
   // ─── سود تضمینی هر آیتم (داچینگ سود برابر روی سهم تخصیص‌یافته) ───
   const rows = useMemo(
     () =>
       cartItems.map((it) => {
         const alloc = allocById.get(it.key) ?? { stakeA: 0, stakeB: 0 };
-        const pairTotal = alloc.stakeA + alloc.stakeB;
+        const deployedBudget = (budget * deployment) / 100;
+        const pairTotal = kellyZero ? deployedBudget / Math.max(1, cartItems.length) : alloc.stakeA + alloc.stakeB;
         const impliedSum = 1 / it.pair.totalOddsA + 1 / it.pair.totalOddsB;
         const epStakeA = (pairTotal * (1 / it.pair.totalOddsA)) / impliedSum;
         const epStakeB = (pairTotal * (1 / it.pair.totalOddsB)) / impliedSum;
-        const stakeA = useKelly ? alloc.stakeA : Math.round(epStakeA * 10) / 10;
-        const stakeB = useKelly ? alloc.stakeB : Math.round(epStakeB * 10) / 10;
+        const stakeA = useKelly && !kellyZero ? alloc.stakeA : Math.round(epStakeA * 10) / 10;
+        const stakeB = useKelly && !kellyZero ? alloc.stakeB : Math.round(epStakeB * 10) / 10;
         const profit = (stakeA + stakeB) * (it.pair.totalOddsA * it.pair.totalOddsB) / (it.pair.totalOddsA + it.pair.totalOddsB) - (stakeA + stakeB);
         return { ...it, stakeA, stakeB, profit: Math.round(profit * 10) / 10 };
       }),
-    [cartItems, allocById, useKelly]
+    [cartItems, allocById, useKelly, kellyZero, budget, deployment]
   );
 
   const deployed = rows.reduce((s, r) => s + r.stakeA + r.stakeB, 0);
@@ -82,9 +87,9 @@ export function SmartCartDrawer() {
       buildTelegramText(
         rows.map((r) => ({ view: r.view, stakeA: r.stakeA, stakeB: r.stakeB, profit: r.profit })),
         budget,
-        strategyLabel
+        kellyZero ? "داچینگ سود برابر (کلِی: بدون لبه مثبت)" : strategyLabel
       ),
-    [rows, budget, strategyLabel]
+    [rows, budget, strategyLabel, kellyZero]
   );
 
   const handleCopy = () => {
@@ -244,6 +249,11 @@ export function SmartCartDrawer() {
                     {kelly.constrained && <span className="text-amber-400"> · قید بودجه فعال</span>}
                   </span>
                 </div>
+                {kellyZero && (
+                  <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[10px] leading-4 text-amber-300">
+                    ℹ️ با ضرایب واقعی بوک‌میکرها، کلِی همزمان برای این زوج لبه مثبت پیدا نکرد (رشد ≤ ۰) و استیک بهینه صفر بود — تخصیص «داچینگ سود برابر» به‌صورت خودکار نمایش داده می‌شود.
+                  </p>
+                )}
                 <Separator className="bg-white/8" />
                 <div className="flex items-start gap-2">
                   <ScrollText className="mt-1 size-4 shrink-0 text-muted-foreground" />

@@ -19,6 +19,7 @@ const BriefSchema = z.object({
     })
     .catch({ home: 0, draw: 0, away: 0, over25: 0 }),
   confidence: z.number().min(0).max(1).catch(0.6),
+  fallback: z.boolean().optional(),
 });
 
 const JudgeSchema = z.object({
@@ -35,6 +36,13 @@ const JudgeSchema = z.object({
 
 export type Brief = z.infer<typeof BriefSchema>;
 export type JudgeOutput = z.infer<typeof JudgeSchema>;
+
+export interface DebateNewsDoc {
+  headline: string;
+  description: string;
+  url: string;
+  side: "HOME" | "AWAY"; // کدام تیم در خبر بود
+}
 
 export interface DebateContext {
   homeTeam: string;
@@ -57,6 +65,8 @@ export interface DebateContext {
   engine: { lambdaHome: number; lambdaAway: number; pHome: number; pDraw: number; pAway: number; pOver25: number };
   sharp: { home: number; draw: number; away: number } | null;
   notes: { gamestateNote: string | null; fatigueNote: string | null; refereeNote: string | null; lineupShockNote: string | null };
+  /** v4.0 — اخبار زنده ESPN مرتبط با دو تیم (مستند واقعی برای استدلال) */
+  liveNews?: DebateNewsDoc[];
 }
 
 function stripJson(raw: string): string {
@@ -68,22 +78,44 @@ function stripJson(raw: string): string {
   return s;
 }
 
+// ─── صف سراسری LLM با فاصله‌گذاری + backoff ضد 429 (v4.0 — اسکن‌های حجیم فید زنده) ───
+let llmChain: Promise<unknown> = Promise.resolve();
+const LLM_MIN_GAP_MS = 1300;
+
+function llmSlot<T>(fn: () => Promise<T>): Promise<T> {
+  const run = llmChain.then(fn, fn);
+  llmChain = run.catch(() => undefined);
+  return run;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 async function callLlm(system: string, user: string): Promise<string | null> {
-  try {
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: "assistant", content: system },
-        { role: "user", content: user },
-      ],
-      thinking: { type: "disabled" },
-    });
-    const content = completion.choices[0]?.message?.content;
-    return content && content.trim().length > 0 ? content : null;
-  } catch (err) {
-    console.error("Debate LLM call failed:", err);
+  return llmSlot(async () => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const zai = await ZAI.create();
+        const completion = await zai.chat.completions.create({
+          messages: [
+            { role: "assistant", content: system },
+            { role: "user", content: user },
+          ],
+          thinking: { type: "disabled" },
+        });
+        const content = completion.choices[0]?.message?.content;
+        return content && content.trim().length > 0 ? content : null;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("429") && attempt < 2) {
+          await sleep(3500 * (attempt + 1));
+          continue;
+        }
+        console.error("Debate LLM call failed:", err);
+        return null;
+      }
+    }
     return null;
-  }
+  });
 }
 
 const JSON_RULE = `خروجی تو باید "فقط و فقط" یک JSON معتبر باشد؛ بدون markdown، بدون متن اضافه.`;
@@ -97,7 +129,20 @@ function contextBlock(c: DebateContext): string {
 ■ یادداشت تاکتیکی: ${c.tacticalNote ?? "-"}
 ■ خروجی موتور دیکسون-کولز (تعدیل‌شده با وضعیت بازی/سفر/داور/ترکیب): λ = ${c.engine.lambdaHome.toFixed(2)}−${c.engine.lambdaAway.toFixed(2)} | برد میزبان ${(c.engine.pHome * 100).toFixed(1)}٪ / مساوی ${(c.engine.pDraw * 100).toFixed(1)}٪ / برد میهمان ${(c.engine.pAway * 100).toFixed(1)}٪ / بالای ۲.۵ = ${(c.engine.pOver25 * 100).toFixed(1)}٪
 ■ خط شارپ پیناکل بعد از حذف حاشیه شین: ${c.sharp ? `میزبان ${(c.sharp.home * 100).toFixed(1)}٪ / مساوی ${(c.sharp.draw * 100).toFixed(1)}٪ / میهمان ${(c.sharp.away * 100).toFixed(1)}٪` : "در دسترس نیست"}
-■ تعدیل‌های زمینه‌ای: ${[n.gamestateNote, n.fatigueNote, n.refereeNote, n.lineupShockNote].filter(Boolean).join(" | ") || "ندارد"}`;
+■ تعدیل‌های زمینه‌ای: ${[n.gamestateNote, n.fatigueNote, n.refereeNote, n.lineupShockNote].filter(Boolean).join(" | ") || "ندارد"}
+${newsBlock(c)}`;
+}
+
+/** بلوک اخبار زنده ESPN — مستند واقعی برای الصاق به استدلال ایجنت‌ها */
+function newsBlock(c: DebateContext): string {
+  if (!c.liveNews || c.liveNews.length === 0) return "■ اخبار زنده: موردی مرتبط یافت نشد";
+  return [
+    "■ اخبار زنده ESPN (مستند واقعی — موظفی به استفاده در استدلال‌های مرتبط):",
+    ...c.liveNews.map(
+      (n) =>
+        `  • [${n.side === "HOME" ? c.homeTeam : c.awayTeam}] ${n.headline}${n.description ? ` — ${n.description.slice(0, 160)}` : ""}`
+    ),
+  ].join("\n");
 }
 
 export async function runBullAgent(c: DebateContext): Promise<Brief> {
@@ -109,9 +154,9 @@ factorDeltas: پیشنهاد جابه‌جایی احتمال نسبت به خر
 
 قوی‌ترین پرونده را به نفع سناریوی صعودی (برد میزبان / بازی پرگل) بساز. اگر داده‌ها علیه توست، بهترین چرخش ممکن را پیدا کن.`;
   const raw = await callLlm(system, user);
-  if (!raw) return fallbackBrief(c, "BULL");
+  if (!raw) return { ...fallbackBrief(c, "BULL"), fallback: true };
   const parsed = BriefSchema.safeParse(JSON.parse(stripJson(raw)));
-  return parsed.success ? parsed.data : fallbackBrief(c, "BULL");
+  return parsed.success ? parsed.data : { ...fallbackBrief(c, "BULL"), fallback: true };
 }
 
 export async function runBearAgent(c: DebateContext): Promise<Brief> {
@@ -122,9 +167,9 @@ export async function runBearAgent(c: DebateContext): Promise<Brief> {
 
 قوی‌ترین پرونده را علیه سناریوی صعودی بساز؛ مساوی و بازی بسته را جدی بگیر.`;
   const raw = await callLlm(system, user);
-  if (!raw) return fallbackBrief(c, "BEAR");
+  if (!raw) return { ...fallbackBrief(c, "BEAR"), fallback: true };
   const parsed = BriefSchema.safeParse(JSON.parse(stripJson(raw)));
-  return parsed.success ? parsed.data : fallbackBrief(c, "BEAR");
+  return parsed.success ? parsed.data : { ...fallbackBrief(c, "BEAR"), fallback: true };
 }
 
 export async function runJudgeAgent(

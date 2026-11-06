@@ -166,11 +166,19 @@ export function useAutopilot() {
             store.patchAutopilot(m.id, {});
           }
         }
+        // v4.0: مناظره LLM فقط برای نزدیک‌ترین ۸ بازی upcoming — بازی‌های LIVE/FINISHED
+        // مناظره نمی‌شوند (پیش‌بازی معنا ندارد) و هزینه LLM با فید ۲۵+ بازی کنترل می‌شود
+        const debateSet = new Set(
+          matches
+            .filter((m) => m.status === "UPCOMING" || m.status === "ANALYZED")
+            .slice(0, 8)
+            .map((m) => m.id)
+        );
         // همزمانی ۲ — جلوگیری از Rate-Limit موازی LLM در اسکن کامل
         await pool(matches, 2, (m) =>
           scanMatch(m, {
             full: mode === "FULL",
-            allowDebate: useQuantStore.getState().config.autoDebate,
+            allowDebate: useQuantStore.getState().config.autoDebate && debateSet.has(m.id),
           })
         );
       } finally {

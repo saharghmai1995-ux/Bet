@@ -62,9 +62,9 @@ function seedFromId(id: string): number {
   return (h >>> 0) % 2 ** 31;
 }
 
-/** مونت‌کارلو + جدول انتخاب‌های یک بازی */
-function analyzeMatch(mcInput: { matchId: string; homeTeam: string; awayTeam: string; matchLabel: string }, odds: OddsRec[]): { mc: MonteCarloResult; selections: PortfolioSelectionDTO[]; lambdas: { home: number; away: number } } {
-  const match = mcInputCache.get(mcInput.matchId);
+/** مونت‌کارلو + جدول انتخاب‌های یک بازی (کش per-request — بدون رقابت بین درخواست‌های موازی) */
+function analyzeMatch(mcInput: { matchId: string; homeTeam: string; awayTeam: string; matchLabel: string }, odds: OddsRec[], cache: Map<string, unknown>): { mc: MonteCarloResult; selections: PortfolioSelectionDTO[]; lambdas: { home: number; away: number } } {
+  const match = cache.get(mcInput.matchId);
   if (!match) throw new Error("match not cached");
   const engine = computeMatchEngine(match as never);
   const mc = runMonteCarlo({
@@ -119,8 +119,7 @@ function selectionLabel(k: SelectionKey): string {
   return selectionLabels[k];
 }
 
-// کش موقت بازی‌های بارگذاری‌شده برای این درخواست
-const mcInputCache = new Map<string, unknown>();
+// v4.0: کش per-request (به‌جای ماژول-سطح) — اسکن موازی خلبان خودکار دیگر رقابت ندارد
 
 /**
  * POST /api/agent/portfolio { matchId, bankroll?, secondMatchId? }
@@ -136,7 +135,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "matchId الزامی است" }, { status: 400 });
     }
 
-    mcInputCache.clear();
+    const mcInputCache = new Map<string, unknown>();
     const primary = await db.match.findUnique({ where: { id: matchId } });
     if (!primary) {
       return NextResponse.json({ success: false, error: "بازی یافت نشد" }, { status: 404 });
@@ -158,9 +157,9 @@ export async function POST(req: NextRequest) {
 
     const label = (m: { homeTeam: string; awayTeam: string }) => `${m.homeTeam} - ${m.awayTeam}`;
 
-    const prim = analyzeMatch({ matchId: primary.id, homeTeam: primary.homeTeam, awayTeam: primary.awayTeam, matchLabel: label(primary) }, primaryOdds);
+    const prim = analyzeMatch({ matchId: primary.id, homeTeam: primary.homeTeam, awayTeam: primary.awayTeam, matchLabel: label(primary) }, primaryOdds, mcInputCache);
     const sec = second
-      ? analyzeMatch({ matchId: second.id, homeTeam: second.homeTeam, awayTeam: second.awayTeam, matchLabel: label(second) }, secondOdds)
+      ? analyzeMatch({ matchId: second.id, homeTeam: second.homeTeam, awayTeam: second.awayTeam, matchLabel: label(second) }, secondOdds, mcInputCache)
       : null;
 
     const allSelections = [...prim.selections, ...(sec?.selections ?? [])];
@@ -264,8 +263,10 @@ export async function POST(req: NextRequest) {
       const flagsB = combineFlags(prim.mc.flags[baseKey], varMc.flags[varBKey]);
 
       const joint = jointStates(flagsA, flagsB);
-      // آستانه: تا وقتی پایه امن است، بالای/زیر کل فضای متغیر را می‌پوشانند
-      if (joint.bothLose > 0.35) continue;
+      // v4.0: آستانه بازتنظیم‌شده برای ضرایب واقعی بوک‌میکرها — در بازارهای متوازن
+      // باخت همزمان ≈ ۱ − P(پایه) است (پایه ۶۴٪ → ریسک ۳۶٪). آستانه ۰.۵ یعنی
+      // «پایه» باید حداقل احتمال ۵۰٪ داشته باشد؛ گرید بندی صادقانه در verdict انجام می‌شود
+      if (joint.bothLose > 0.5) continue;
 
       // بررسی ساختاری تله با منطق Mutually Covering (هر دو تیپ پایه مشترک دارند)
       const baseTrap: TrapLeg = { match: label(primary), selection: TRAP_MAP[baseKey] };
@@ -376,9 +377,11 @@ export async function POST(req: NextRequest) {
         verdict:
           guaranteedMarginPct > 4 && joint.bothLose < 0.05
             ? "پوشش ممتاز — سود تضمینی بالا با ریسک باخت همزمان ناچیز"
-            : guaranteedMarginPct > 0
-              ? "پوشش معتبر — سود تضمینی مثبت"
-              : "پوشش نسبی — صرفاً برای کاهش واریانس",
+            : joint.bothLose < 0.2
+              ? "پوشش معتبر — پایه امن، سود تضمینی در سناریوی پایه"
+              : joint.bothLose < 0.38
+                ? "پوشش نسبی — مشروط به برد پایه؛ ریسک باخت همزمان متوسط"
+                : "پوشش پرریسک — پایه ضعیف؛ صرفاً برای کاهش واریانس",
       });
     }
 

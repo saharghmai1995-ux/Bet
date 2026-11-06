@@ -128,7 +128,8 @@ export function devigRows(odds: OddsRecord[]) {
       const res = shinDevig([rec.oddsHome, rec.oddsDraw, rec.oddsAway]);
       return {
         bookmaker: book,
-        bookmakerLabel: labels[book] ?? book,
+        // v4.0: نام واقعی بوک‌میکر از فید زنده (The Odds API / ESPN) در اولویت
+        bookmakerLabel: rec.bookmakerLabel ?? labels[book] ?? book,
         marginPct: res.margin,
         shinProbs: { home: res.probs[0], draw: res.probs[1], away: res.probs[2] },
         shinZ: res.z,

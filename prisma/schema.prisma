@@ -81,7 +81,22 @@ model Match {
   homeGoals Int?
   awayGoals Int?
 
-  status    String         @default("UPCOMING") // UPCOMING | ANALYZED | LIVE | FINISHED
+  // ─── v4.0 — تلهمتری زنده چند-API (ESPN / TheSportsDB / Open-Meteo / The Odds API) ───
+  externalId      String?  @unique   // شناسه رخداد ESPN برای همگام‌سازی idempotent
+  dataSource      String   @default("SEED") // SEED | ESPN | SPORTSDB
+  homeLogo        String?            // لوگوی رسمی تیم میزبان (ESPN)
+  awayLogo        String?            // لوگوی رسمی تیم میهمان (ESPN)
+  venueName       String?            // نام ورزشگاه
+  venueCity       String?            // شهر ورزشگاه (برای مختصات آب‌وهوا)
+  refereeName     String?            // داور اعلام‌شده (ESPN summary)
+  weatherTemp     Float?             // دمای لحظه‌ای ورزشگاه (سانتی‌گراد)
+  weatherWind     Float?             // سرعت باد (km/h)
+  weatherPrecip   Float?             // بارش (mm)
+  weatherAdjusted Boolean @default(false) // تعدیل جوی −۸٪ روی λ
+  oddsSource      String  @default("ENGINE") // ENGINE | ESPN_DRAFTKINGS | ODDS_API
+  oddsFetchedAt   DateTime?           // آخرین به‌روزرسانی ضرایب زنده
+
+  status    String         @default("UPCOMING") // UPCOMING | ANALYZED | LIVE | FINISHED | ARCHIVED
   referee   Referee?       @relation(fields: [refereeId], references: [id])
   players   Player[]
   odds      OddsRecord[]
@@ -121,6 +136,7 @@ model OddsRecord {
   match     Match    @relation(fields: [matchId], references: [id])
   matchId   String
   bookmaker String   // PINNACLE | SOFT_A | SOFT_B
+  bookmakerLabel String? // v4.0 — نام واقعی بوک‌میکر فید زنده
   oddsHome  Float
   oddsDraw  Float
   oddsAway  Float

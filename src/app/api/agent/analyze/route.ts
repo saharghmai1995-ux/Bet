@@ -315,7 +315,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    await db.match.update({ where: { id: match.id }, data: { status: "ANALYZED" } });
+    // v4.0: وضعیت‌های ویژه (LIVE/ARCHIVED/FINISHED) نباید با ANALYZED بازنویسی شوند
+    const protectedStatus = ["LIVE", "ARCHIVED", "FINISHED"].includes(match.status);
+    await db.match.update({
+      where: { id: match.id },
+      data: { status: protectedStatus ? match.status : "ANALYZED" },
+    });
 
     return NextResponse.json({
       success: true,

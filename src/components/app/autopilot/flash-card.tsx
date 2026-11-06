@@ -40,15 +40,15 @@ const TRUST_ICONS: Record<FlashcardView["trust"]["kind"], typeof Award> = {
   SILVER: BadgeCheck,
 };
 
-/** متن آماده کپی تیپ */
+/** متن آماده کپی تیپ — v4.0 (متن استاندارد UTF-8، بدون کاراکتر شکسته) */
 export function cardCopyText(v: FlashcardView): string {
   const p = v.pair;
   return [
-    `⚽ ${v.match.homeTeam} - ${v.match.awayTeam} (${v.match.league}) · ${v.match.kickoff}`,
-    `🔵 تیپ A: ${p.labelA} | ضریب ${p.totalOddsA.toFixed(2)} | استیک ${faNum(p.equalProfit.stakeA, 1)}`,
-    `🟢 تیپ B: ${p.labelB} | ضریب ${p.totalOddsB.toFixed(2)} | استیک ${faNum(p.equalProfit.stakeB, 1)}`,
-    `💰 سود تضمینی داچینگ: ${faPct(p.guaranteedMarginPct / 100)} | ریسک باخت همزمان: ${faPct(p.jointStates.bothLose)}`,
-    `⚖️ ${p.verdict} — فوتبال‌کوانت v3.0`,
+    `⚽ فوتبال‌کوانت v4.0 — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`,
+    `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeA, 1)} واحد`,
+    `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeB, 1)} واحد`,
+    `✅ سود خالص تضمینی: +${p.guaranteedMarginPct.toFixed(1)}% | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
+    `⚖️ ${p.verdict}`,
   ].join("\n");
 }
 
@@ -114,13 +114,23 @@ export function FlashCard({
                 {match.homeTeam} <span className="text-muted-foreground">×</span> {match.awayTeam}
               </h3>
             </div>
-            <span className={`flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${TRUST_STYLES[view.trust.kind]}`}>
-              <TrustIcon className="size-3" />
-              {view.trust.label}
-              {view.trust.kind === "GOLD" && (
-                <span className="font-num" dir="ltr">| {Math.round(view.confidence * 100)}%</span>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${TRUST_STYLES[view.trust.kind]}`}>
+                <TrustIcon className="size-3" />
+                {view.trust.label}
+                {view.trust.kind === "GOLD" && (
+                  <span className="font-num" dir="ltr">| {Math.round(view.confidence * 100)}%</span>
+                )}
+              </span>
+              {match.weatherAdjusted && (
+                <span
+                  className="flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[9px] font-semibold text-sky-300"
+                  title={`آب‌وهوای واقعی ورزشگاه: ${match.weather ?? ""} — لامبدا −۸٪ اصلاح شد`}
+                >
+                  🌧️ تعدیل جوی زنده
+                </span>
               )}
-            </span>
+            </div>
           </div>
 
           {/* باکس دوقلوی تیپ مکمل */}

@@ -99,24 +99,27 @@ export function useCartItems(): { key: string; view: FlashcardView; pair: Portfo
   }, [cart, autopilot, matches]);
 }
 
-/** خروجی متنی سبد برای تلگرام / برگه‌ساز */
+/**
+ * خروجی متنی سبد برای تلگرام / برگه‌ساز — v4.0
+ * اصلاح کامل باگ کاراکترهای شکسته (ٱٱٱ): تمام رشته‌ها با متن فارسی استاندارد UTF-8
+ */
 export function buildTelegramText(
   items: { view: FlashcardView; stakeA: number; stakeB: number; profit: number }[],
   budget: number,
   strategyLabel: string
 ): string {
   const lines: string[] = [];
-  lines.push("⚽ فوتبال‌کوانت v3.0 — سبد زوج‌تیپ‌های مکمل");
-  lines.push(`📅 اسکن اتوماتیک · بودجه: ${budget} واحد · استراتژی: ${strategyLabel}`);
+  lines.push("⚽ فوتبال‌کوانت v4.0 — سبد هوشمند تیپ‌های مکمل روزانه");
+  lines.push(`💰 کل بودجه روزانه: ${budget} واحد | استراتژی: ${strategyLabel}`);
   lines.push("─────────────────────");
   for (const it of items) {
     const p = it.view.pair;
-    lines.push(`🏆 ${it.view.match.homeTeam} - ${it.view.match.awayTeam} (${it.view.match.league})`);
-    lines.push(`  🔵 تیپ A: ${p.labelA}`);
-    lines.push(`     ضریب ${p.totalOddsA.toFixed(2)} · استیک ${it.stakeA}`);
-    lines.push(`  🟢 تیپ B: ${p.labelB}`);
-    lines.push(`     ضریب ${p.totalOddsB.toFixed(2)} · استیک ${it.stakeB}`);
-    lines.push(`  💰 سود تضمینی: ${p.guaranteedMarginPct.toFixed(1)}٪ · ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}٪`);
+    lines.push(`🏆 ${it.view.match.homeTeam} مقابل ${it.view.match.awayTeam} (${it.view.match.league})`);
+    lines.push(`🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${it.stakeA} واحد`);
+    lines.push(`🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${it.stakeB} واحد`);
+    lines.push(
+      `✅ سود خالص تضمینی: +${p.guaranteedMarginPct.toFixed(1)}% | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`
+    );
     lines.push("─────────────────────");
   }
   lines.push("⚖️ ابزار آموزشی تحلیل کمّی — مسئولیت استفاده با کاربر است.");
