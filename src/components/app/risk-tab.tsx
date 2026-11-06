@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { dutchAllocate, type DutchStrategy } from "@/lib/engine/dutching";
 import { equalProfitSplit } from "@/lib/engine/betbuilder";
 import { TiltSlip } from "@/components/app/fx/tilt-slip";
+import { FlashcardDeck } from "@/components/app/autopilot/flashcard-deck";
 import { useQuantStore } from "@/lib/store";
 import type { PortfolioResultDTO, RiskResultDTO } from "@/lib/types";
 import { PortfolioCard } from "@/components/app/portfolio-card";
@@ -139,6 +140,9 @@ export function RiskTab({ onGoToTab }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* ─── فلش‌کارت‌های آماده بهره‌برداری (v3.0) ─── */}
+      <FlashcardDeck compact title="فلش‌کارت‌های تیپ آماده — بهره‌برداری سریع" defaultView="grid" />
+
       {/* ─── موتور پرتفوی: مونت‌کارلو کاپولا + کلِی همزمان ─── */}
       <PortfolioCard onGoToDebate={() => onGoToTab("debate")} />
 

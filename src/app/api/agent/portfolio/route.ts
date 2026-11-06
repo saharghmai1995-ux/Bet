@@ -16,6 +16,7 @@ const TRAP_MAP: Record<SelectionKey, SelectionKind> = {
   HOME: "HOME_WIN", DRAW: "DRAW", AWAY: "AWAY_WIN",
   DC_1X: "HOME_OR_DRAW", DC_X2: "AWAY_OR_DRAW",
   O25: "OVER_2_5", U25: "UNDER_2_5",
+  O15: "OVER_1_5", U35: "UNDER_3_5",
   BTTS_Y: "BTTS_YES", BTTS_N: "BTTS_NO",
   C_O95: "OVER_2_5", C_U95: "UNDER_2_5", // کرنر به عنوان متغیر دوگانه رفتار می‌کند
 };
@@ -107,6 +108,8 @@ const selectionLabels: Record<SelectionKey, string> = {
   DC_X2: "شانس مجدد میهمان (X2)",
   O25: "بالای ۲.۵ گل",
   U25: "زیر ۲.۵ گل",
+  O15: "بالای ۱.۵ گل",
+  U35: "زیر ۳.۵ گل",
   BTTS_Y: "هر دو تیم گل می‌زنند",
   BTTS_N: "گل نزدن حداقل یک تیم",
   C_O95: "بالای ۹.۵ کرنر",
@@ -162,21 +165,79 @@ export async function POST(req: NextRequest) {
 
     const allSelections = [...prim.selections, ...(sec?.selections ?? [])];
 
-    // ─── ساخت زوج‌های کاندید ───
-    const candidates: { a: PortfolioSelectionDTO; b: PortfolioSelectionDTO; kind: "SINGLE_MATCH_BUILDER" | "TWO_MATCH_MIX" }[] = [];
+    // ─── ساخت زوج‌های کاندید (v3.0 — فرم صریح: پایه × متغیرA ↔ پایه × متغیرB) ───
+    type Candidate = {
+      base: PortfolioSelectionDTO;
+      varA: PortfolioSelectionDTO;
+      varB: PortfolioSelectionDTO;
+      kind: "SINGLE_MATCH_BUILDER" | "TWO_MATCH_MIX";
+      band: "O15_U25" | "O25_U35" | null;
+      synthetic: boolean;
+      doubleWin: boolean;
+    };
+    const candidates: Candidate[] = [];
 
-    // الف) تک‌بازی: پایه امن × متغیر (باتلر بیلدر) — و زوج‌های هم‌بسته خلاقانه
     const primaries = prim.selections.filter((s) => ["DC_1X", "DC_X2"].includes(s.key) && s.modelProb >= 0.62);
-    const vars = prim.selections.filter((s) => ["O25", "U25", "C_O95", "C_U95", "BTTS_Y", "BTTS_N"].includes(s.key));
-    for (const base of primaries) {
-      for (const v of vars) candidates.push({ a: base, b: v, kind: "SINGLE_MATCH_BUILDER" });
-    }
+    const classicVars = prim.selections.filter((s) => ["O25", "U25", "C_O95", "C_U95", "BTTS_Y", "BTTS_N"].includes(s.key));
+    const selOf = (list: PortfolioSelectionDTO[], k: string) => list.find((s) => s.key === k);
+    const oppositeOf = (k: string) =>
+      (({ O25: "U25", U25: "O25", C_O95: "C_U95", C_U95: "C_O95", BTTS_Y: "BTTS_N", BTTS_N: "BTTS_Y" }) as Record<string, string>)[k] ?? k;
 
-    // ب) میکس دو بازی: پایه امن بازی اول × متغیر بازی دوم
-    if (sec) {
-      const secVars = sec.selections.filter((s) => ["O25", "U25"].includes(s.key));
-      for (const base of primaries) {
-        for (const v of secVars) candidates.push({ a: base, b: v, kind: "TWO_MATCH_MIX" });
+    // خط سینتتیک باندی O15/U35 از احتمال مدل (بدون قیمت واقعی بوک‌میکر — حاشیه ۴.۵٪)
+    const synthVar = (k: "O15" | "U35"): PortfolioSelectionDTO | null => {
+      const flags = prim.mc.flags[k];
+      const p = flags ? flags.reduce((s: number, v: number) => s + v, 0) / flags.length : 0;
+      if (p < 0.15 || p > 0.93) return null;
+      const odds = Math.max(1.02, Math.round((1 / p) * 0.955 * 100) / 100);
+      return {
+        key: k,
+        label: selectionLabel(k),
+        matchId: primary.id,
+        matchLabel: label(primary),
+        modelProb: p,
+        bestOdds: odds,
+        bestBook: "خط سینتتیک",
+        sharpOdds: null,
+        evPct: p * odds - 1,
+      };
+    };
+
+    for (const base of primaries) {
+      // الف) بت‌بیلدر کلاسیک: پایه × متغیر ↔ پایه × مقابل متغیر (هر دو با هم پوشش کامل متغیر)
+      for (const v of classicVars) {
+        const opp = selOf(prim.selections, oppositeOf(v.key));
+        if (!opp) continue;
+        candidates.push({ base, varA: v, varB: opp, kind: "SINGLE_MATCH_BUILDER", band: null, synthetic: false, doubleWin: false });
+      }
+
+      // ب) زوج باندی با ناحیه طلایی Double-Win:
+      //    1X+بالای ۱.۵ ↔ 1X+زیر ۲.۵ (تلاقی = دقیقاً ۲ گل: ۱-۱ یا ۲-۰)
+      const o15 = synthVar("O15");
+      const u25 = selOf(prim.selections, "U25");
+      if (o15 && u25 && u25.bestOdds > 1.01) {
+        candidates.push({ base, varA: o15, varB: u25, kind: "SINGLE_MATCH_BUILDER", band: "O15_U25", synthetic: true, doubleWin: true });
+      }
+      //    بالای ۲.۵ ↔ زیر ۳.۵ (تلاقی = دقیقاً ۳ گل: ۲-۱ یا ۳-۰)
+      const u35 = synthVar("U35");
+      const o25 = selOf(prim.selections, "O25");
+      if (u35 && o25 && o25.bestOdds > 1.01) {
+        candidates.push({ base, varA: o25, varB: u35, kind: "SINGLE_MATCH_BUILDER", band: "O25_U35", synthetic: true, doubleWin: true });
+      }
+
+      // ج) زوج دو-برد بین‌بازاری: 1X+زیر ۲.۵ ↔ 1X+هر دو گل می‌زنند (تلاقی = دقیقاً ۱-۱)
+      const bttsY = selOf(prim.selections, "BTTS_Y");
+      if (u25 && bttsY && u25.bestOdds > 1.01 && bttsY.bestOdds > 1.01) {
+        candidates.push({ base, varA: u25, varB: bttsY, kind: "SINGLE_MATCH_BUILDER", band: null, synthetic: false, doubleWin: true });
+      }
+
+      // د) میکس دو بازی: پایه امن بازی اول × زوج متغیر بازی دوم
+      if (sec) {
+        const secVars = sec.selections.filter((s) => ["O25", "U25"].includes(s.key));
+        for (const v of secVars) {
+          const opp = selOf(sec.selections, oppositeOf(v.key));
+          if (!opp) continue;
+          candidates.push({ base, varA: v, varB: opp, kind: "TWO_MATCH_MIX", band: null, synthetic: false, doubleWin: false });
+        }
       }
     }
 
@@ -184,47 +245,39 @@ export async function POST(req: NextRequest) {
     const batchId = `pf-${Date.now()}`;
 
     for (const c of candidates) {
-      if (c.a.bestOdds <= 1.01 || c.b.bestOdds <= 1.01) continue;
+      if (c.base.bestOdds <= 1.01 || c.varA.bestOdds <= 1.01 || c.varB.bestOdds <= 1.01) continue;
 
       const isBuilder = c.kind === "SINGLE_MATCH_BUILDER";
-      const aKey = c.a.key as SelectionKey;
-      const bKey = c.b.key as SelectionKey;
-      const oppKey = oppositeKey(bKey);
-
-      // انتخاب مقابل در همان بازیِ متغیر (بالای↔زیر / بله↔خیر)
-      const varSelections = isBuilder ? prim.selections : sec!.selections;
-      const oppSel = varSelections.find((s) => s.key === oppKey);
-      if (!oppSel || oppSel.bestOdds <= 1.01) continue;
+      const baseKey = c.base.key as SelectionKey;
+      const varAKey = c.varA.key as SelectionKey;
+      const varBKey = c.varB.key as SelectionKey;
 
       // ضریب کل هر تیپ = پایه × متغیر (هر دو حالت: بت‌بیلدر و میکس دو بازی)
-      const oddsA = Math.round(c.a.bestOdds * c.b.bestOdds * 100) / 100;
-      const oddsB = Math.round(c.a.bestOdds * oppSel.bestOdds * 100) / 100;
+      const oddsA = Math.round(c.base.bestOdds * c.varA.bestOdds * 100) / 100;
+      const oddsB = Math.round(c.base.bestOdds * c.varB.bestOdds * 100) / 100;
       if (oddsA <= 1.05 || oddsB <= 1.05 || Math.abs(oddsA - oddsB) < 0.01) continue;
 
       // فلگ ترکیبی per-sim: برد همزمان پایه و متغیر
       // میکس دو بازی: پایه از مونت‌کارلو بازی اول، متغیر از بازی دوم (اندیسی = استقلال)
-      const secMc = sec!.mc;
-      const flagsA = combineFlags(prim.mc.flags[aKey], isBuilder ? prim.mc.flags[bKey] : secMc.flags[bKey]);
-      const flagsB = combineFlags(prim.mc.flags[aKey], isBuilder ? prim.mc.flags[oppKey] : secMc.flags[oppKey]);
+      const varMc = isBuilder ? prim.mc : sec!.mc;
+      const flagsA = combineFlags(prim.mc.flags[baseKey], varMc.flags[varAKey]);
+      const flagsB = combineFlags(prim.mc.flags[baseKey], varMc.flags[varBKey]);
 
       const joint = jointStates(flagsA, flagsB);
       // آستانه: تا وقتی پایه امن است، بالای/زیر کل فضای متغیر را می‌پوشانند
       if (joint.bothLose > 0.35) continue;
 
-      // بررسی ساختاری تله با منطق Mutually Covering
-      const trapLegsA: TrapLeg[] = isBuilder
-        ? [
-            { match: label(primary), selection: TRAP_MAP[aKey] },
-            { match: label(primary), selection: TRAP_MAP[bKey] },
-          ]
-        : [{ match: label(primary), selection: TRAP_MAP[aKey] }];
-      const trapLegsB: TrapLeg[] = isBuilder
-        ? [
-            { match: label(primary), selection: TRAP_MAP[aKey] },
-            { match: label(primary), selection: oppositeTrap(bKey) },
-          ]
-        : [{ match: sec ? label(second!) : "", selection: TRAP_MAP[bKey] }];
-      const trap = checkMiddleTrap(trapLegsA, trapLegsB);
+      // بررسی ساختاری تله با منطق Mutually Covering (هر دو تیپ پایه مشترک دارند)
+      const baseTrap: TrapLeg = { match: label(primary), selection: TRAP_MAP[baseKey] };
+      const varATrap: TrapLeg = {
+        match: isBuilder ? label(primary) : label(second!),
+        selection: TRAP_MAP[varAKey],
+      };
+      const varBTrap: TrapLeg = {
+        match: isBuilder ? label(primary) : label(second!),
+        selection: TRAP_MAP[varBKey],
+      };
+      const trap = checkMiddleTrap([baseTrap, varATrap], [baseTrap, varBTrap]);
       if (trap.verdict === "CRITICAL") continue;
 
       // داچینگ سود برابر
@@ -249,24 +302,63 @@ export async function POST(req: NextRequest) {
       const pA = joint.bothWin + joint.aOnly;
       const pB = joint.bothWin + joint.bOnly;
 
+      // لبه CLV تقریبی نسبت به خط شارپ پیناکل (فقط وقتی همه پاها خط واقعی دارند)
+      let sharpEdgePct: number | null = null;
+      if (!c.synthetic) {
+        const pinPrim = primaryOdds.find((o) => o.bookmaker === "PINNACLE");
+        const pinVar = isBuilder ? pinPrim : secondOdds.find((o) => o.bookmaker === "PINNACLE");
+        if (pinPrim && pinVar) {
+          const sharpBase =
+            baseKey === "DC_1X"
+              ? 1 / (1 / pinPrim.oddsHome + 1 / pinPrim.oddsDraw)
+              : 1 / (1 / pinPrim.oddsAway + 1 / pinPrim.oddsDraw);
+          const pinVarOdds = (k: SelectionKey): number | null => {
+            switch (k) {
+              case "O25": return pinVar.oddsOver25;
+              case "U25": return pinVar.oddsUnder25;
+              case "C_O95": return pinVar.oddsCornersOver95;
+              case "C_U95": return pinVar.oddsCornersUnder95;
+              default: return null; // BTTS بدون قیمت پیناکل در دیتاست
+            }
+          };
+          const sva = pinVarOdds(varAKey);
+          const svb = pinVarOdds(varBKey);
+          if (sva && svb) {
+            const eA = pA * Math.round(sharpBase * sva * 100) / 100 - 1;
+            const eB = pB * Math.round(sharpBase * svb * 100) / 100 - 1;
+            sharpEdgePct = Math.round(((eA + eB) / 2) * 1000) / 10;
+          }
+        }
+      }
+
       pairs.push({
-        id: `${c.a.key}-${c.b.key}-${c.kind}`,
+        id: `${baseKey}-${varAKey}-${varBKey}-${c.kind}`,
         kind: c.kind,
-        labelA: isBuilder ? `${c.a.label} × ${c.b.label}` : `${c.a.label} + ${c.b.label} (${c.b.matchLabel})`,
-        labelB: isBuilder ? `${c.a.label} × ${oppSel.label}` : `${c.a.label} + ${oppSel.label} (${oppSel.matchLabel})`,
+        labelA: isBuilder ? `${c.base.label} × ${c.varA.label}` : `${c.base.label} + ${c.varA.label} (${c.varA.matchLabel})`,
+        labelB: isBuilder ? `${c.base.label} × ${c.varB.label}` : `${c.base.label} + ${c.varB.label} (${c.varB.matchLabel})`,
+        structure: {
+          baseKey,
+          varAKey,
+          varBKey,
+          varAMatchId: c.varA.matchId,
+          varBMatchId: c.varB.matchId,
+          band: c.band,
+          synthetic: c.synthetic,
+          doubleWin: c.doubleWin && joint.bothWin > 0.02,
+        },
         selectionA: {
-          ...c.a,
-          label: `${c.a.label} × ${c.b.label}`,
+          ...c.base,
+          label: `${c.base.label} × ${c.varA.label}`,
           modelProb: pA,
           bestOdds: oddsA,
           bestBook: "ترکیبی",
           evPct: pA * oddsA - 1,
         },
         selectionB: {
-          ...oppSel,
-          matchId: c.b.matchId,
-          matchLabel: c.b.matchLabel,
-          label: `${c.a.label} × ${oppSel.label}`,
+          ...c.varB,
+          matchId: c.varB.matchId,
+          matchLabel: c.varB.matchLabel,
+          label: `${c.base.label} × ${c.varB.label}`,
           modelProb: pB,
           bestOdds: oddsB,
           bestBook: "ترکیبی",
@@ -279,6 +371,7 @@ export async function POST(req: NextRequest) {
         guaranteedMarginPct,
         equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
         kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
+        sharpEdgePct,
         trap,
         verdict:
           guaranteedMarginPct > 4 && joint.bothLose < 0.05
@@ -289,22 +382,41 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // رتبه‌بندی: امتیاز = حاشیه تضمینی − جریمه باخت همزمان + پاداش رشد کلی
-    const score = (p: PortfolioPairDTO) => p.guaranteedMarginPct - p.jointStates.bothLose * 80 + p.kelly.growth * 100;
+    // رتبه‌بندی: امتیاز = حاشیه تضمینی − جریمه باخت همزمان + پاداش رشد کلی + پاداش دو-برد
+    const score = (p: PortfolioPairDTO) =>
+      p.guaranteedMarginPct - p.jointStates.bothLose * 80 + p.kelly.growth * 100 + (p.structure.doubleWin ? 1.5 : 0);
     pairs.sort((x, y) => score(y) - score(x));
+
+    // حذف تکرار آینه‌ای (O25→U25 همان زوج U25→O25 است)
+    const sigOf = (p: PortfolioPairDTO) => {
+      const [x, y] = [p.structure.varAKey, p.structure.varBKey].sort();
+      return `${p.structure.baseKey}|${x}|${y}|${p.kind}`;
+    };
     const seen = new Set<string>();
-    const topPairs = pairs.filter((p) => {
-      const sig = `${p.selectionA.key}-${p.selectionB.key}`;
+    const deduped = pairs.filter((p) => {
+      const sig = sigOf(p);
       if (seen.has(sig)) return false;
       seen.add(sig);
       return true;
-    }).slice(0, 4);
+    });
+
+    // تضمین تنوع: بهترین زوج هر خانواده (باندی / دو-برد / بیلدر / میکس) حتماً حضور دارد
+    const bucketOf = (p: PortfolioPairDTO) => (p.structure.band ? "BAND" : p.structure.doubleWin ? "DW" : p.kind);
+    const bestOf = new Map<string, PortfolioPairDTO>();
+    for (const p of deduped) {
+      const b = bucketOf(p);
+      const cur = bestOf.get(b);
+      if (!cur || score(p) > score(cur)) bestOf.set(b, p);
+    }
+    const picked = [...bestOf.values()];
+    const rest = deduped.filter((p) => !picked.includes(p));
+    const topPairs = [...picked, ...rest].slice(0, 6);
 
     // ─── ذخیره TipSet برای زوج برتر ───
-    let recommendedId: string | null = null;
+    const recommendedId = topPairs[0]?.id ?? null;
     if (topPairs.length > 0) {
       for (const [i, p] of topPairs.entries()) {
-        const tip = await db.tipSet.create({
+        await db.tipSet.create({
           data: {
             label: `${p.kind === "TWO_MATCH_MIX" ? "میکس دو بازی" : "بت‌بیلدر تک‌بازی"}: ${p.labelA} ↔ ${p.labelB}`,
             strategy: "EQUAL_PROFIT",
@@ -324,13 +436,14 @@ export async function POST(req: NextRequest) {
               stakeB: p.equalProfit.stakeB,
               jointStates: p.jointStates,
               mc: { sims: prim.mc.sims, corr: prim.mc.corrGoalsCorners },
+              structure: p.structure,
+              sharpEdgePct: p.sharpEdgePct,
               rank: i,
             }),
             batchId,
             notes: p.verdict,
           },
         });
-        if (i === 0) recommendedId = tip.id;
       }
     }
 
@@ -377,30 +490,4 @@ function combineFlags(flagsBase: Uint8Array, flagsVar: Uint8Array): Uint8Array {
     out[i] = flagsBase[i] && flagsVar[i] ? 1 : 0;
   }
   return out;
-}
-
-function oppositeKey(k: SelectionKey): SelectionKey {
-  switch (k) {
-    case "O25": return "U25";
-    case "U25": return "O25";
-    case "C_O95": return "C_U95";
-    case "C_U95": return "C_O95";
-    case "BTTS_Y": return "BTTS_N";
-    case "BTTS_N": return "BTTS_Y";
-    default: return k;
-  }
-}
-
-function oppositeLabel(l: string): string {
-  if (l.includes("بالای ۲.۵")) return l.replace("بالای ۲.۵", "زیر ۲.۵");
-  if (l.includes("زیر ۲.۵")) return l.replace("زیر ۲.۵", "بالای ۲.۵");
-  if (l.includes("بالای ۹.۵")) return l.replace("بالای ۹.۵", "زیر ۹.۵");
-  if (l.includes("زیر ۹.۵")) return l.replace("زیر ۹.۵", "بالای ۹.۵");
-  if (l.includes("می‌زنند")) return "گل نزدن حداقل یک تیم";
-  if (l.includes("نزدن")) return "هر دو تیم گل می‌زنند";
-  return l;
-}
-
-function oppositeTrap(k: SelectionKey): SelectionKind {
-  return TRAP_MAP[oppositeKey(k)];
 }

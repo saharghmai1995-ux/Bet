@@ -1,0 +1,640 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useState } from "react";
+     4→import {
+     5→  AlertTriangle,
+     6→  CheckCircle2,
+     7→  Loader2,
+     8→  Megaphone,
+     9→  Shield,
+    10→  Shirt,
+    11→  Star,
+    12→} from "lucide-react";
+    13→import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+    14→import { Button } from "@/components/ui/button";
+    15→import { Badge } from "@/components/ui/badge";
+    16→import { Input } from "@/components/ui/input";
+    17→import { Label } from "@/components/ui/label";
+    18→import { Slider } from "@/components/ui/slider";
+    19→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    20→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+    21→import { toast } from "sonner";
+    22→import { faNum, faPct, signed } from "@/lib/format";
+    23→import { TacticalPitch, type PitchNode } from "@/components/app/fx/tactical-pitch";
+    24→import { useQuantStore } from "@/lib/store";
+    25→import type { LineupShockDTO, LiveHedgeDTO } from "@/lib/types";
+    26→
+    27→const POSITIONS: Record<string, string> = {
+    28→  GK: "دروازه‌بان",
+    29→  DEF: "مدافع",
+    30→  MID: "هافبک",
+    31→  FW: "مهاجم",
+    32→};
+    33→
+    34→const posLabel = (p: string) => POSITIONS[p] ?? p;
+    35→
+    36→function statusBadge(status: string): { label: string; className: string } {
+    37→  switch (status) {
+    38→    case "FIT":
+    39→      return { label: "آماده", className: "border-emerald-500/40 text-emerald-400" };
+    40→    case "INJURED":
+    41→      return { label: "مصدوم", className: "border-rose-500/40 text-rose-400" };
+    42→    case "SUSPENDED":
+    43→      return { label: "محروم", className: "border-rose-500/40 text-rose-400" };
+    44→    case "DOUBTFUL":
+    45→      return { label: "مشکوک", className: "border-amber-500/40 text-amber-300" };
+    46→    default:
+    47→      return { label: status, className: "" };
+    48→  }
+    49→}
+    50→
+    51→const profitColor = (v: number) => (v >= 0 ? "text-emerald-400" : "text-rose-400");
+    52→
+    53→/** نودهای زمین از بازیکنان (T-60) — غایبان با نود قرمز چشمک‌زن */
+    54→function pitchNodes(topPlayers: LineupShockDTO["topPlayers"], side: "HOME" | "AWAY"): PitchNode[] {
+    55→  const HOME_FORMATION: PitchNode[] = [
+    56→    { x: 7, y: 50 }, { x: 22, y: 18 }, { x: 20, y: 39 }, { x: 20, y: 61 }, { x: 22, y: 82 },
+    57→    { x: 40, y: 30 }, { x: 37, y: 50 }, { x: 40, y: 70 },
+    58→    { x: 62, y: 22 }, { x: 66, y: 50 }, { x: 62, y: 78 },
+    59→  ];
+    60→  const AWAY_FORMATION: PitchNode[] = [
+    61→    { x: 93, y: 50 }, { x: 78, y: 18 }, { x: 80, y: 39 }, { x: 80, y: 61 }, { x: 78, y: 82 },
+    62→    { x: 60, y: 30 }, { x: 63, y: 50 }, { x: 60, y: 70 },
+    63→    { x: 38, y: 22 }, { x: 34, y: 50 }, { x: 38, y: 78 },
+    64→  ];
+    65→  const players = topPlayers.filter((p) => p.side === side);
+    66→  const formation = side === "HOME" ? HOME_FORMATION : AWAY_FORMATION;
+    67→  return formation.map((slot, i) => {
+    68→    const p = players[i];
+    69→    if (!p) return slot;
+    70→    const status: PitchNode["status"] =
+    71→      p.status === "INJURED" || p.status === "SUSPENDED" ? "MISSING" : p.status === "DOUBTFUL" ? "DOUBTFUL" : "FIT";
+    72→    return { ...slot, status, label: `${p.name} (${posLabel(p.position)}) — ${statusBadge(p.status).label}` };
+    73→  });
+    74→}
+    75→
+    76→/* ─────────────── Card A: شوک ترکیب T-60 ─────────────── */
+    77→
+    78→function TeamShockBlock({ block }: { block: LineupShockDTO["home"] }) {
+    79→  const deltaCls =
+    80→    block.shockDelta < -0.02
+    81→      ? "border-rose-500/40 text-rose-400"
+    82→      : block.shockDelta > 0.02
+    83→        ? "border-emerald-500/40 text-emerald-400"
+    84→        : "";
+    85→  return (
+    86→    <div className="space-y-2 rounded-lg border border-white/10 p-3">
+    87→      <div className="flex items-center justify-between gap-2">
+    88→        <p className="text-xs font-semibold">{block.team}</p>
+    89→        <Badge variant="outline" className={`font-num text-[10px] ${deltaCls}`} dir="ltr">
+    90→          {(block.shockDelta * 100).toFixed(1)}%
+    91→        </Badge>
+    92→      </div>
+    93→      <div className="grid grid-cols-3 gap-2 text-[11px]">
+    94→        <div className="space-y-0.5">
+    95→          <p className="text-muted-foreground">VAEP ترکیب</p>
+    96→          <p className="font-num font-bold" dir="ltr">{block.xiVaep.toFixed(2)}</p>
+    97→        </div>
+    98→        <div className="space-y-0.5">
+    99→          <p className="text-muted-foreground">VAEP کامل</p>
+   100→          <p className="font-num font-bold" dir="ltr">{block.fullStrengthVaep.toFixed(2)}</p>
+   101→        </div>
+   102→        <div className="space-y-0.5">
+   103→          <p className="text-muted-foreground">xT ترکیب</p>
+   104→          <p className="font-num font-bold" dir="ltr">{block.xiXt.toFixed(2)}</p>
+   105→        </div>
+   106→      </div>
+   107→      <p className="text-[11px] text-muted-foreground">
+   108→        تعداد غایبان: <b className="font-num" dir="ltr">{block.unavailableCount}</b>
+   109→      </p>
+   110→      {block.missingKeyPlayers.length > 0 && (
+   111→        <ul className="space-y-1">
+   112→          {block.missingKeyPlayers.map((p, i) => {
+   113→            const st = statusBadge(p.status);
+   114→            const bad = p.status === "INJURED" || p.status === "SUSPENDED";
+   115→            return (
+   116→              <li key={`${p.name}-${i}`} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+   117→                <span className="font-medium">{p.name}</span>
+   118→                <span className="text-muted-foreground">({posLabel(p.position)})</span>
+   119→                <Badge variant="outline" className={`px-1 py-0 text-[9px] ${bad ? st.className : ""}`}>
+   120→                  {st.label}
+   121→                </Badge>
+   122→              </li>
+   123→            );
+   124→          })}
+   125→        </ul>
+   126→      )}
+   127→    </div>
+   128→  );
+   129→}
+   130→
+   131→function LineupShockCard() {
+   132→  const matches = useQuantStore((s) => s.matches);
+   133→  const activeMatchId = useQuantStore((s) => s.activeMatchId);
+   134→  const setActiveMatchId = useQuantStore((s) => s.setActiveMatchId);
+   135→  const setShock = useQuantStore((s) => s.setShock);
+   136→
+   137→  const [matchId, setMatchId] = useState("");
+   138→  const [running, setRunning] = useState(false);
+   139→  const [shock, setShockLocal] = useState<LineupShockDTO | null>(null);
+   140→
+   141→  // بازی فعال از هدر → پیش‌فرض این کارت
+   142→  useEffect(() => {
+   143→    if (activeMatchId) setMatchId(activeMatchId);
+   144→  }, [activeMatchId]);
+   145→
+   146→  const announce = useCallback(async () => {
+   147→    if (!matchId || running) return;
+   148→    setRunning(true);
+   149→    try {
+   150→      const res = await fetch("/api/lineup", {
+   151→        method: "POST",
+   152→        headers: { "Content-Type": "application/json" },
+   153→        body: JSON.stringify({ matchId }),
+   154→      });
+   155→      const data = (await res.json()) as LineupShockDTO & { error?: string };
+   156→      if (data.success) {
+   157→        setShockLocal(data);
+   158→        // زنجیره واکنشی تب ۴ → تب ۶: دلتای VAEP/xT در استور منتشر می‌شود
+   159→        setShock(matchId, data.home.shockDelta, data.away.shockDelta);
+   160→        toast.success("ترکیب رسمی اعلام شد — دلتای VAEP به موتور کمّی (تب ۶) منتقل شد", {
+   161→          description: "λ و Elo در تب ۶ بازمحاسبه می‌شوند",
+   162→        });
+   163→      } else {
+   164→        toast.error(data.error ?? "خطا در اعلام ترکیب");
+   165→      }
+   166→    } catch {
+   167→      toast.error("ارتباط با سرور برقرار نشد");
+   168→    } finally {
+   169→      setRunning(false);
+   170→    }
+   171→  }, [matchId, running, setShock]);
+   172→
+   173→  const teamName = (side: "HOME" | "AWAY") =>
+   174→    side === "HOME" ? shock?.home.team ?? "میزبان" : shock?.away.team ?? "میهمان";
+   175→
+   176→  const activeMatch = matches.find((m) => m.id === matchId) ?? null;
+   177→
+   178→  return (
+   179→    <Card className="glass">
+   180→      <CardHeader className="pb-3">
+   181→        <CardTitle className="flex items-center gap-2 text-sm">
+   182→          <Shirt className="size-4 text-amber-300" />
+   183→          شوک ترکیب T-60 — ارزش‌گذاری VAEP/xT بازیکنان
+   184→        </CardTitle>
+   185→        <CardDescription className="text-xs leading-relaxed">
+   186→          اعلام رسمی ترکیب ۶۰ دقیقه قبل از بازی؛ بزرگ‌ترین ناکارآمدی بازار همین‌جاست. دلتای قدرت مستقیماً روی λ و
+   187→          الو در تب ۶ اعمال می‌شود.
+   188→        </CardDescription>
+   189→      </CardHeader>
+   190→      <CardContent className="space-y-4">
+   191→        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+   192→          <Select
+   193→            value={matchId}
+   194→            onValueChange={(v) => {
+   195→              setMatchId(v);
+   196→              setActiveMatchId(v);
+   197→              setShockLocal(null);
+   198→            }}
+   199→            disabled={running}
+   200→          >
+   201→            <SelectTrigger className="w-full sm:w-72" aria-label="انتخاب بازی">
+   202→              <SelectValue placeholder="بازی را انتخاب کنید..." />
+   203→            </SelectTrigger>
+   204→            <SelectContent>
+   205→              {matches.map((m) => (
+   206→                <SelectItem key={m.id} value={m.id}>
+   207→                  {m.homeTeam} — {m.awayTeam} ({m.league})
+   208→                </SelectItem>
+   209→              ))}
+   210→            </SelectContent>
+   211→          </Select>
+   212→          <Button
+   213→            onClick={announce}
+   214→            disabled={running || !matchId}
+   215→            className="gap-2 bg-amber-600 text-white hover:bg-amber-500"
+   216→          >
+   217→            {running ? <Loader2 className="size-4 animate-spin" /> : <Megaphone className="size-4" />}
+   218→            {running ? "در حال بازمحاسبه..." : "اعلام رسمی ترکیب (شبیه‌سازی)"}
+   219→          </Button>
+   220→        </div>
+   221→
+   222→        {shock?.isShock && (
+   223→          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+   224→            <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-400" />
+   225→            <p className="text-[11px] leading-relaxed">{shock.message}</p>
+   226→          </div>
+   227→        )}
+   228→        {shock && !shock.isShock && (
+   229→          <div className="flex items-start gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+   230→            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+   231→            <p className="text-[11px] leading-relaxed">{shock.message}</p>
+   232→          </div>
+   233→        )}
+   234→
+   235→        {activeMatch && (
+   236→          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+   237→            <p className="mb-2 text-[11px] text-muted-foreground">
+   238→              زمین تاکتیکی سه‌بعدی — نودهای تپنده حاضر، نودهای قرمز غایبان کلیدی
+   239→            </p>
+   240→            <TacticalPitch
+   241→              homeTeam={activeMatch.homeTeam}
+   242→              awayTeam={activeMatch.awayTeam}
+   243→              homeFieldTilt={activeMatch.homeFieldTilt}
+   244→              awayFieldTilt={activeMatch.awayFieldTilt}
+   245→              homeXg={activeMatch.homeXg}
+   246→              awayXg={activeMatch.awayXg}
+   247→              homeNodes={shock ? pitchNodes(shock.topPlayers, "HOME") : undefined}
+   248→              awayNodes={shock ? pitchNodes(shock.topPlayers, "AWAY") : undefined}
+   249→              compact
+   250→            />
+   251→          </div>
+   252→        )}
+   253→
+   254→        {shock && (
+   255→          <div className="space-y-4">
+   256→            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+   257→              <TeamShockBlock block={shock.home} />
+   258→              <TeamShockBlock block={shock.away} />
+   259→            </div>
+   260→            <div className="max-h-96 overflow-y-auto rounded-md border border-white/10">
+   261→              <Table>
+   262→                <TableHeader>
+   263→                  <TableRow className="border-white/8 hover:bg-transparent">
+   264→                    <TableHead className="text-xs">بازیکن</TableHead>
+   265→                    <TableHead className="text-xs">تیم</TableHead>
+   266→                    <TableHead className="text-xs">پست</TableHead>
+   267→                    <TableHead className="text-xs">xT</TableHead>
+   268→                    <TableHead className="text-xs">VAEP</TableHead>
+   269→                    <TableHead className="text-xs">وضعیت</TableHead>
+   270→                    <TableHead className="text-xs">کلیدی</TableHead>
+   271→                  </TableRow>
+   272→                </TableHeader>
+   273→                <TableBody>
+   274→                  {shock.topPlayers.map((p, i) => {
+   275→                    const st = statusBadge(p.status);
+   276→                    return (
+   277→                      <TableRow key={`${p.name}-${i}`} className="border-white/6">
+   278→                        <TableCell className="text-xs font-medium">{p.name}</TableCell>
+   279→                        <TableCell className="text-xs text-muted-foreground">{teamName(p.side)}</TableCell>
+   280→                        <TableCell className="text-xs text-muted-foreground">{posLabel(p.position)}</TableCell>
+   281→                        <TableCell className="font-num text-xs" dir="ltr">{p.xT.toFixed(2)}</TableCell>
+   282→                        <TableCell className="font-num text-xs" dir="ltr">{p.vaep.toFixed(2)}</TableCell>
+   283→                        <TableCell>
+   284→                          <Badge variant="outline" className={`text-[10px] ${st.className}`}>{st.label}</Badge>
+   285→                        </TableCell>
+   286→                        <TableCell>
+   287→                          {p.isKey ? (
+   288→                            <Star className="size-3.5 fill-amber-400 text-amber-400" aria-label="بازیکن کلیدی" />
+   289→                          ) : (
+   290→                            <span className="text-xs text-muted-foreground">—</span>
+   291→                          )}
+   292→                        </TableCell>
+   293→                      </TableRow>
+   294→                    );
+   295→                  })}
+   296→                </TableBody>
+   297→              </Table>
+   298→            </div>
+   299→          </div>
+   300→        )}
+   301→      </CardContent>
+   302→    </Card>
+   303→  );
+   304→}
+   305→
+   306→/* ─────────────── Card B: ایجنت پوشش زنده ─────────────── */
+   307→
+   308→function LiveHedgeCard() {
+   309→  const matches = useQuantStore((s) => s.matches);
+   310→  const activeMatchId = useQuantStore((s) => s.activeMatchId);
+   311→  const setActiveMatchId = useQuantStore((s) => s.setActiveMatchId);
+   312→  const debates = useQuantStore((s) => s.debates);
+   313→  const analyses = debates;
+   314→
+   315→  const [matchId, setMatchId] = useState("");
+   316→  const [selection, setSelection] = useState<"HOME" | "OVER25" | "AWAY">("HOME");
+   317→  const [odds, setOdds] = useState("2.10");
+   318→  const [stake, setStake] = useState("100");
+   319→  const [minute, setMinute] = useState(25);
+   320→  const [running, setRunning] = useState(false);
+   321→  const [pendingEvent, setPendingEvent] = useState<string | null>(null);
+   322→  const [result, setResult] = useState<LiveHedgeDTO | null>(null);
+   323→
+   324→  useEffect(() => {
+   325→    if (activeMatchId) setMatchId(activeMatchId);
+   326→  }, [activeMatchId]);
+   327→
+   328→  const hasBase = Boolean(matchId && analyses[matchId]);
+   329→
+   330→  // پیشنهاد ضریب عادلانه از حکم قاضی همین بازی (زنجیره تب ۲ → تب ۴)
+   331→  useEffect(() => {
+   332→    const base = matchId ? analyses[matchId] : undefined;
+   333→    if (!base) return;
+   334→    const p = selection === "HOME" ? base.final.pHome : selection === "AWAY" ? base.final.pAway : base.final.pOver25;
+   335→    if (p > 0.01) setOdds((1 / p).toFixed(2));
+   336→  }, [matchId, selection, analyses]);
+   337→
+   338→  const fire = useCallback(
+   339→    async (event: "GOAL_HOME" | "GOAL_AWAY" | "RED_HOME") => {
+   340→      if (!matchId || running) return;
+   341→      const oddsNum = parseFloat(odds);
+   342→      const stakeNum = parseFloat(stake);
+   343→      if (Number.isNaN(oddsNum) || Number.isNaN(stakeNum) || oddsNum <= 1 || stakeNum <= 0) {
+   344→        toast.error("ضریب (بیش از ۱) و مبلغ پیش‌بازی را درست وارد کنید");
+   345→        return;
+   346→      }
+   347→      setRunning(true);
+   348→      setPendingEvent(event);
+   349→      try {
+   350→        const res = await fetch("/api/live", {
+   351→          method: "POST",
+   352→          headers: { "Content-Type": "application/json" },
+   353→          body: JSON.stringify({ matchId, minute, event, selection, odds: oddsNum, stake: stakeNum }),
+   354→        });
+   355→        const data = (await res.json()) as LiveHedgeDTO & { error?: string };
+   356→        if (data.success) {
+   357→          setResult(data);
+   358→          toast.success("سناریوی زنده شبیه‌سازی شد — λ با تابع توانی ۰.۸۵ بازمحاسبه شد");
+   359→        } else {
+   360→          toast.error(data.error ?? "خطا در شبیه‌سازی رویداد زنده");
+   361→        }
+   362→      } catch {
+   363→        toast.error("ارتباط با سرور برقرار نشد");
+   364→      } finally {
+   365→        setRunning(false);
+   366→        setPendingEvent(null);
+   367→      }
+   368→    },
+   369→    [matchId, running, odds, stake, minute, selection]
+   370→  );
+   371→
+   372→  const probRows = result
+   373→    ? [
+   374→        { label: "برد میزبان", v: result.updatedProbs.home, bar: "bg-emerald-500" },
+   375→        { label: "مساوی", v: result.updatedProbs.draw, bar: "bg-slate-500" },
+   376→        { label: "برد میهمان", v: result.updatedProbs.away, bar: "bg-rose-500" },
+   377→      ]
+   378→    : [];
+   379→
+   380→  const liveOddsRows = result
+   381→    ? [
+   382→        { label: "برد میزبان", fair: result.fairLiveOdds.home, market: result.marketLiveOdds.home },
+   383→        { label: "مساوی", fair: result.fairLiveOdds.draw, market: result.marketLiveOdds.draw },
+   384→        { label: "برد میهمان", fair: result.fairLiveOdds.away, market: result.marketLiveOdds.away },
+   385→      ]
+   386→    : [];
+   387→
+   388→  return (
+   389→    <Card className="glass">
+   390→      <CardHeader className="pb-3">
+   391→        <CardTitle className="flex items-center gap-2 text-sm">
+   392→          <Shield className="size-4 text-emerald-400" />
+   393→          ایجنت پوشش زنده — In-Play Hedge Trigger
+   394→        </CardTitle>
+   395→        <CardDescription className="text-xs leading-relaxed">
+   396→          λ باقی‌مانده با تابع توانی استاندارد{" "}
+   397→          <span className="font-num text-cyan-300" dir="ltr">λ×((90−min)/90)^0.85</span> و اثر کارت قرمز{" "}
+   398→          <span className="font-num text-rose-300" dir="ltr">×0.68 / ×1.28</span> محاسبه می‌شود؛ سپس سیگنال{" "}
+   399→          <span className="font-bold text-emerald-400">پوشش (Hedge)</span> یا{" "}
+   400→          <span className="font-bold text-amber-300">نگه‌داری (Hold)</span> صادر می‌گردد.
+   401→        </CardDescription>
+   402→      </CardHeader>
+   403→      <CardContent className="space-y-4">
+   404→        <Select
+   405→          value={matchId}
+   406→          onValueChange={(v) => {
+   407→            setMatchId(v);
+   408→            setActiveMatchId(v);
+   409→            setResult(null);
+   410→          }}
+   411→          disabled={running}
+   412→        >
+   413→          <SelectTrigger className="w-full" aria-label="انتخاب بازی">
+   414→            <SelectValue placeholder="بازی را انتخاب کنید..." />
+   415→          </SelectTrigger>
+   416→          <SelectContent>
+   417→            {matches.map((m) => (
+   418→              <SelectItem key={m.id} value={m.id}>
+   419→                {m.homeTeam} — {m.awayTeam} ({m.league})
+   420→              </SelectItem>
+   421→            ))}
+   422→          </SelectContent>
+   423→        </Select>
+   424→
+   425→        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+   426→          <div className="space-y-1.5">
+   427→            <Label className="text-xs">تیپ پیش‌بازی شما</Label>
+   428→            <Select value={selection} onValueChange={(v) => setSelection(v as "HOME" | "OVER25" | "AWAY")} disabled={running}>
+   429→              <SelectTrigger className="w-full" aria-label="تیپ پیش‌بازی">
+   430→                <SelectValue />
+   431→              </SelectTrigger>
+   432→              <SelectContent>
+   433→                <SelectItem value="HOME">برد میزبان</SelectItem>
+   434→                <SelectItem value="OVER25">بالای ۲.۵ گل</SelectItem>
+   435→                <SelectItem value="AWAY">برد میهمان</SelectItem>
+   436→              </SelectContent>
+   437→            </Select>
+   438→          </div>
+   439→          <div className="space-y-1.5">
+   440→            <Label className="text-xs" htmlFor="pre-odds">ضریب پیش‌بازی</Label>
+   441→            <Input
+   442→              id="pre-odds"
+   443→              value={odds}
+   444→              onChange={(e) => setOdds(e.target.value)}
+   445→              inputMode="decimal"
+   446→              dir="ltr"
+   447→              className="font-num border-white/15 bg-white/5"
+   448→              disabled={running}
+   449→            />
+   450→          </div>
+   451→          <div className="space-y-1.5">
+   452→            <Label className="text-xs" htmlFor="pre-stake">مبلغ پیش‌بازی</Label>
+   453→            <Input
+   454→              id="pre-stake"
+   455→              value={stake}
+   456→              onChange={(e) => setStake(e.target.value)}
+   457→              inputMode="numeric"
+   458→              dir="ltr"
+   459→              className="font-num border-white/15 bg-white/5"
+   460→              disabled={running}
+   461→            />
+   462→          </div>
+   463→        </div>
+   464→        {hasBase && (
+   465→          <p className="text-[10px] text-muted-foreground">
+   466→            ضریب عادلانه از حکم قاضی همین بازی (تب ۲) پیشنهاد شد — می‌توانید دستی تغییرش دهید.
+   467→          </p>
+   468→        )}
+   469→
+   470→        <div className="space-y-2">
+   471→          <div className="flex items-center justify-between">
+   472→            <Label className="text-xs">دقیقه رویداد</Label>
+   473→            <span className="font-num text-xs font-bold" dir="ltr">{minute}′</span>
+   474→          </div>
+   475→          <Slider
+   476→            value={[minute]}
+   477→            onValueChange={(v) => setMinute(v[0] ?? 25)}
+   478→            min={5}
+   479→            max={85}
+   480→            step={1}
+   481→            disabled={running}
+   482→            aria-label="دقیقه رویداد"
+   483→          />
+   484→        </div>
+   485→
+   486→        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+   487→          <Button
+   488→            onClick={() => fire("GOAL_HOME")}
+   489→            disabled={running || !matchId}
+   490→            className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-500"
+   491→          >
+   492→            {pendingEvent === "GOAL_HOME" && <Loader2 className="size-4 animate-spin" />}
+   493→            گل میزبان
+   494→          </Button>
+   495→          <Button
+   496→            onClick={() => fire("GOAL_AWAY")}
+   497→            disabled={running || !matchId}
+   498→            className="gap-1.5 bg-rose-600 text-white hover:bg-rose-500"
+   499→          >
+   500→            {pendingEvent === "GOAL_AWAY" && <Loader2 className="size-4 animate-spin" />}
+   501→            گل میهمان
+   502→          </Button>
+   503→          <Button
+   504→            onClick={() => fire("RED_HOME")}
+   505→            disabled={running || !matchId}
+   506→            className="gap-1.5 bg-amber-600 text-white hover:bg-amber-500"
+   507→          >
+   508→            {pendingEvent === "RED_HOME" && <Loader2 className="size-4 animate-spin" />}
+   509→            کارت قرمز میزبان
+   510→          </Button>
+   511→        </div>
+   512→
+   513→        {result && (
+   514→          <div className="space-y-3 rounded-lg border border-white/10 p-3">
+   515→            <div className="flex flex-wrap items-center justify-between gap-2">
+   516→              <p className="text-xs font-semibold">
+   517→                نتیجه زنده: <span className="font-num" dir="ltr">{result.score}</span>
+   518→              </p>
+   519→              <div className="flex flex-wrap items-center gap-1.5">
+   520→                <Badge variant="outline" className="text-[10px]">{result.scenarioLabel}</Badge>
+   521→                <Badge variant="outline" className="text-[10px]">دقیقه {faNum(result.minute, 0)}</Badge>
+   522→              </div>
+   523→            </div>
+   524→
+   525→            <p className="text-[11px] leading-relaxed text-muted-foreground">
+   526→              پیش‌بازی شما: {result.preBet.label} با ضریب{" "}
+   527→              <span className="font-num" dir="ltr">{result.preBet.odds.toFixed(2)}</span> به مبلغ{" "}
+   528→              <b className="font-num" dir="ltr">{result.preBet.stake.toFixed(1)}</b> · گل مورد انتظار باقی‌مانده (λ):{" "}
+   529→              <span className="font-num" dir="ltr">
+   530→                {result.remainingLambdas.home.toFixed(2)} — {result.remainingLambdas.away.toFixed(2)}
+   531→              </span>
+   532→            </p>
+   533→
+   534→            {/* احتمالات به‌روزشده */}
+   535→            <div className="space-y-1.5">
+   536→              {probRows.map((row) => (
+   537→                <div key={row.label} className="space-y-0.5">
+   538→                  <div className="flex items-baseline justify-between text-[11px]">
+   539→                    <span>{row.label}</span>
+   540→                    <b className="font-num">{(row.v * 100).toFixed(1)}%</b>
+   541→                  </div>
+   542→                  <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+   543→                    <div
+   544→                      className={`h-full rounded-full ${row.bar} transition-all duration-500`}
+   545→                      style={{ width: `${Math.max(1, Math.min(100, row.v * 100))}%` }}
+   546→                    />
+   547→                  </div>
+   548→                </div>
+   549→              ))}
+   550→            </div>
+   551→
+   552→            {/* ضرایب زنده */}
+   553→            <div className="space-y-1.5">
+   554→              <p className="text-xs font-semibold">ضرایب زنده</p>
+   555→              <Table>
+   556→                <TableHeader>
+   557→                  <TableRow className="border-white/8 hover:bg-transparent">
+   558→                    <TableHead className="text-xs">بازار</TableHead>
+   559→                    <TableHead className="text-xs">عادلانه (مدل)</TableHead>
+   560→                    <TableHead className="text-xs">بازار</TableHead>
+   561→                  </TableRow>
+   562→                </TableHeader>
+   563→                <TableBody>
+   564→                  {liveOddsRows.map((r) => (
+   565→                    <TableRow key={r.label} className="border-white/6">
+   566→                      <TableCell className="text-xs font-medium">{r.label}</TableCell>
+   567→                      <TableCell className="font-num text-xs" dir="ltr">{r.fair.toFixed(2)}</TableCell>
+   568→                      <TableCell className="font-num text-xs" dir="ltr">{r.market.toFixed(2)}</TableCell>
+   569→                    </TableRow>
+   570→                  ))}
+   571→                </TableBody>
+   572→              </Table>
+   573→            </div>
+   574→
+   575→            {/* سناریوی پوشش */}
+   576→            {result.hedge && (
+   577→              <div className="space-y-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+   578→                <p className="text-xs font-semibold">
+   579→                  سناریوی پوشش: {result.hedge.targetLabel} با ضریب{" "}
+   580→                  <span className="font-num" dir="ltr">{result.hedge.targetOdds.toFixed(2)}</span>
+   581→                </p>
+   582→                <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-3">
+   583→                  <div className="space-y-0.5">
+   584→                    <p className="text-muted-foreground">مبلغ شرط مقابل</p>
+   585→                    <p className="font-num font-bold" dir="ltr">{result.hedge.stake.toFixed(1)}</p>
+   586→                  </div>
+   587→                  <div className="space-y-0.5">
+   588→                    <p className="text-muted-foreground">سود اگر پیش‌بازی ببرد</p>
+   589→                    <p className={`font-num font-bold ${profitColor(result.hedge.profitIfPre)}`} dir="ltr">
+   590→                      {signed(result.hedge.profitIfPre)}{Math.abs(result.hedge.profitIfPre).toFixed(1)}
+   591→                    </p>
+   592→                  </div>
+   593→                  <div className="space-y-0.5">
+   594→                    <p className="text-muted-foreground">سود پس از پوشش</p>
+   595→                    <p className={`font-num font-bold ${profitColor(result.hedge.profitIfHedge)}`} dir="ltr">
+   596→                      {signed(result.hedge.profitIfHedge)}{Math.abs(result.hedge.profitIfHedge).toFixed(1)}
+   597→                    </p>
+   598→                  </div>
+   599→                </div>
+   600→              </div>
+   601→            )}
+   602→
+   603→            <div className="flex flex-wrap items-center justify-between gap-2">
+   604→              <Badge
+   605→                className={`px-3 py-1 text-[11px] text-white ${
+   606→                  result.recommendation === "HEDGE" ? "bg-emerald-600 hover:bg-emerald-500" : "bg-amber-500 hover:bg-amber-600"
+   607→                }`}
+   608→              >
+   609→                {result.recommendation === "HEDGE" ? "سیگنال پوشش: شرط مقابل ببند" : "نگه‌داری — پوشش به‌صرفه نیست"}
+   610→              </Badge>
+   611→              <span className="text-[11px]">
+   612→                EV نگه‌داری:{" "}
+   613→                <b dir="ltr" className={`font-num ${profitColor(result.holdEV)}`}>
+   614→                  {signed(result.holdEV)}{Math.abs(result.holdEV).toFixed(1)}
+   615→                </b>
+   616→              </span>
+   617→            </div>
+   618→            <p className="text-[11px] leading-relaxed text-muted-foreground">{result.message}</p>
+   619→          </div>
+   620→        )}
+   621→      </CardContent>
+   622→    </Card>
+   623→  );
+   624→}
+   625→
+   626→/* ─────────────── تب اصلی ─────────────── */
+   627→
+   628→interface Props {
+   629→  onGoToTab: (tab: string) => void;
+   630→}
+   631→
+   632→export function LiveTab(_props: Props) {
+   633→  return (
+   634→    <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+   635→      <LineupShockCard />
+   636→      <LiveHedgeCard />
+   637→    </div>
+   638→  );
+   639→}
+   640→

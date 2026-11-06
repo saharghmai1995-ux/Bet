@@ -69,13 +69,13 @@ export function dutchAllocate(
   let bothLoseProb: number | null = null;
   let expectedValue: number | null = null;
 
-  const hasProbs = legs.every((l) => typeof l.prob === "number" && l.prob >= 0);
-  if (hasProbs) {
+  const withProbs = legs.filter((l): l is DutchLeg & { prob: number } => typeof l.prob === "number" && l.prob >= 0);
+  if (withProbs.length === legs.length) {
     // با فرض استقلال سناریوها: احتمال باخت همزمان = Π(1 − p_i)
-    const pAllLose = legs.reduce((acc, l) => acc * (1 - l.prob), 1);
+    const pAllLose = withProbs.reduce((acc, l) => acc * (1 - l.prob), 1);
     bothLoseProb = pAllLose;
     // EV = Σ p_i × profit_i − p_loseAll × stakeTotal
-    expectedValue = legs.reduce((acc, l, i) => acc + l.prob * profits[i], 0) - pAllLose * totalStake;
+    expectedValue = withProbs.reduce((acc, l, i) => acc + l.prob * profits[i], 0) - pAllLose * totalStake;
   }
 
   return {
@@ -104,6 +104,8 @@ export type SelectionKind =
   | "HOME_OR_AWAY" // 12
   | "OVER_2_5"
   | "UNDER_2_5"
+  | "OVER_1_5" // باند پایین (v3.0)
+  | "UNDER_3_5" // باند بالا (v3.0)
   | "BTTS_YES"
   | "BTTS_NO";
 
@@ -126,6 +128,7 @@ interface Outcome {
   result: "H" | "D" | "A";
   goals: "O" | "U";
   btts: "Y" | "N";
+  tot: number; // مجموع دقیق گل (v3.0 — برای خطوط باندی ۱.۵ و ۳.۵)
 }
 
 function legWins(sel: SelectionKind, o: Outcome): boolean {
@@ -146,6 +149,10 @@ function legWins(sel: SelectionKind, o: Outcome): boolean {
       return o.goals === "O";
     case "UNDER_2_5":
       return o.goals === "U";
+    case "OVER_1_5":
+      return o.tot >= 2;
+    case "UNDER_3_5":
+      return o.tot <= 3;
     case "BTTS_YES":
       return o.btts === "Y";
     case "BTTS_NO":
@@ -164,7 +171,7 @@ function outcomeFa(o: Outcome): string {
   const r = o.result === "H" ? "برد میزبان" : o.result === "D" ? "مساوی" : "برد میهمان";
   const g = o.goals === "O" ? "بالای ۲.۵" : "زیر ۲.۵";
   const b = o.btts === "Y" ? "هر دو گل زدند" : "گل نزدند";
-  return `${r} + ${g} + ${b}`;
+  return `${r} + ${o.tot} گل (${g}) + ${b}`;
 }
 
 /**
@@ -188,11 +195,18 @@ export function checkMiddleTrap(tipA: TrapLeg[], tipB: TrapLeg[]): TrapCheck {
     };
   }
 
-  // فضای کامل نتیجه هر بازی
+  // فضای کامل نتیجه بر پایه نمره‌های دقیق (h,a) — دقیق برای همه خطوط از جمله باندی ۱.۵ و ۳.۵
   const outcomes: Outcome[] = [];
-  for (const r of ["H", "D", "A"] as const)
-    for (const g of ["O", "U"] as const)
-      for (const b of ["Y", "N"] as const) outcomes.push({ result: r, goals: g, btts: b });
+  for (let h = 0; h <= 4; h++) {
+    for (let a = 0; a <= 4; a++) {
+      outcomes.push({
+        result: h > a ? "H" : h === a ? "D" : "A",
+        goals: h + a >= 3 ? "O" : "U",
+        btts: h > 0 && a > 0 ? "Y" : "N",
+        tot: h + a,
+      });
+    }
+  }
 
   let hasCritical = false;
   let hasBaseRiskOnly = false;
@@ -266,6 +280,8 @@ export function faSelection(s: SelectionKind): string {
     HOME_OR_AWAY: "بدون مساوی (12)",
     OVER_2_5: "بالای ۲.۵ گل",
     UNDER_2_5: "زیر ۲.۵ گل",
+    OVER_1_5: "بالای ۱.۵ گل",
+    UNDER_3_5: "زیر ۳.۵ گل",
     BTTS_YES: "هر دو تیم گل می‌زنند",
     BTTS_NO: "نمی‌زنند",
   };

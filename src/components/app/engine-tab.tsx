@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Calculator, Goal, Info, Link2, Send, Zap } from "lucide-react";
+import { ArrowLeft, Calculator, ChevronDown, Goal, Info, Link2, Send, Zap } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Switch } from "@/components/ui/switch";
 import { runDixonColes } from "@/lib/engine/poisson";
 import {
   basketProb,
@@ -123,6 +125,8 @@ export function EngineTab({ onGoToTab }: Props) {
   const [view, setView] = useState<MatrixView>("3D");
   const [selectMode, setSelectMode] = useState<SelectMode>("a");
   const [slips, setSlips] = useState<{ a: Set<string>; b: Set<string> }>({ a: new Set(), b: new Set() });
+  const [manualOverride, setManualOverride] = useState(false);
+  const [overrideOpen, setOverrideOpen] = useState(false);
 
   // زنجیره واکنشی: تغییر بازی فعال یا اعلام شوک T-60 → بازنشانی پارامترها با دلتای VAEP
   const matchKey = `${activeMatchId}-${shock?.announcedAt ?? 0}`;
@@ -268,36 +272,66 @@ export function EngineTab({ onGoToTab }: Props) {
             )}
           </CardHeader>
           <CardContent className="max-h-[560px] space-y-4 overflow-y-auto">
-            {PARAMS.map((p) => (
-              <div key={p.key} className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1">
-                    <Label className="text-xs">{p.label}</Label>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Info className="size-3 cursor-help text-muted-foreground" />
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-52 text-xs">
-                        {p.hint}
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                  <AnimNum
-                    value={params[p.key] as number}
-                    decimals={p.key === "eloDiff" ? 0 : 2}
-                    className="text-xs font-semibold text-cyan-300"
-                  />
+            <Collapsible
+              open={overrideOpen}
+              onOpenChange={setOverrideOpen}
+              className="rounded-xl border border-white/10 bg-white/[0.03]"
+            >
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 text-sm font-semibold"
+                    aria-expanded={overrideOpen}
+                  >
+                    <ChevronDown className={`size-4 transition-transform ${overrideOpen ? "rotate-180" : ""}`} />
+                    تنظیمات دستی پیشرفته (Manual Parameter Override)
+                  </button>
+                </CollapsibleTrigger>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">غیرفعال در حالت اتوماتیک</span>
+                  <Switch checked={manualOverride} onCheckedChange={setManualOverride} aria-label="فعال‌سازی Override دستی" />
                 </div>
-                <Slider
-                  value={[params[p.key] as number]}
-                  min={p.min}
-                  max={p.max}
-                  step={p.step}
-                  onValueChange={(v) => setParam(p.key, v[0])}
-                  aria-label={p.label}
-                />
               </div>
-            ))}
+              <CollapsibleContent className="border-t border-white/10 px-4 py-3 data-[state=closed]:hidden">
+                <p className="text-[11px] text-muted-foreground">
+                  در حالت خلبان خودکار، پارامترها به‌صورت خودکار از داده‌های بازی پر می‌شوند
+                </p>
+                <div className={`mt-3 space-y-4 ${manualOverride ? "" : "pointer-events-none select-none opacity-40"}`}>
+                  {PARAMS.map((p) => (
+                    <div key={p.key} className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1">
+                          <Label className="text-xs">{p.label}</Label>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="size-3 cursor-help text-muted-foreground" />
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-52 text-xs">
+                              {p.hint}
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                        <AnimNum
+                          value={params[p.key] as number}
+                          decimals={p.key === "eloDiff" ? 0 : 2}
+                          className="text-xs font-semibold text-cyan-300"
+                        />
+                      </div>
+                      <Slider
+                        value={[params[p.key] as number]}
+                        min={p.min}
+                        max={p.max}
+                        step={p.step}
+                        onValueChange={(v) => setParam(p.key, v[0])}
+                        disabled={!manualOverride}
+                        aria-label={p.label}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </CardContent>
         </Card>
 

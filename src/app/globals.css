@@ -195,7 +195,7 @@
    اعداد Monospace با tabular-nums — ستون‌ها هنگام تغییر زنده نمی‌لرزند
    ═══════════════════════════════════════════════════════════ */
 .font-num {
-  font-family: "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: "JetBrains Mono", "Vazirmatn", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Loader2,
   Megaphone,
   Shield,
@@ -17,6 +18,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { faNum, faPct, signed } from "@/lib/format";
@@ -320,6 +323,8 @@ function LiveHedgeCard() {
   const [running, setRunning] = useState(false);
   const [pendingEvent, setPendingEvent] = useState<string | null>(null);
   const [result, setResult] = useState<LiveHedgeDTO | null>(null);
+  const [manualOverride, setManualOverride] = useState(false);
+  const [overrideOpen, setOverrideOpen] = useState(false);
 
   useEffect(() => {
     if (activeMatchId) setMatchId(activeMatchId);
@@ -422,66 +427,95 @@ function LiveHedgeCard() {
           </SelectContent>
         </Select>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs">تیپ پیش‌بازی شما</Label>
-            <Select value={selection} onValueChange={(v) => setSelection(v as "HOME" | "OVER25" | "AWAY")} disabled={running}>
-              <SelectTrigger className="w-full" aria-label="تیپ پیش‌بازی">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="HOME">برد میزبان</SelectItem>
-                <SelectItem value="OVER25">بالای ۲.۵ گل</SelectItem>
-                <SelectItem value="AWAY">برد میهمان</SelectItem>
-              </SelectContent>
-            </Select>
+        <Collapsible
+          open={overrideOpen}
+          onOpenChange={setOverrideOpen}
+          className="rounded-xl border border-white/10 bg-white/[0.03]"
+        >
+          <div className="flex items-center justify-between gap-3 px-4 py-3">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center gap-2 text-sm font-semibold"
+                aria-expanded={overrideOpen}
+              >
+                <ChevronDown className={`size-4 transition-transform ${overrideOpen ? "rotate-180" : ""}`} />
+                تنظیمات دستی پیشرفته (Manual Parameter Override)
+              </button>
+            </CollapsibleTrigger>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground">غیرفعال در حالت اتوماتیک</span>
+              <Switch checked={manualOverride} onCheckedChange={setManualOverride} aria-label="فعال‌سازی Override دستی" />
+            </div>
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs" htmlFor="pre-odds">ضریب پیش‌بازی</Label>
-            <Input
-              id="pre-odds"
-              value={odds}
-              onChange={(e) => setOdds(e.target.value)}
-              inputMode="decimal"
-              dir="ltr"
-              className="font-num border-white/15 bg-white/5"
-              disabled={running}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs" htmlFor="pre-stake">مبلغ پیش‌بازی</Label>
-            <Input
-              id="pre-stake"
-              value={stake}
-              onChange={(e) => setStake(e.target.value)}
-              inputMode="numeric"
-              dir="ltr"
-              className="font-num border-white/15 bg-white/5"
-              disabled={running}
-            />
-          </div>
-        </div>
-        {hasBase && (
-          <p className="text-[10px] text-muted-foreground">
-            ضریب عادلانه از حکم قاضی همین بازی (تب ۲) پیشنهاد شد — می‌توانید دستی تغییرش دهید.
-          </p>
-        )}
+          <CollapsibleContent className="border-t border-white/10 px-4 py-3 data-[state=closed]:hidden">
+            <p className="text-[11px] text-muted-foreground">
+              در حالت خلبان خودکار، پارامترها به‌صورت خودکار از داده‌های بازی پر می‌شوند
+            </p>
+            <div className={`mt-3 space-y-4 ${manualOverride ? "" : "pointer-events-none select-none opacity-40"}`}>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">تیپ پیش‌بازی شما</Label>
+                  <Select value={selection} onValueChange={(v) => setSelection(v as "HOME" | "OVER25" | "AWAY")} disabled={running}>
+                    <SelectTrigger className="w-full" aria-label="تیپ پیش‌بازی">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="HOME">برد میزبان</SelectItem>
+                      <SelectItem value="OVER25">بالای ۲.۵ گل</SelectItem>
+                      <SelectItem value="AWAY">برد میهمان</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="pre-odds">ضریب پیش‌بازی</Label>
+                  <Input
+                    id="pre-odds"
+                    value={odds}
+                    onChange={(e) => setOdds(e.target.value)}
+                    inputMode="decimal"
+                    dir="ltr"
+                    className="font-num border-white/15 bg-white/5"
+                    disabled={running}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs" htmlFor="pre-stake">مبلغ پیش‌بازی</Label>
+                  <Input
+                    id="pre-stake"
+                    value={stake}
+                    onChange={(e) => setStake(e.target.value)}
+                    inputMode="numeric"
+                    dir="ltr"
+                    className="font-num border-white/15 bg-white/5"
+                    disabled={running}
+                  />
+                </div>
+              </div>
+              {hasBase && (
+                <p className="text-[10px] text-muted-foreground">
+                  ضریب عادلانه از حکم قاضی همین بازی (تب ۲) پیشنهاد شد — می‌توانید دستی تغییرش دهید.
+                </p>
+              )}
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs">دقیقه رویداد</Label>
-            <span className="font-num text-xs font-bold" dir="ltr">{minute}′</span>
-          </div>
-          <Slider
-            value={[minute]}
-            onValueChange={(v) => setMinute(v[0] ?? 25)}
-            min={5}
-            max={85}
-            step={1}
-            disabled={running}
-            aria-label="دقیقه رویداد"
-          />
-        </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">دقیقه رویداد</Label>
+                  <span className="font-num text-xs font-bold" dir="ltr">{minute}′</span>
+                </div>
+                <Slider
+                  value={[minute]}
+                  onValueChange={(v) => setMinute(v[0] ?? 25)}
+                  min={5}
+                  max={85}
+                  step={1}
+                  disabled={!manualOverride || running}
+                  aria-label="دقیقه رویداد"
+                />
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <Button

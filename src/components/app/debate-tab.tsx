@@ -86,8 +86,8 @@ function AgentCard({ agent }: { agent: AgentBriefDTO }) {
           <Badge variant="outline" className={`text-[10px] ${c.badgeClass}`}>
             {c.badge}
           </Badge>
-          <Badge variant="outline" className="font-num text-[10px]">
-            اطمینان: {Math.round(agent.confidence * 100)}%
+          <Badge variant="outline" className="text-[10px]">
+            اطمینان: <span dir="ltr" className="tabular-nums">{Math.round(agent.confidence * 100)}</span>٪
           </Badge>
           {agent.source === "ENGINE_FALLBACK" && (
             <Badge variant="outline" className="border-amber-500/40 text-[10px] text-amber-300">
@@ -101,7 +101,7 @@ function AgentCard({ agent }: { agent: AgentBriefDTO }) {
         <ul className="space-y-1">
           {agent.arguments.map((arg, i) => (
             <li key={`${i}-${arg.slice(0, 16)}`} className="flex gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
-              <span className={c.dot}>◆</span>
+              <span className={`${c.dot} mt-1.5 inline-block size-1.5 shrink-0 rounded-full bg-current`} />
               <span>{arg}</span>
             </li>
           ))}
@@ -242,7 +242,7 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
           {result && !running && (
             <Badge variant="outline" className="w-fit gap-1.5 border-emerald-500/40 text-[11px] text-emerald-400">
               <CheckCircle2 className="size-3" />
-              مناظره آماده — اطمینان نهایی: <span className="font-num">{Math.round((f?.confidence ?? 0) * 100)}%</span>
+              مناظره آماده — اطمینان نهایی: <span dir="ltr" className="tabular-nums">{Math.round((f?.confidence ?? 0) * 100)}</span>٪
             </Badge>
           )}
         </CardContent>
@@ -274,12 +274,15 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-3 py-2 text-[11px]">
           <Link2 className="size-3.5 text-cyan-400" />
           <span className="text-cyan-200">پایه کمّی زنده از تب ۶:</span>
-          <span className="font-num text-cyan-100" dir="ltr">
-            λH {enginePub.lambdaHome.toFixed(2)} · λA {enginePub.lambdaAway.toFixed(2)} · P(H) {(enginePub.pHome * 100).toFixed(1)}%
+          <span className="text-cyan-100" dir="ltr">
+            λH <span className="tabular-nums">{enginePub.lambdaHome.toFixed(2)}</span> · λA{" "}
+            <span className="tabular-nums">{enginePub.lambdaAway.toFixed(2)}</span> · P(H){" "}
+            <span className="tabular-nums">{(enginePub.pHome * 100).toFixed(1)}%</span>
           </span>
           {enginePub.shockApplied && (enginePub.shockApplied.home !== 0 || enginePub.shockApplied.away !== 0) ? (
             <Badge className="border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-300" variant="outline">
-              ⚡ شوک T-60 لحاظ شد
+              <Zap className="size-3" />
+              شوک T-60 لحاظ شد
             </Badge>
           ) : shock ? (
             <button className="text-amber-300 underline" onClick={() => onGoToTab("engine")}>
@@ -332,15 +335,15 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-emerald-500" />
-                      برد {result.match.homeTeam}: <b className="font-num">{(f.pHome * 100).toFixed(1)}%</b>
+                      برد {result.match.homeTeam}: <b><span dir="ltr" className="tabular-nums">{(f.pHome * 100).toFixed(1)}</span>٪</b>
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-slate-500" />
-                      مساوی: <b className="font-num">{(f.pDraw * 100).toFixed(1)}%</b>
+                      مساوی: <b><span dir="ltr" className="tabular-nums">{(f.pDraw * 100).toFixed(1)}</span>٪</b>
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-rose-500" />
-                      برد {result.match.awayTeam}: <b className="font-num">{(f.pAway * 100).toFixed(1)}%</b>
+                      برد {result.match.awayTeam}: <b><span dir="ltr" className="tabular-nums">{(f.pAway * 100).toFixed(1)}</span>٪</b>
                     </span>
                   </div>
                 </div>
@@ -352,17 +355,17 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-emerald-500" />
-                      بالای ۲.۵ گل: <b className="font-num">{(f.pOver25 * 100).toFixed(1)}%</b>
+                      بالای ۲.۵ گل: <b><span dir="ltr" className="tabular-nums">{(f.pOver25 * 100).toFixed(1)}</span>٪</b>
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-slate-600" />
-                      زیر ۲.۵ گل: <b className="font-num">{((1 - f.pOver25) * 100).toFixed(1)}%</b>
+                      زیر ۲.۵ گل: <b><span dir="ltr" className="tabular-nums">{((1 - f.pOver25) * 100).toFixed(1)}</span>٪</b>
                     </span>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className="border-violet-500/40 text-[11px] text-violet-300">
-                    اطمینان نهایی: <span className="font-num">{Math.round(f.confidence * 100)}%</span>
+                    اطمینان نهایی: <span dir="ltr" className="tabular-nums">{Math.round(f.confidence * 100)}</span>٪
                   </Badge>
                   <Badge variant="outline" className="text-[11px]">
                     منبع: {result.source === "LLM" ? "مناظره LLM" : "موتور کمّی (fallback)"}

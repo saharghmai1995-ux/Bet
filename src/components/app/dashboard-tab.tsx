@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import type { ReactNode } from "react";
 import { faNum, faPctSigned } from "@/lib/format";
 import { TacticalPitch } from "@/components/app/fx/tactical-pitch";
 import { PulseFlow, type FlowNode } from "@/components/app/fx/pulse-flow";
@@ -63,9 +64,13 @@ interface Props {
   onAnalyze: (matchId: string) => void;
   onRefresh: () => void;
   onGoToTab: (tab: string) => void;
+  /** رادار خط لوله اتوماتیک v3.0 */
+  autopilotRadar?: ReactNode;
+  /** دک فشرده فلش‌کارت‌های آماده v3.0 */
+  autopilotDeck?: ReactNode;
 }
 
-export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onGoToTab }: Props) {
+export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onGoToTab, autopilotRadar, autopilotDeck }: Props) {
   // داده‌ها از استور سراسری — بدون prop drilling
   const matches = useQuantStore((s) => s.matches);
   const activeMatchId = useQuantStore((s) => s.activeMatchId);
@@ -115,6 +120,12 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
           <p className="mt-0.5 text-[11px] text-muted-foreground">از هدر یا کلیک روی جدول تغییر دهید</p>
         </Card>
       </div>
+
+      {/* دک فشرده فلش‌کارت‌های آماده (v3.0) */}
+      {autopilotDeck}
+
+      {/* رادار اسکنر خودکار زنده (v3.0) */}
+      {autopilotRadar}
 
       {/* پایپ‌لاین ۵ لایه با پالس جریان داده */}
       <Card className="glass">

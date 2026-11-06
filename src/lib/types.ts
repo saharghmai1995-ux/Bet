@@ -281,12 +281,28 @@ export interface PortfolioSelectionDTO {
   evPct: number;
 }
 
+/** ساختار داخلی زوج — کلیدهای پایه/متغیر برای نقشه پوشش و اشکال‌زدایی */
+export interface PairStructureDTO {
+  baseKey: string; // پایه امن (DC_1X | DC_X2)
+  varAKey: string; // متغیر تیپ A (O25 | U25 | O15 | U35 | BTTS_Y | BTTS_N | C_O95 | C_U95)
+  varBKey: string; // متغیر تیپ B (مقابل متغیر A یا بازار دوگانه)
+  varAMatchId: string; // بازی متغیر A (میکس دو بازی = بازی دوم)
+  varBMatchId: string;
+  /** زوج باندی (خطوط هم‌خانواده با ناحیه طلایی) — O15_U25 یا O25_U35 */
+  band: "O15_U25" | "O25_U35" | null;
+  /** حاوی خط سینتتیک مبتنی بر مدل (O15/U35 بدون قیمت واقعی بوک‌میکر) */
+  synthetic: boolean;
+  /** زوج دو-برد (Double-Win): هر دو تیپ می‌توانند همزمان ببرند */
+  doubleWin: boolean;
+}
+
 /** زوج تیپ مکمل ساخته‌شده توسط موتور مونت‌کارلو + کلِی */
 export interface PortfolioPairDTO {
   id: string;
   kind: "SINGLE_MATCH_BUILDER" | "TWO_MATCH_MIX";
   labelA: string;
   labelB: string;
+  structure: PairStructureDTO;
   selectionA: PortfolioSelectionDTO;
   selectionB: PortfolioSelectionDTO;
   totalOddsA: number;
@@ -296,6 +312,8 @@ export interface PortfolioPairDTO {
   guaranteedMarginPct: number;
   equalProfit: { stakeA: number; stakeB: number; profit: number };
   kelly: { fA: number; fB: number; growth: number };
+  /** لبه CLV تقریبی نسبت به خط شارپ پیناکل (null = خط سینتتیک/در دسترس نیست) */
+  sharpEdgePct: number | null;
   trap: { verdict: "NONE" | "WARNING" | "CRITICAL"; title: string; message: string };
   verdict: string;
 }

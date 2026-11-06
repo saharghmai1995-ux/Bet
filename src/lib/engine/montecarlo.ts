@@ -10,6 +10,7 @@ export type SelectionKey =
   | "HOME" | "DRAW" | "AWAY"
   | "DC_1X" | "DC_X2"
   | "O25" | "U25"
+  | "O15" | "U35"
   | "BTTS_Y" | "BTTS_N"
   | "C_O95" | "C_U95";
 
@@ -21,6 +22,8 @@ export const SELECTION_LABELS: Record<SelectionKey, string> = {
   DC_X2: "شانس مجدد میهمان (X2)",
   O25: "بالای ۲.۵ گل",
   U25: "زیر ۲.۵ گل",
+  O15: "بالای ۱.۵ گل",
+  U35: "زیر ۳.۵ گل",
   BTTS_Y: "هر دو تیم گل می‌زنند",
   BTTS_N: "گل نزدن حداقل یک تیم",
   C_O95: "بالای ۹.۵ کرنر",
@@ -103,6 +106,8 @@ function selectionWins(key: SelectionKey, hg: number, ag: number, corners: numbe
     case "DC_X2": return ag >= hg;
     case "O25": return hg + ag > 2.5;
     case "U25": return hg + ag < 2.5;
+    case "O15": return hg + ag > 1.5;
+    case "U35": return hg + ag < 3.5;
     case "BTTS_Y": return hg > 0 && ag > 0;
     case "BTTS_N": return hg === 0 || ag === 0;
     case "C_O95": return corners > 9.5;
@@ -111,7 +116,7 @@ function selectionWins(key: SelectionKey, hg: number, ag: number, corners: numbe
 }
 
 export const MC_SELECTIONS: SelectionKey[] = [
-  "HOME", "DRAW", "AWAY", "DC_1X", "DC_X2", "O25", "U25", "BTTS_Y", "BTTS_N", "C_O95", "C_U95",
+  "HOME", "DRAW", "AWAY", "DC_1X", "DC_X2", "O25", "U25", "O15", "U35", "BTTS_Y", "BTTS_N", "C_O95", "C_U95",
 ];
 
 /**

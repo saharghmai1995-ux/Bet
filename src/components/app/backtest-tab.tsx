@@ -113,13 +113,13 @@ export function BacktestTab() {
 
   const metrics = active
     ? [
-        { label: "رویدادهای شرط", value: faNum(active.totalBets, 0), icon: FlaskConical, tone: "" },
-        { label: "نرخ سودآوری رویداد", value: `${(active.strikeRate * 100).toFixed(1)}%`, icon: BadgeCheck, tone: "" },
-        { label: "ROI", value: `${active.roi > 0 ? "+" : ""}${(active.roi * 100).toFixed(2)}%`, icon: active.roi > 0 ? TrendingUp : TrendingDown, tone: active.roi > 0 ? "text-emerald-400" : "text-rose-400" },
-        { label: "میانگین CLV", value: `${active.avgClv > 0 ? "+" : ""}${(active.avgClv * 100).toFixed(2)}%`, icon: Gauge, tone: active.avgClv > 0 ? "text-emerald-400" : "text-rose-400" },
-        { label: "CLV مثبت", value: `${(active.positiveClvRate * 100).toFixed(0)}%`, icon: TrendingUp, tone: active.positiveClvRate > 0.5 ? "text-emerald-400" : "" },
-        { label: "بیشترین افت سرمایه", value: `${(active.maxDrawdown * 100).toFixed(1)}%`, icon: TrendingDown, tone: "text-amber-300" },
-        { label: "سرمایه نهایی", value: faNum(active.finalEquity, 0), icon: TrendingUp, tone: active.finalEquity >= 1000 ? "text-emerald-400" : "text-rose-400" },
+        { label: "رویدادهای شرط", value: faNum(active.totalBets, 0), mono: false, icon: FlaskConical, tone: "" },
+        { label: "نرخ سودآوری رویداد", value: `${(active.strikeRate * 100).toFixed(1)}%`, mono: true, icon: BadgeCheck, tone: "" },
+        { label: "ROI", value: `${active.roi > 0 ? "+" : ""}${(active.roi * 100).toFixed(2)}%`, mono: true, icon: active.roi > 0 ? TrendingUp : TrendingDown, tone: active.roi > 0 ? "text-emerald-400" : "text-rose-400" },
+        { label: "میانگین CLV", value: `${active.avgClv > 0 ? "+" : ""}${(active.avgClv * 100).toFixed(2)}%`, mono: true, icon: Gauge, tone: active.avgClv > 0 ? "text-emerald-400" : "text-rose-400" },
+        { label: "CLV مثبت", value: `${(active.positiveClvRate * 100).toFixed(0)}%`, mono: true, icon: TrendingUp, tone: active.positiveClvRate > 0.5 ? "text-emerald-400" : "" },
+        { label: "بیشترین افت سرمایه", value: `${(active.maxDrawdown * 100).toFixed(1)}%`, mono: true, icon: TrendingDown, tone: "text-amber-300" },
+        { label: "سرمایه نهایی", value: faNum(active.finalEquity, 0), mono: false, icon: TrendingUp, tone: active.finalEquity >= 1000 ? "text-emerald-400" : "text-rose-400" },
       ]
     : [];
 
@@ -141,14 +141,16 @@ export function BacktestTab() {
           <div className="space-y-1.5">
             <div className="flex justify-between">
               <span className="text-xs">تعداد بازی</span>
-              <span className="font-num text-xs font-bold">{faNum(totalMatches, 0)}</span>
+              <span className="tabular-nums text-xs font-bold">{faNum(totalMatches, 0)}</span>
             </div>
             <Slider value={[totalMatches]} min={100} max={2000} step={100} onValueChange={(v) => setTotalMatches(v[0])} aria-label="تعداد بازی" />
           </div>
           <div className="space-y-1.5">
             <div className="flex justify-between">
               <span className="text-xs">آستانه +EV</span>
-              <span className="font-num text-xs font-bold">{faNum(minEdge, 0)}%</span>
+              <span className="text-xs font-bold">
+                <span dir="ltr" className="tabular-nums">{faNum(minEdge, 0)}</span>٪
+              </span>
             </div>
             <Slider value={[minEdge]} min={0} max={15} step={1} onValueChange={(v) => setMinEdge(v[0])} aria-label="آستانه ارزش" />
           </div>
@@ -200,7 +202,7 @@ export function BacktestTab() {
                   <m.icon className={`size-3 ${m.tone}`} />
                   {m.label}
                 </div>
-                <p className={`font-num text-lg font-bold ${m.tone}`}>{m.value}</p>
+                <p className={`${m.mono ? "font-num" : "tabular-nums"} text-lg font-bold ${m.tone}`}>{m.value}</p>
               </Card>
             ))}
           </div>
@@ -296,7 +298,7 @@ export function BacktestTab() {
                         {s.avgClv > 0 ? "+" : ""}{(s.avgClv * 100).toFixed(2)}%
                       </TableCell>
                       <TableCell className="font-num text-xs text-amber-300" dir="ltr">{(s.maxDrawdown * 100).toFixed(1)}%</TableCell>
-                      <TableCell className="font-num text-xs font-bold" dir="ltr">{faNum(s.finalEquity, 0)}</TableCell>
+                      <TableCell className="tabular-nums text-xs font-bold" dir="ltr">{faNum(s.finalEquity, 0)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

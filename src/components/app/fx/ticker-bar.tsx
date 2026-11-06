@@ -14,9 +14,17 @@ import type { MatchDTO } from "@/lib/types";
 
 interface TickItem {
   id: string;
-  label: string;
   kind: "DROP" | "RISE" | "EV";
+  /** نام بازی (فارسی) — با فونت فارسی رندر می‌شود */
+  matchLabel: string;
+  /** برچسب فارسی — فقط با فونت فارسی صفحه رندر می‌شود (هرگز داخل font-num) */
+  label: string;
+  /** مقدار عددی لاتین (خروجی toFixed) — با tabular-nums و dir=ltr رندر می‌شود */
   value: string;
+  /** برچسب فارسی مکمل برای z (فقط آیتم حاشیه بازار) */
+  zLabel?: string;
+  /** مقدار z خالصاً ASCII — تنها رشته‌ای که با font-num رندر می‌شود */
+  zAscii?: string;
   tone: string;
 }
 
@@ -33,7 +41,7 @@ function hash(str: string): number {
 function buildItems(matches: MatchDTO[], tick: number): TickItem[] {
   const items: TickItem[] = [];
   for (const m of matches) {
-    const label = `${m.homeTeam} × ${m.awayTeam}`;
+    const matchLabel = `${m.homeTeam} × ${m.awayTeam}`;
 
     // ۱) مدل کمّی سبک → احتمالات واقعی
     let pHome = 0;
@@ -70,17 +78,19 @@ function buildItems(matches: MatchDTO[], tick: number): TickItem[] {
     if (drift < -0.012) {
       items.push({
         id: `${m.id}-drop`,
-        label,
         kind: "DROP",
-        value: `▼ ${(Math.abs(drift) * 100).toFixed(1)}٪ افت خط`,
+        matchLabel,
+        label: "افت خط",
+        value: (Math.abs(drift) * 100).toFixed(1),
         tone: "text-rose-400",
       });
     } else if (drift > 0.012) {
       items.push({
         id: `${m.id}-rise`,
-        label,
         kind: "RISE",
-        value: `▲ ${(drift * 100).toFixed(1)}٪ رشد خط`,
+        matchLabel,
+        label: "رشد خط",
+        value: (drift * 100).toFixed(1),
         tone: "text-amber-300",
       });
     }
@@ -88,9 +98,12 @@ function buildItems(matches: MatchDTO[], tick: number): TickItem[] {
     // ۴) حاشیه بازار اجماعی
     items.push({
       id: `${m.id}-margin`,
-      label,
       kind: "EV",
-      value: `حاشیه بازار ${(shin.margin * 100).toFixed(1)}٪ · z شین ${shin.z.toFixed(3)}`,
+      matchLabel,
+      label: "حاشیه بازار",
+      value: (shin.margin * 100).toFixed(1),
+      zLabel: "z شین",
+      zAscii: shin.z.toFixed(3),
       tone: "text-cyan-300",
     });
 
@@ -98,13 +111,14 @@ function buildItems(matches: MatchDTO[], tick: number): TickItem[] {
     if (pHome > 0) {
       const evHome = pHome * m.oddsHome - 1;
       const evAway = pAway * m.oddsAway - 1;
-      const best = evHome >= evAway ? { k: "۱", ev: evHome } : { k: "۲", ev: evAway };
+      const best = evHome >= evAway ? { ev: evHome } : { ev: evAway };
       if (best.ev > 0.02) {
         items.push({
           id: `${m.id}-ev`,
-          label,
           kind: "EV",
-          value: `⚡ +EV: انتخاب ${best.k} با لبه ${(best.ev * 100).toFixed(1)}٪ بالاتر از خط شارپ`,
+          matchLabel,
+          label: "لبه بالاتر از خط شارپ",
+          value: (best.ev * 100).toFixed(1),
           tone: "text-emerald-400",
         });
       }
@@ -137,11 +151,17 @@ export function TickerBar({ matches }: { matches: MatchDTO[] }) {
           ) : (
             <Zap className={`size-3 ${it.tone}`} />
           )}
+          <span className="text-foreground/60">{it.matchLabel}</span>
           <span className="text-muted-foreground">{it.label}</span>
-          <span className={`font-num ${it.tone}`} dir="ltr">
+          <span dir="ltr" className={`tabular-nums font-semibold ${it.tone}`}>
             {it.value}
           </span>
-          <span className="text-white/15">◆</span>
+          {it.zAscii !== undefined && (
+            <span className="text-[10px] text-muted-foreground/70">
+              {it.zLabel} <span dir="ltr" className="font-num">{it.zAscii}</span>
+            </span>
+          )}
+          <span className="mx-1 inline-block size-1 rounded-full bg-white/15" />
         </span>
       ))}
     </div>

@@ -56,10 +56,11 @@ export async function POST(req: NextRequest) {
     if (mode === "TWO_MATCH") {
       const secondId: string | undefined = body.secondMatchId;
       const second = secondId && secondId !== m1.id
-        ? await db.match.findUnique({ where: { id: secondId } })
+        ? await db.match.findUnique({ where: { id: secondId }, include: { referee: true } })
         : await db.match.findFirst({
             where: { id: { not: m1.id }, kickoff: { gte: new Date() } },
             orderBy: { kickoff: "asc" },
+            include: { referee: true },
           });
       if (!second) {
         return NextResponse.json({ success: false, error: "بازی دوم یافت نشد" }, { status: 404 });
