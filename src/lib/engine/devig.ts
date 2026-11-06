@@ -44,12 +44,14 @@ export function powerDevig(odds: number[]): { probs: number[]; k: number } {
 
 /**
  * مدل شین: بازار ترکیبی از شرط‌بندهای عادی + معامله‌گران آگاه (نسبت z)
- * p_i(z) = [√(z² + 4(1−z)·r_i²/B) − z] / (2(1−z))  که B = Σr_j
- * z طوری حل می‌شود که Σp_i = 1 (دوبخشی/Bisection)
+ * S = 1/O1 + 1/OX + 1/O2  (مجموع معکوس ضرایب — همان B)
+ * p_i(z) = [√(z² + 4(1−z)·(r_i²/S)) − z] / (2(1−z))   که r_i = 1/O_i
+ * z اختصاصی «هر بوک‌میکر» به‌صورت خودکار با حل تکرارشونده (Bisection دقیقاً ۲۰ گام)
+ * طوری یافت می‌شود که مجموع احتمالات شین دقیقاً برابر 1.000 شود.
  */
 export function shinDevig(odds: number[]): DevigResult {
   const r = odds.map((o) => 1 / o);
-  const B = r.reduce((s, x) => s + x, 0);
+  const B = r.reduce((s, x) => s + x, 0); // S = مجموع معکوس ضرایب
   const margin = B - 1;
 
   // بازار بدون حاشیه یا زیر ۱ (آربیتراژ): شین تعریف نمی‌شود → ساده
@@ -65,9 +67,10 @@ export function shinDevig(odds: number[]): DevigResult {
   // f(z) = Σ p_i(z) − 1 : در z=0 مثبت (√B − 1 > 0) و در z→1 منفی
   const f = (z: number) => r.reduce((s, x) => s + shinP(x, z), 0) - 1;
 
+  // Bisection — دقیقاً ۲۰ گام (دقت ≈ ۱۰⁻⁶ کافی و مطابق مشخصات مهندسی)
   let lo = 0;
   let hi = 0.9999;
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 20; i++) {
     const mid = (lo + hi) / 2;
     if (f(mid) > 0) lo = mid;
     else hi = mid;

@@ -4,6 +4,19 @@
 // خروجی: ضریب اصلاحی هر لیگ که در تحلیل بعدی اعمال می‌شود
 // ─────────────────────────────────────────────
 
+/** خط مرجع پیناکل — میانگین بریر خط شارپ بازار (معیار مقایسه صنعتی) */
+export const PINNACLE_BRIER = 0.192;
+
+/**
+ * Brier Skill Score (BSS) — فرمول استاندارد مهارت نسبت به حدس تصادفی:
+ *   BSS = (1 − (brierScore / 0.25)) × 100
+ * مثال: بریر ۰.۱۵ → BSS = +۴۰٪ (پیش‌بینی ۴۰٪ بهتر از شانس تصادفی)
+ * بریر ۰.۲۵ → صفر | بریر بالای ۰.۲۵ → منفی (بدتر از تصادف)
+ */
+export function brierSkillScore(brierScore: number): number {
+  return (1 - brierScore / 0.25) * 100;
+}
+
 export interface CalibrationRecord {
   league: string;
   predictedProb: number;

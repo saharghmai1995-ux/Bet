@@ -34,6 +34,10 @@ export interface MatchDTO {
   oddsOver25: number;
   oddsUnder25: number;
   odds1x: number;
+  /** شوک ترکیب T-60 (برای بازسازی زنجیره واکنشی پس از reload) */
+  lineupAnnounced?: boolean;
+  lineupShockHome?: number | null;
+  lineupShockAway?: number | null;
   status: string;
   latestAnalysis: {
     id: string;
@@ -178,6 +182,21 @@ export interface BacktestResultDTO {
     clv: number;
     equity: number;
   }[];
+  /** مقایسه سه استراتژی مدیریت سرمایه در یک شبیه‌سازی واحد */
+  strategies: {
+    key: "FIXED" | "KELLY25" | "DUTCH2";
+    label: string;
+    totalBets: number;
+    wins: number;
+    strikeRate: number;
+    roi: number;
+    finalEquity: number;
+    avgClv: number;
+    positiveClvRate: number;
+    maxDrawdown: number;
+    curve: { i: number; equity: number }[];
+  }[];
+  drawdownReduction: number; // کاهش افت سرمایه داچینگ نسبت به Fixed
   verdict: "EXCELLENT" | "GOOD" | "MARGINAL" | "FAIL";
   verdictMessage: string;
 }
@@ -378,6 +397,9 @@ export interface CalibrationDTO {
     hitRate: number;
     avgPredicted: number;
     brierSkillVsRandom: number; // 1 − Brier/0.25
+    brierSkillScore: number; // BSS استاندارد = (1 − Brier/0.25) × 100
+    pinnacleBrier: number; // خط مرجع پیناکل = 0.192
+    vsPinnacleDelta: number; // بریر مدل منهای بریر پیناکل (منفی = بهتر از پیناکل)
   };
   byLeague: {
     league: string;

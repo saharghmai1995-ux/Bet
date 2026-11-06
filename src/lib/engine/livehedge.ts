@@ -48,13 +48,18 @@ const EVENT_LABELS: Record<LiveEvent, string> = {
 };
 
 /**
- * λ باقیمانده: نسخه مقیاس‌شده زمانی + تعدیل وضعیت بازی (Game State در حین بازی):
+ * λ باقیمانده: تابع توانی استاندارد شدت گلزنی در دقایق پایانی (نمای توانی ۰.۸۵)
+ *   lambdaRem = lambdaPre × ((90 − minute) / 90) ^ 0.85
+ * (کاهش خطی λ واقعیت دقایق پایانی را دست‌کم می‌گیرد؛ بازی‌های پایانی بازترند)
+ * تعدیل وضعیت بازی (Game State در حین بازی):
  * - تیم جلوبوده حمله را آرام می‌کند (×۰.۸۵)، تیم عقب‌بوده باز می‌کند (×۱.۱۸)
- * - کارت قرمز: حمله تیم ۱۰نفره ×۰.۷۵، حریف ×۱.۱۵
+ * - کارت قرمز: حمله تیم ۱۰نفره ×۰.۶۸، حریف ×۱.۲۸ (ضرایب تجربی اخراج)
  */
 export function inPlayAnalysis(input: InPlayInput): InPlayResult {
   const { minute, event } = input;
-  const frac = Math.max(0.05, Math.min(0.95, (90 - minute) / 90));
+  // تابع توانی استاندارد — به‌جای کاهش خطی (90 − minute) / 90
+  const fracRaw = Math.max(0.03, Math.min(0.95, (90 - minute) / 90));
+  const frac = Math.pow(fracRaw, 0.85);
 
   // نتیجه فعلی بر اساس رویداد
   let homeGoals = 0;
@@ -73,12 +78,12 @@ export function inPlayAnalysis(input: InPlayInput): InPlayResult {
     lamH *= 1.18;
   }
   if (event === "RED_HOME") {
-    lamH *= 0.75;
-    lamA *= 1.15;
+    lamH *= 0.68; // تیم ۱۰نفره: افت شدید حمله
+    lamA *= 1.28; // حریف: باز شدن فضا
   }
   if (event === "RED_AWAY") {
-    lamA *= 0.75;
-    lamH *= 1.15;
+    lamA *= 0.68;
+    lamH *= 1.28;
   }
 
   lamH = Math.max(0.02, Math.min(4, lamH));

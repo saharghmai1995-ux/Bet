@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { runDixonColes } from "@/lib/engine/poisson";
+import { computeMatchEngine } from "@/lib/engine/matchEngine";
+import { basketProb, p1xOver25Cells, P1X_UNDER25_CELLS, jointLossProb } from "@/lib/engine/betbuilder";
 import {
   dutchAllocate,
   checkMiddleTrap,
@@ -33,7 +35,10 @@ export async function POST(req: NextRequest) {
       : "EQUAL_PROFIT";
     const mode: "SINGLE_MATCH" | "TWO_MATCH" = body.mode === "TWO_MATCH" ? "TWO_MATCH" : "SINGLE_MATCH";
 
-    const analysis = await db.agentAnalysis.findUnique({ where: { id: analysisId }, include: { match: true } });
+    const analysis = await db.agentAnalysis.findUnique({
+      where: { id: analysisId },
+      include: { match: { include: { referee: true } } },
+    });
     if (!analysis) {
       return NextResponse.json({ success: false, error: "تحلیل یافت نشد" }, { status: 404 });
     }
@@ -93,6 +98,25 @@ export async function POST(req: NextRequest) {
       odds2Under = second.oddsUnder25;
     }
 
+    // ─── احتمال دقیق تیپ‌های همبسته از ماتریس دیکسون-کولز (اصلاح همبستگی درون‌بازی) ───
+    // در حالت تک‌بازی، ضرب p(1X) × p(OU) همبستگی درون‌بازی را نادیده می‌گیرد؛
+    // احتمال صحیح = مجموع خانه‌های ماتریس (i,j) مرتبط با هر بازار:
+    //   1X & Over 2.5 → i >= j و i + j >= 3
+    //   1X & Under 2.5 → خانه‌های (0,0)، (1,0)، (2,0)، (1,1)
+    let probA: number;
+    let probB: number;
+    let exactMatrixNote: string;
+    if (mode === "SINGLE_MATCH") {
+      const engine = computeMatchEngine(m1);
+      probA = basketProb(engine.dc.matrix, p1xOver25Cells());
+      probB = basketProb(engine.dc.matrix, P1X_UNDER25_CELLS);
+      exactMatrixNote = `احتمالات با جمع دقیق خانه‌های ماتریس دیکسون-کولز محاسبه شد — P(1X+Over)=${(probA * 100).toFixed(1)}٪ / P(1X+Under)=${(probB * 100).toFixed(1)}٪ (ضرب مستقل: ${(p1x * p2Over * 100).toFixed(1)}٪ / ${(p1x * p2Under * 100).toFixed(1)}٪)`;
+    } else {
+      probA = p1x * p2Over;
+      probB = p1x * p2Under;
+      exactMatrixNote = "دو بازی مستقل — ضرب احتمالات مجاز است";
+    }
+
     // ─── شرط پایه مشترک (Banker): شانس مجدد میزبان 1X ───
     const oddsBanker = m1.odds1x;
     const baseSafe = p1x >= 0.72;
@@ -100,10 +124,9 @@ export async function POST(req: NextRequest) {
     // ─── ساخت دو تیپ مکمل ───
     // تیپ A: پایه (1X) × بالای ۲.۵ گل  → سناریوی بازی باز
     // تیپ B: پایه (1X) × زیر ۲.۵ گل   → سناریوی بازی بسته
+    // (ضرایب سایت مستقل قیمت‌گذاری می‌شوند — همین‌جاست که لبه آماری ظاهر می‌شود)
     const oddsA = round2(oddsBanker * odds2Over);
     const oddsB = round2(oddsBanker * odds2Under);
-    const probA = p1x * p2Over;
-    const probB = p1x * p2Under;
 
     const legsA = [
       { match: bankerTeam, market: "شانس مجدد (1X)", selection: "HOME_OR_DRAW" as SelectionKind, odds: oddsBanker, prob: p1x },
@@ -138,8 +161,12 @@ export async function POST(req: NextRequest) {
 
     // ─── بررسی تله باخت همزمان ───
     const trap = checkMiddleTrap(legsA, legsB);
-    // پوشش ریاضی دقیق: تا وقتی پایه (1X) نبازد، بالای/زیر ۲.۵ کل فضای گل را می‌پوشانند
-    const coverageProb = p1x;
+    // پوشش ریاضی دقیق: در حالت تک‌بازی از ماتریس (احتمال باخت همزمان = خانه‌های انتخاب‌نشده)
+    const bothLoseExact =
+      mode === "SINGLE_MATCH"
+        ? jointLossProb(computeMatchEngine(m1).dc.matrix, p1xOver25Cells(), P1X_UNDER25_CELLS)
+        : null;
+    const coverageProb = mode === "SINGLE_MATCH" && bothLoseExact !== null ? 1 - bothLoseExact : p1x;
     const coverageOk = coverageProb >= 0.72 && dutch.arbitrageFree;
 
     // ─── ذخیره تیپ‌ها ───
@@ -230,6 +257,7 @@ export async function POST(req: NextRequest) {
         bothLoseProb: 1 - coverageProb,
         expectedValue: dutch.expectedValue,
       },
+      exactMatrixNote,
       trap,
       batchId,
     });

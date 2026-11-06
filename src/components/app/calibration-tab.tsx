@@ -135,8 +135,9 @@ export function CalibrationTab() {
               </CardTitle>
               <CardDescription className="text-xs leading-relaxed">
                 امتیاز بریر میانگین مربعات خط احتمال‌های پیش‌بینی‌شده است:{" "}
-                <span dir="ltr" className="tabular-nums font-bold">Brier = (p − نتیجه)²</span> — صفر یعنی پیش‌بینی بی‌نقص و{" "}
-                <span className="tabular-nums">۰.۲۵</span> معادل حدس تصادفی. سیستم بر اساس همین امتیاز، ضریب اصلاحی هر
+                <span dir="ltr" className="font-num font-bold">Brier = (p − نتیجه)²</span> — صفر یعنی پیش‌بینی بی‌نقص و{" "}
+                <span className="font-num">0.25</span> معادل حدس تصادفی. مهارت استاندارد:{" "}
+                <span dir="ltr" className="font-num font-bold text-emerald-400">BSS = (1 − Brier/0.25) × 100</span> — سیستم بر اساس همین امتیاز، ضریب اصلاحی هر
                 لیگ را در تحلیل‌های بعدی اعمال می‌کند (حافظه برداری).
               </CardDescription>
             </div>
@@ -167,32 +168,71 @@ export function CalibrationTab() {
         <>
           {/* آمار کلی */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="rounded-lg border border-border p-3 space-y-1">
+            <div className="rounded-lg glass border-white/10 p-3 space-y-1">
               <p className="text-[11px] text-muted-foreground">میانگین بریر</p>
-              <p className="text-lg font-bold tabular-nums" dir="ltr">{faNum(data.overall.avgBrier, 3)}</p>
+              <p className="font-num text-lg font-bold" dir="ltr">{data.overall.avgBrier.toFixed(3)}</p>
               <p className="text-[10px] text-muted-foreground">کمتر بهتر — صفر بی‌نقص</p>
             </div>
-            <div className="rounded-lg border border-border p-3 space-y-1">
+            <div className="rounded-lg glass border-white/10 p-3 space-y-1">
               <p className="text-[11px] text-muted-foreground">نرخ اصابت</p>
-              <p className="text-lg font-bold tabular-nums" dir="ltr">{faPct(data.overall.hitRate, 0)}</p>
+              <p className="font-num text-lg font-bold" dir="ltr">{(data.overall.hitRate * 100).toFixed(0)}%</p>
               <p className="text-[10px] text-muted-foreground">سهم پیش‌بینی‌های درست</p>
             </div>
-            <div className="rounded-lg border border-border p-3 space-y-1">
-              <p className="text-[11px] text-muted-foreground">مهارت نسبت به تصادف</p>
+            <div className="rounded-lg glass border-emerald-500/25 p-3 space-y-1">
+              <p className="text-[11px] text-muted-foreground">Brier Skill Score (BSS)</p>
               <p
-                className={`text-lg font-bold tabular-nums ${
-                  data.overall.brierSkillVsRandom > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"
-                }`}
+                className={`font-num text-lg font-bold ${data.overall.brierSkillScore > 0 ? "text-emerald-400" : "text-rose-400"}`}
                 dir="ltr"
               >
-                {faPct(data.overall.brierSkillVsRandom, 0)}
+                {data.overall.brierSkillScore > 0 ? "+" : ""}{data.overall.brierSkillScore.toFixed(1)}%
               </p>
-              <p className="text-[10px] text-muted-foreground">۱ − بریر ÷ ۰.۲۵</p>
+              <p className="font-num text-[10px] text-muted-foreground" dir="ltr">BSS = (1 − Brier/0.25) × 100</p>
             </div>
-            <div className="rounded-lg border border-border p-3 space-y-1">
+            <div className="rounded-lg glass border-white/10 p-3 space-y-1">
               <p className="text-[11px] text-muted-foreground">تعداد پیش‌بینی‌ها</p>
-              <p className="text-lg font-bold tabular-nums" dir="ltr">{faNum(data.overall.count, 0)}</p>
+              <p className="font-num text-lg font-bold" dir="ltr">{data.overall.count}</p>
               <p className="text-[10px] text-muted-foreground">رکوردهای ثبت‌شده</p>
+            </div>
+          </div>
+
+          {/* مقایسه با خط مرجع پیناکل */}
+          <div className="rounded-lg glass border-cyan-500/25 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-cyan-200">
+                <Gauge className="size-4 text-cyan-400" />
+                مقایسه با خط مرجع پیناکل (Sharp Benchmark)
+              </p>
+              <Badge
+                variant="outline"
+                className={`text-[10px] ${data.overall.vsPinnacleDelta <= 0 ? "border-emerald-500/40 text-emerald-400" : "border-amber-500/40 text-amber-300"}`}
+              >
+                {data.overall.vsPinnacleDelta <= 0
+                  ? `مدل ${(Math.abs(data.overall.vsPinnacleDelta) * 100).toFixed(1)} نقطه بهتر از پیناکل`
+                  : `مدل ${(data.overall.vsPinnacleDelta * 100).toFixed(1)} نقطه ضعیف‌تر از پیناکل`}
+              </Badge>
+            </div>
+            <div className="space-y-2">
+              {[
+                { label: "بریر مدل شما", value: data.overall.avgBrier, color: "#10b981" },
+                { label: "بریر خط پایانی پیناکل (مرجع)", value: data.overall.pinnacleBrier, color: "#06b6d4" },
+              ].map((row) => (
+                <div key={row.label} className="space-y-1">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-muted-foreground">{row.label}</span>
+                    <b className="font-num" dir="ltr" style={{ color: row.color }}>{row.value.toFixed(3)}</b>
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-white/8">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{ width: `${Math.min(100, (row.value / 0.25) * 100)}%`, backgroundColor: row.color }}
+                    />
+                  </div>
+                </div>
+              ))}
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                بریر ۰.۲۵ = حدس تصادفی | خط پایانی پیناکل به‌طور تاریخی حدود <span className="font-num" dir="ltr">0.192</span> است —
+                اگر نوار سبز شما کوتاه‌تر از نوار سیان باشد، مدل از خط شارپ بازار دقیق‌تر عمل کرده است.
+              </p>
             </div>
           </div>
 

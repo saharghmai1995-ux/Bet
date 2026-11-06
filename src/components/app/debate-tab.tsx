@@ -8,6 +8,7 @@ import {
   Calculator,
   CheckCircle2,
   Gavel,
+  Link2,
   Loader2,
   Plane,
   Play,
@@ -24,39 +25,49 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
-import { faNum, faPct } from "@/lib/format";
-import type { AgentBriefDTO, DebateResultDTO, MatchDTO } from "@/lib/types";
+import { faNum } from "@/lib/format";
+import { PulseFlow, type FlowNode } from "@/components/app/fx/pulse-flow";
+import { AnimNum } from "@/components/app/fx/anim-num";
+import { useQuantStore } from "@/lib/store";
+import type { AgentBriefDTO, DebateResultDTO } from "@/lib/types";
 
 const STEPS = [
   "۱. اجرای موتور دیکسون-کولز + تعدیل باخبری/سفر/داور...",
-  "۲. موتور شین: حذف حاشیه از خط Sharp پیناکل...",
+  "۲. موتور شین: حذف حاشیه از خط Sharp پیناکل (۲۰ گام Bisection)...",
   "۳. ایجنت گاو و ایجنت خرس در حال مناظره...",
   "۴. قاضی کمّی ارشد در حال وزن‌دهی نهایی...",
+];
+
+const DEBATE_FLOW: FlowNode[] = [
+  { icon: Calculator, label: "پایه کمّی (تب ۶)", color: "text-cyan-300", glow: "#06b6d4" },
+  { icon: TrendingUp, label: "ایجنت گاو", color: "text-emerald-300", glow: "#10b981" },
+  { icon: TrendingDown, label: "ایجنت خرس", color: "text-rose-300", glow: "#f43f5e" },
+  { icon: Scale, label: "قاضی کمّی ارشد", color: "text-violet-300", glow: "#8b5cf6" },
 ];
 
 const AGENT_CONFIG = {
   BULL: {
     title: "ایجنت گاو (Bull)",
     badge: "سناریوی صعودی",
-    box: "border-emerald-600/30 bg-emerald-600/5",
-    iconColor: "text-emerald-600 dark:text-emerald-400",
-    badgeClass: "border-emerald-600/40 text-emerald-600 dark:text-emerald-400",
+    box: "border-emerald-500/25",
+    iconColor: "text-emerald-400",
+    badgeClass: "border-emerald-500/40 text-emerald-400",
     dot: "text-emerald-500",
   },
   BEAR: {
     title: "ایجنت خرس (Bear)",
     badge: "سناریوی نزولی",
-    box: "border-rose-600/30 bg-rose-600/5",
-    iconColor: "text-rose-600 dark:text-rose-400",
-    badgeClass: "border-rose-600/40 text-rose-600 dark:text-rose-400",
+    box: "border-rose-500/25",
+    iconColor: "text-rose-400",
+    badgeClass: "border-rose-500/40 text-rose-400",
     dot: "text-rose-500",
   },
   JUDGE: {
     title: "قاضی کمّی ارشد",
     badge: "رأی نهایی",
-    box: "border-violet-600/30 bg-violet-600/5",
-    iconColor: "text-violet-600 dark:text-violet-400",
-    badgeClass: "border-violet-600/40 text-violet-600 dark:text-violet-400",
+    box: "border-violet-500/25",
+    iconColor: "text-violet-300",
+    badgeClass: "border-violet-500/40 text-violet-300",
     dot: "text-violet-500",
   },
 } as const;
@@ -65,21 +76,21 @@ function AgentCard({ agent }: { agent: AgentBriefDTO }) {
   const c = AGENT_CONFIG[agent.role];
   const Icon = agent.role === "BULL" ? TrendingUp : agent.role === "BEAR" ? TrendingDown : Scale;
   return (
-    <Card className={c.box}>
+    <Card className={`glass ${c.box}`}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm flex items-center gap-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
           <Icon className={`size-4 ${c.iconColor}`} />
           {c.title}
         </CardTitle>
-        <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="outline" className={`text-[10px] ${c.badgeClass}`}>
             {c.badge}
           </Badge>
-          <Badge variant="outline" className="text-[10px] tabular-nums">
-            اطمینان: {faPct(agent.confidence, 0)}
+          <Badge variant="outline" className="font-num text-[10px]">
+            اطمینان: {Math.round(agent.confidence * 100)}%
           </Badge>
           {agent.source === "ENGINE_FALLBACK" && (
-            <Badge variant="outline" className="text-[10px] border-amber-600/40 text-amber-600 dark:text-amber-400">
+            <Badge variant="outline" className="border-amber-500/40 text-[10px] text-amber-300">
               موتور کمّی (fallback)
             </Badge>
           )}
@@ -89,7 +100,7 @@ function AgentCard({ agent }: { agent: AgentBriefDTO }) {
         <p className="text-xs leading-relaxed">{agent.thesis}</p>
         <ul className="space-y-1">
           {agent.arguments.map((arg, i) => (
-            <li key={`${i}-${arg.slice(0, 16)}`} className="text-[11px] text-muted-foreground leading-relaxed flex gap-1.5">
+            <li key={`${i}-${arg.slice(0, 16)}`} className="flex gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
               <span className={c.dot}>◆</span>
               <span>{arg}</span>
             </li>
@@ -101,14 +112,19 @@ function AgentCard({ agent }: { agent: AgentBriefDTO }) {
 }
 
 interface Props {
-  matches: MatchDTO[];
-  selectedMatchId: string | null;
-  onSelectMatch: (id: string) => void;
-  debates: Record<string, DebateResultDTO>;
   onDebated: (r: DebateResultDTO) => void;
+  onGoToTab: (tab: string) => void;
 }
 
-export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, onDebated }: Props) {
+export function DebateTab({ onDebated, onGoToTab }: Props) {
+  // از استور سراسری — بازی فعال و پایه کمّی تب ۶
+  const matches = useQuantStore((s) => s.matches);
+  const selectedMatchId = useQuantStore((s) => s.activeMatchId);
+  const onSelectMatch = useQuantStore((s) => s.setActiveMatchId);
+  const debates = useQuantStore((s) => s.debates);
+  const enginePub = useQuantStore((s) => (selectedMatchId ? s.engineByMatch[selectedMatchId] : undefined));
+  const shock = useQuantStore((s) => (selectedMatchId ? s.shockByMatch[selectedMatchId] : undefined));
+
   const [running, setRunning] = useState(false);
   const [stepIdx, setStepIdx] = useState(0);
   const [result, setResult] = useState<DebateResultDTO | null>(null);
@@ -149,7 +165,7 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
           toast.warning("پاسخ LLM معتبر نبود — مناظره با موتور کمّی بازسازی شد (fallback)");
         } else {
           toast.success("مناظره کامل شد و قاضی رأی نهایی را صادر کرد", {
-            description: "توزیع اصلاح‌شده + حذف حاشیه شین روی خط مرجع",
+            description: "حکم قاضی به تب ۳ (پرتفوی مکمل) منتقل شد",
           });
         }
       } else {
@@ -169,40 +185,40 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
 
   const quantStats = q
     ? [
-        { label: "λ میزبان (گل مورد انتظار)", value: faNum(q.lambdaHome, 2) },
-        { label: "λ میهمان (گل مورد انتظار)", value: faNum(q.lambdaAway, 2) },
-        { label: "برد میزبان (موتور)", value: faPct(q.pHome, 1) },
-        { label: "مساوی (موتور)", value: faPct(q.pDraw, 1) },
-        { label: "برد میهمان (موتور)", value: faPct(q.pAway, 1) },
-        { label: "بالای ۲.۵ گل (موتور)", value: faPct(q.pOver25, 1) },
+        { label: "λ میزبان (گل مورد انتظار)", value: q.lambdaHome },
+        { label: "λ میهمان (گل مورد انتظار)", value: q.lambdaAway },
+        { label: "برد میزبان (موتور)", value: null, pct: q.pHome },
+        { label: "مساوی (موتور)", value: null, pct: q.pDraw },
+        { label: "برد میهمان (موتور)", value: null, pct: q.pAway },
+        { label: "بالای ۲.۵ گل (موتور)", value: null, pct: q.pOver25 },
       ]
     : [];
 
   const notes = q
     ? [
-        { icon: Activity, color: "text-emerald-500", text: q.gamestateNote },
-        { icon: Plane, color: "text-amber-500", text: q.fatigueNote },
-        { icon: Gavel, color: "text-violet-500", text: q.refereeNote },
-        { icon: Zap, color: "text-rose-500", text: q.lineupShockNote },
+        { icon: Activity, color: "text-emerald-400", text: q.gamestateNote },
+        { icon: Plane, color: "text-amber-300", text: q.fatigueNote },
+        { icon: Gavel, color: "text-violet-300", text: q.refereeNote },
+        { icon: Zap, color: "text-rose-400", text: q.lineupShockNote },
       ].filter((n) => n.text)
     : [];
 
   return (
     <div className="space-y-4">
       {/* کنترل اجرا */}
-      <Card>
+      <Card className="glass">
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <BrainCircuit className="size-4 text-emerald-600 dark:text-emerald-400" />
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <BrainCircuit className="size-4 text-emerald-400" />
             مناظره چندایجنتی — گاو در برابر خرس
           </CardTitle>
           <CardDescription className="text-xs leading-relaxed">
-            ایجنت گاو سناریوی صعودی و ایجنت خرس سناریوی نزولی می‌سازند، مناظره می‌کنند و{" "}
-            <span className="font-bold text-violet-600 dark:text-violet-400">قاضی کمّی ارشد</span> با تکیه بر خط مرجع
-            Sharp توزیع احتمالات نهایی را رأی می‌دهد.
+            ایجنت گاو سناریوی صعودی و ایجنت خرس سناریوی نزولی می‌سازند؛{" "}
+            <span className="font-bold text-violet-300">قاضی کمّی ارشد</span> با تکیه بر خط مرجع Sharp توزیع نهایی را
+            رأی می‌دهد و به تب ۳ (پرتفوی) منتقل می‌کند.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+        <CardContent className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
           <Select value={selectedMatchId ?? ""} onValueChange={onSelectMatch} disabled={running}>
             <SelectTrigger className="w-full sm:w-80" aria-label="انتخاب بازی">
               <SelectValue placeholder="بازی را انتخاب کنید..." />
@@ -218,35 +234,32 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
           <Button
             onClick={runDebate}
             disabled={running || !selectedMatchId}
-            className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+            className="gap-2 bg-emerald-600 text-white hover:bg-emerald-500"
           >
             {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
             {running ? "در حال مناظره..." : "اجرای مناظره"}
           </Button>
           {result && !running && (
-            <Badge
-              variant="outline"
-              className="gap-1.5 text-[11px] border-emerald-600/40 text-emerald-600 dark:text-emerald-400 w-fit"
-            >
+            <Badge variant="outline" className="w-fit gap-1.5 border-emerald-500/40 text-[11px] text-emerald-400">
               <CheckCircle2 className="size-3" />
-              مناظره آماده — اطمینان نهایی: {faPct(result.final.confidence, 0)}
+              مناظره آماده — اطمینان نهایی: <span className="font-num">{Math.round((f?.confidence ?? 0) * 100)}%</span>
             </Badge>
           )}
         </CardContent>
         {running && (
           <CardContent className="pt-0">
-            <div className="rounded-lg bg-muted/60 p-3 space-y-1.5">
+            <div className="space-y-1.5 rounded-lg bg-white/5 p-3">
               {STEPS.map((s, i) => (
                 <p
                   key={s}
-                  className={`text-xs flex items-center gap-2 ${i <= stepIdx ? "text-foreground" : "text-muted-foreground/50"}`}
+                  className={`flex items-center gap-2 text-xs ${i <= stepIdx ? "text-foreground" : "text-muted-foreground/50"}`}
                 >
                   {i < stepIdx ? (
                     <CheckCircle2 className="size-3.5 text-emerald-500" />
                   ) : i === stepIdx ? (
                     <Loader2 className="size-3.5 animate-spin text-emerald-500" />
                   ) : (
-                    <span className="size-3.5 rounded-full border border-border" />
+                    <span className="size-3.5 rounded-full border border-white/15" />
                   )}
                   {s}
                 </p>
@@ -256,79 +269,108 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
         )}
       </Card>
 
+      {/* پایه کمّی منتقل‌شده از تب ۶ (زنجیره واکنشی) */}
+      {enginePub && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-3 py-2 text-[11px]">
+          <Link2 className="size-3.5 text-cyan-400" />
+          <span className="text-cyan-200">پایه کمّی زنده از تب ۶:</span>
+          <span className="font-num text-cyan-100" dir="ltr">
+            λH {enginePub.lambdaHome.toFixed(2)} · λA {enginePub.lambdaAway.toFixed(2)} · P(H) {(enginePub.pHome * 100).toFixed(1)}%
+          </span>
+          {enginePub.shockApplied && (enginePub.shockApplied.home !== 0 || enginePub.shockApplied.away !== 0) ? (
+            <Badge className="border-amber-500/40 bg-amber-500/10 text-[10px] text-amber-300" variant="outline">
+              ⚡ شوک T-60 لحاظ شد
+            </Badge>
+          ) : shock ? (
+            <button className="text-amber-300 underline" onClick={() => onGoToTab("engine")}>
+              شوک T-60 اعلام شده — ماتریس را در تب ۶ بروزرسانی کنید
+            </button>
+          ) : (
+            <button className="text-cyan-300/80 underline" onClick={() => onGoToTab("engine")}>
+              رفتن به موتور کمّی
+            </button>
+          )}
+        </div>
+      )}
+
       {/* نتیجه */}
       {result && q && f && (
         <div className="space-y-4">
+          {/* جریان مناظره با پالس نوری */}
+          <Card className="glass">
+            <CardContent className="py-3">
+              <PulseFlow nodes={DEBATE_FLOW} />
+            </CardContent>
+          </Card>
+
           {/* سه ایجنت */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <AgentCard agent={result.bull} />
             <AgentCard agent={result.bear} />
             <AgentCard agent={result.judge} />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* حکم نهایی قاضی */}
-            <Card>
+            <Card className="glass">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Scale className="size-4 text-violet-600 dark:text-violet-400" />
-                  حکم نهایی قاضی — توزیع احتمالات اصلاح‌شده (corrected)
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <Scale className="size-4 text-violet-300" />
+                  حکم نهایی قاضی — توزیع اصلاح‌شده
                 </CardTitle>
                 <CardDescription className="text-xs">
                   {result.match.homeTeam} در برابر {result.match.awayTeam} — {result.match.league}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* نوار 1X2 */}
                 <div className="space-y-2">
-                  <div className="flex h-3 rounded-full overflow-hidden bg-muted" dir="ltr">
+                  <div className="flex h-3 overflow-hidden rounded-full bg-white/8" dir="ltr">
                     <div className="bg-emerald-500 transition-all duration-700" style={{ width: seg(f.pHome) }} />
-                    <div className="bg-neutral-400 dark:bg-neutral-600 transition-all duration-700" style={{ width: seg(f.pDraw) }} />
+                    <div className="bg-slate-500 transition-all duration-700" style={{ width: seg(f.pDraw) }} />
                     <div className="bg-rose-500 transition-all duration-700" style={{ width: seg(f.pAway) }} />
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-emerald-500" />
-                      برد {result.match.homeTeam}: <b className="tabular-nums">{faPct(f.pHome, 0)}</b>
+                      برد {result.match.homeTeam}: <b className="font-num">{(f.pHome * 100).toFixed(1)}%</b>
                     </span>
                     <span className="flex items-center gap-1.5">
-                      <span className="size-2 rounded-full bg-neutral-400 dark:bg-neutral-600" />
-                      مساوی: <b className="tabular-nums">{faPct(f.pDraw, 0)}</b>
+                      <span className="size-2 rounded-full bg-slate-500" />
+                      مساوی: <b className="font-num">{(f.pDraw * 100).toFixed(1)}%</b>
                     </span>
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-rose-500" />
-                      برد {result.match.awayTeam}: <b className="tabular-nums">{faPct(f.pAway, 0)}</b>
+                      برد {result.match.awayTeam}: <b className="font-num">{(f.pAway * 100).toFixed(1)}%</b>
                     </span>
                   </div>
                 </div>
-                {/* نوار گل‌ها */}
                 <div className="space-y-2">
-                  <div className="flex h-3 rounded-full overflow-hidden bg-muted" dir="ltr">
+                  <div className="flex h-3 overflow-hidden rounded-full bg-white/8" dir="ltr">
                     <div className="bg-emerald-500 transition-all duration-700" style={{ width: seg(f.pOver25) }} />
-                    <div className="bg-neutral-300 dark:bg-neutral-700 transition-all duration-700" style={{ width: seg(1 - f.pOver25) }} />
+                    <div className="bg-slate-600 transition-all duration-700" style={{ width: seg(1 - f.pOver25) }} />
                   </div>
                   <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
                     <span className="flex items-center gap-1.5">
                       <span className="size-2 rounded-full bg-emerald-500" />
-                      بالای ۲.۵ گل: <b className="tabular-nums">{faPct(f.pOver25, 0)}</b>
+                      بالای ۲.۵ گل: <b className="font-num">{(f.pOver25 * 100).toFixed(1)}%</b>
                     </span>
                     <span className="flex items-center gap-1.5">
-                      <span className="size-2 rounded-full bg-neutral-300 dark:bg-neutral-700" />
-                      زیر ۲.۵ گل: <b className="tabular-nums">{faPct(1 - f.pOver25, 0)}</b>
+                      <span className="size-2 rounded-full bg-slate-600" />
+                      زیر ۲.۵ گل: <b className="font-num">{((1 - f.pOver25) * 100).toFixed(1)}%</b>
                     </span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="outline" className="text-[11px] border-violet-600/40 text-violet-600 dark:text-violet-400">
-                    اطمینان نهایی: {faPct(f.confidence, 0)}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="border-violet-500/40 text-[11px] text-violet-300">
+                    اطمینان نهایی: <span className="font-num">{Math.round(f.confidence * 100)}%</span>
                   </Badge>
                   <Badge variant="outline" className="text-[11px]">
                     منبع: {result.source === "LLM" ? "مناظره LLM" : "موتور کمّی (fallback)"}
                   </Badge>
                 </div>
                 {f.calibrationApplied && (
-                  <div className="rounded-lg border border-amber-600/30 bg-amber-600/5 p-2.5 flex items-start gap-2">
-                    <AlertTriangle className="size-3.5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5">
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-400" />
                     <p className="text-[11px] leading-relaxed">
                       تعدیل کالیبراسیون سیستمی روی توزیع نهایی اعمال شد: {f.calibrationApplied}
                     </p>
@@ -338,31 +380,33 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
             </Card>
 
             {/* پایه کمّی */}
-            <Card>
+            <Card className="glass">
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Sigma className="size-4 text-emerald-600 dark:text-emerald-400" />
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <Sigma className="size-4 text-emerald-400" />
                   پایه کمّی و تعدیل‌های زمینه‌ای
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                   {quantStats.map((s) => (
-                    <div key={s.label} className="rounded-lg border border-border p-2.5 space-y-1">
-                      <p className="text-[10px] text-muted-foreground leading-tight">{s.label}</p>
-                      <p className="text-sm font-bold tabular-nums" dir="ltr">
-                        {s.value}
-                      </p>
+                    <div key={s.label} className="space-y-1 rounded-lg border border-white/10 p-2.5">
+                      <p className="text-[10px] leading-tight text-muted-foreground">{s.label}</p>
+                      {s.value !== null && s.value !== undefined ? (
+                        <AnimNum value={s.value} decimals={2} className="text-sm font-bold text-cyan-300" />
+                      ) : (
+                        <AnimNum value={(s.pct ?? 0) * 100} decimals={1} suffix="%" className="text-sm font-bold text-emerald-300" />
+                      )}
                     </div>
                   ))}
                 </div>
                 {notes.length > 0 && (
                   <>
-                    <Separator />
+                    <Separator className="bg-white/8" />
                     <div className="space-y-1.5">
                       {notes.map((n) => (
-                        <div key={n.text} className="flex items-start gap-2 text-[11px] text-muted-foreground leading-relaxed">
-                          <n.icon className={`size-3.5 shrink-0 mt-0.5 ${n.color}`} />
+                        <div key={n.text} className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
+                          <n.icon className={`mt-0.5 size-3.5 shrink-0 ${n.color}`} />
                           <span>{n.text}</span>
                         </div>
                       ))}
@@ -374,20 +418,20 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
           </div>
 
           {/* موتور شین */}
-          <Card>
+          <Card className="glass">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Calculator className="size-4 text-emerald-600 dark:text-emerald-400" />
-                موتور شین — حذف حاشیه بوک‌میکرها (De-Vig)
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Calculator className="size-4 text-cyan-300" />
+                موتور شین — حذف حاشیه بوک‌میکرها (z با ۲۰ گام Bisection برای هر خط)
               </CardTitle>
               <CardDescription className="text-xs">
-                خط مرجع Sharp مبنای کالیبره‌سازی توزیع نهایی قاضی است
+                پارامتر z هر بوک‌میکر جداگانه حل می‌شود تا مجموع احتمالات شین دقیقاً 1.000 شود
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="border-white/8 hover:bg-transparent">
                     <TableHead className="text-xs">بوک‌میکر</TableHead>
                     <TableHead className="text-xs">حاشیه</TableHead>
                     <TableHead className="text-xs">برد</TableHead>
@@ -399,36 +443,24 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
                 </TableHeader>
                 <TableBody>
                   {result.devig.map((row) => (
-                    <TableRow key={row.bookmaker} className={row.sharp ? "bg-emerald-600/5" : ""}>
+                    <TableRow key={row.bookmaker} className={row.sharp ? "border-cyan-500/20 bg-cyan-500/5" : "border-white/6"}>
                       <TableCell className="text-xs font-medium">
                         <span className="flex items-center gap-1.5">
                           {row.bookmakerLabel}
-                          {row.sharp && <Badge className="text-[9px] px-1 py-0 bg-emerald-600 text-white">خط مرجع Sharp</Badge>}
+                          {row.sharp && <Badge className="bg-cyan-600 px-1 py-0 text-[9px] text-white">خط مرجع Sharp</Badge>}
                         </span>
                       </TableCell>
-                      <TableCell className="text-xs tabular-nums" dir="ltr">
-                        {faPct(row.marginPct / 100, 1)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums" dir="ltr">
-                        {faPct(row.shinProbs.home, 1)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums" dir="ltr">
-                        {faPct(row.shinProbs.draw, 1)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums" dir="ltr">
-                        {faPct(row.shinProbs.away, 1)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums" dir="ltr">
-                        {faNum(row.shinZ, 3)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums" dir="ltr">
-                        {faNum(row.powerK, 3)}
-                      </TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{(row.marginPct * 100).toFixed(2)}%</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{(row.shinProbs.home * 100).toFixed(1)}%</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{(row.shinProbs.draw * 100).toFixed(1)}%</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{(row.shinProbs.away * 100).toFixed(1)}%</TableCell>
+                      <TableCell className="font-num text-xs text-cyan-300" dir="ltr">{row.shinZ.toFixed(4)}</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{row.powerK.toFixed(3)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-              <p className="mt-3 text-[10px] text-muted-foreground leading-relaxed">
+              <p className="mt-3 text-[10px] leading-relaxed text-muted-foreground">
                 تقسیم ساده احتمالات سوگیری Favorite-Longshot دارد؛ مدل شین سهم معامله‌گران آگاه (z) را جدا می‌کند.
               </p>
             </CardContent>
@@ -437,7 +469,7 @@ export function DebateTab({ matches, selectedMatchId, onSelectMatch, debates, on
       )}
 
       {!result && !running && (
-        <Card className="border-dashed">
+        <Card className="glass border-dashed">
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
             یک بازی انتخاب کنید و «اجرای مناظره» را بزنید تا ایجنت گاو و ایجنت خرس مناظره کنند و قاضی کمّی رأی نهایی را صادر کند.
           </CardContent>

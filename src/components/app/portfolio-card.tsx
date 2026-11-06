@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Boxes,
   CheckCircle2,
   Dices,
+  Gavel,
   Loader2,
   Sigma,
   TrendingUp,
@@ -20,12 +21,11 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { faNum, faOdds, faPct, faPctSigned } from "@/lib/format";
-import type { DebateResultDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "@/lib/types";
+import { useQuantStore } from "@/lib/store";
+import type { PortfolioPairDTO, PortfolioResultDTO } from "@/lib/types";
 
 interface Props {
-  matches: MatchDTO[];
-  debates: Record<string, DebateResultDTO>;
-  onGoToDebate: (matchId: string) => void;
+  onGoToDebate: () => void;
 }
 
 const KIND_LABEL: Record<PortfolioPairDTO["kind"], string> = {
@@ -33,11 +33,24 @@ const KIND_LABEL: Record<PortfolioPairDTO["kind"], string> = {
   TWO_MATCH_MIX: "میکس دو بازی",
 };
 
-export function PortfolioCard({ matches, debates, onGoToDebate }: Props) {
+export function PortfolioCard({ onGoToDebate }: Props) {
+  // استور سراسری — بازی فعال، مناظره‌ها (حکم قاضی تب ۲) و بانک
+  const matches = useQuantStore((s) => s.matches);
+  const debates = useQuantStore((s) => s.debates);
+  const activeMatchId = useQuantStore((s) => s.activeMatchId);
+  const bankroll = useQuantStore((s) => s.bankroll);
+  const setBankroll = useQuantStore((s) => s.setBankroll);
+
   const [matchId, setMatchId] = useState<string | null>(null);
-  const [bankroll, setBankroll] = useState(100);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PortfolioResultDTO | null>(null);
+
+  // بازی فعال از هدر → پیش‌فرض پرتفوی (زنجیره واکنشی تب ۱ → تب ۳)
+  useEffect(() => {
+    if (activeMatchId) setMatchId(activeMatchId);
+  }, [activeMatchId]);
+
+  const judge = matchId ? debates[matchId] : undefined;
 
   const run = useCallback(async () => {
     if (!matchId) {
@@ -70,7 +83,7 @@ export function PortfolioCard({ matches, debates, onGoToDebate }: Props) {
   const mc = result?.monteCarlo;
 
   return (
-    <Card>
+    <Card className="glass">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm flex items-center gap-2">
           <Dices className="size-4 text-emerald-600 dark:text-emerald-400" />
@@ -120,12 +133,23 @@ export function PortfolioCard({ matches, debates, onGoToDebate }: Props) {
         </div>
 
         {matchId && !debates[matchId] && !running && (
-          <p className="text-[10px] text-amber-600 dark:text-amber-400">
+          <p className="text-[10px] text-amber-300">
             این بازی هنوز مناظره نشده — برای احتمالات قاضی، اول مناظره را اجرا کنید.
-            <button className="underline mr-1" onClick={() => onGoToDebate(matchId)}>
+            <button className="mr-1 underline" onClick={() => onGoToDebate()}>
               رفتن به مناظره
             </button>
           </p>
+        )}
+
+        {/* حکم قاضی تب ۲ — مبنای احتمالات پرتفوی (زنجیره واکنشی تب ۲ → تب ۳) */}
+        {judge && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-500/25 bg-violet-500/5 px-3 py-2 text-[11px]">
+            <Gavel className="size-3.5 text-violet-300" />
+            <span className="text-violet-200">مبنا: حکم قاضی کمّی ارشد (تب ۲):</span>
+            <span className="font-num text-violet-100" dir="ltr">
+              P(H) {(judge.final.pHome * 100).toFixed(1)}% · P(D) {(judge.final.pDraw * 100).toFixed(1)}% · P(A) {(judge.final.pAway * 100).toFixed(1)}% · O2.5 {(judge.final.pOver25 * 100).toFixed(1)}%
+            </span>
+          </div>
         )}
 
         {/* ─── خلاصه مونت‌کارلو ─── */}

@@ -1,12 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
-import { ThemeProvider } from "@/components/app/theme-provider";
 
 export const metadata: Metadata = {
-  title: "فوتبال‌کوانت | سیستم هوشمند پیش‌بینی و مدیریت سرمایه",
+  title: "فوتبال‌کوانت ۲.۰ | موتور کمّی نهادی و نسخه تاکتیکی سه‌بعدی",
   description:
-    "معماری چندایجنتی پیش‌بینی فوتبال: موتور دیکسون-کولز، ایجنت تحلیلگر ارشد، ایجنت مدیریت ریسک و داچینگ، بک‌تستینگ CLV",
+    "معماری چندایجنتی سطح نهادی: دیکسون-کولز، حذف حاشیه شین، مناظره گاو و خرس، پرتفوی مونت‌کارلو کاپولا، کلِی همزمان و بک‌تست CLV",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
@@ -18,7 +17,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="fa" dir="rtl" suppressHydrationWarning>
+    // تم ثابت Obsidian Carbon — نسخه ۲.۰ همیشه تیره است
+    <html lang="fa" dir="rtl" className="dark" suppressHydrationWarning>
       <head>
         <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="anonymous" />
         <link
@@ -27,10 +27,8 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased bg-background text-foreground font-vazir">
-        <ThemeProvider>
-          {children}
-          <Toaster richColors position="bottom-left" />
-        </ThemeProvider>
+        {children}
+        <Toaster richColors position="bottom-left" theme="dark" />
       </body>
     </html>
   );
