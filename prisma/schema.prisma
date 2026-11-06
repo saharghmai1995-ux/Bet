@@ -48,7 +48,7 @@ model Match {
   awayMotivation String?
   tacticalNote   String?
 
-  // ضرایب بازار (با حاشیه سود سایت)
+  // ضرایب بازار (با حاشیه سود سایت) — خط اجماعی Soft Book
   oddsHome   Float
   oddsDraw   Float
   oddsAway   Float
@@ -56,10 +56,92 @@ model Match {
   oddsUnder25 Float
   odds1x     Float
 
-  // UPCOMING | ANALYZED
-  status    String         @default("UPCOMING")
+  // ─── افزوده‌های سطح اول (Institutional-Grade) ───
+  // npxG تفکیک‌شده بر اساس وضعیت بازی (Game State) — پرهیز از «بت‌پرستی xG خام»
+  homeNpxgLevel    Float? // npxG وقتی بازی مساوی است
+  homeNpxgLeading  Float? // npxG وقتی جلو است (شامل وقت تلف‌شده — کیفیت پایین‌تر)
+  homeNpxgTrailing Float? // npxG وقتی عقب است
+  awayNpxgLevel    Float?
+  awayNpxgLeading  Float?
+  awayNpxgTrailing Float?
+  // کرنر و شرایط محیطی
+  homeCornersFor    Float?
+  homeCornersAgainst Float?
+  awayCornersFor    Float?
+  awayCornersAgainst Float?
+  awayTravelKm      Int?    // فاصله پروازی میهمان
+  homeRestDays      Int?    // فشردگی تقویم
+  awayRestDays      Int?
+  // داور و ترکیب
+  refereeId        String?
+  lineupAnnounced  Boolean @default(false) // اعلام ترکیب T-60
+  lineupShockHome  Float?  // دلتا قدرت میزبان (−۱ تا ۱) پس از اعلام ترکیب
+  lineupShockAway  Float?
+  // نتیجه نهایی (برای کالیبراسیون بریر)
+  homeGoals Int?
+  awayGoals Int?
+
+  status    String         @default("UPCOMING") // UPCOMING | ANALYZED | LIVE | FINISHED
+  referee   Referee?       @relation(fields: [refereeId], references: [id])
+  players   Player[]
+  odds      OddsRecord[]
   analyses  AgentAnalysis[]
   createdAt DateTime       @default(now())
+}
+
+// ─── ارزش‌گذاری تک‌تک بازیکنان (VAEP & xT) — به جای «نام تیم» ───
+model Player {
+  id        String  @id @default(cuid())
+  match     Match   @relation(fields: [matchId], references: [id])
+  matchId   String
+  side      String  // HOME | AWAY
+  name      String
+  position  String  // GK | DEF | MID | FW
+  xT        Float   // Expected Threat per 90
+  vaep      Float   // Value of Actions per 90 (می‌تواند منفی باشد)
+  status    String  @default("FIT") // FIT | INJURED | SUSPENDED | DOUBTFUL
+  isKey     Boolean @default(false) // بازیکن کلیدی (تاثیر بالای ترکیب)
+}
+
+// ─── پروفایلر داور (Referee Micro-Profiler) ───
+model Referee {
+  id             String  @id @default(cuid())
+  name           String  @unique
+  yellowPerMatch Float
+  penPerMatch    Float
+  foulsPerMatch  Float
+  strictness     String  // LENIENT | AVERAGE | STRICT
+  note           String?
+  matches        Match[]
+}
+
+// ─── ردیابی ضرایب چند بوک‌میکر (Pinnacle Sharp Line در برابر Soft Books) ───
+model OddsRecord {
+  id        String   @id @default(cuid())
+  match     Match    @relation(fields: [matchId], references: [id])
+  matchId   String
+  bookmaker String   // PINNACLE | SOFT_A | SOFT_B
+  oddsHome  Float
+  oddsDraw  Float
+  oddsAway  Float
+  oddsOver25  Float
+  oddsUnder25 Float
+  oddsCornersOver95  Float
+  oddsCornersUnder95 Float
+  updatedAt DateTime @updatedAt
+}
+
+// ─── حافظه کالیبراسیون: امتیاز بریر پس از بازی + اصلاح خودکار ───
+model CalibrationLog {
+  id            String   @id @default(cuid())
+  matchLabel    String
+  league        String
+  pick          String   // بازار پیش‌بینی‌شده
+  predictedProb Float
+  outcome       String   // WIN | LOSS
+  brier         Float    // (p − o)²
+  lesson        String?  // درس استخراج‌شده توسط ایجنت بازرس
+  createdAt     DateTime @default(now())
 }
 
 // خروجی ایجنت تحلیلگر ارشد (لایه ۳)
@@ -107,6 +189,8 @@ model TipSet {
   coverageProb    Float
   coverageOk      Boolean
   trapRisk        String // NONE | WARNING | CRITICAL
+  jointLossProb   Float? // احتمال باخت همزمان از شبیه‌سازی مونت‌کارلو
+  meta            String? // JSON: {kelly: {fA,fB,growth}, mc: {corr, sims}, jointStates}
   batchId  String?
   notes    String?
   createdAt DateTime @default(now())

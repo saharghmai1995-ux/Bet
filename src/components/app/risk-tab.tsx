@@ -23,7 +23,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "sonner";
 import { dutchAllocate, type DutchStrategy } from "@/lib/engine/dutching";
 import { faNum, faOdds, faPct, faPctSigned } from "@/lib/format";
-import type { AnalysisResultDTO, MatchDTO, RiskResultDTO } from "@/lib/types";
+import type { AnalysisResultDTO, DebateResultDTO, MatchDTO, RiskResultDTO } from "@/lib/types";
+import { PortfolioCard } from "@/components/app/portfolio-card";
 
 const STRATEGY_INFO: Record<DutchStrategy, { label: string; desc: string }> = {
   EQUAL_PROFIT: { label: "سود برابر", desc: "برد هر تیپ → سود یکسان (مثال جدول: ۶۰/۴۰ ← +۲۰)" },
@@ -34,10 +35,11 @@ const STRATEGY_INFO: Record<DutchStrategy, { label: string; desc: string }> = {
 interface Props {
   matches: MatchDTO[];
   analyses: Record<string, AnalysisResultDTO>;
+  debates?: Record<string, DebateResultDTO>;
   onGoToAnalyst: (matchId: string) => void;
 }
 
-export function RiskTab({ matches, analyses, onGoToAnalyst }: Props) {
+export function RiskTab({ matches, analyses, debates, onGoToAnalyst }: Props) {
   // ─── بخش الف: ماشین‌حساب داچینگ ───
   const [odds1, setOdds1] = useState(2.0);
   const [odds2, setOdds2] = useState(3.0);
@@ -107,6 +109,13 @@ export function RiskTab({ matches, analyses, onGoToAnalyst }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* ─── موتور پرتفوی: مونت‌کارلو کاپولا + کلِی همزمان (لایه سطح اول) ─── */}
+      <PortfolioCard
+        matches={matches}
+        debates={debates ?? {}}
+        onGoToDebate={onGoToAnalyst}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {/* ─── الف: ماشین‌حساب داچینگ ─── */}
         <Card>

@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
-  BrainCircuit,
   Calculator,
   Database,
+  Gauge,
+  Layers,
   LineChart,
-  ShieldCheck,
+  Radio,
+  Swords,
   Target,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -15,24 +17,28 @@ import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/app/theme-toggle";
 import { DashboardTab } from "@/components/app/dashboard-tab";
 import { EngineTab } from "@/components/app/engine-tab";
-import { AnalystTab } from "@/components/app/analyst-tab";
+import { DebateTab } from "@/components/app/debate-tab";
 import { RiskTab } from "@/components/app/risk-tab";
+import { LiveTab } from "@/components/app/live-tab";
+import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
-import type { AnalysisResultDTO, MatchDTO } from "@/lib/types";
+import type { DebateResultDTO, MatchDTO } from "@/lib/types";
 
 const TABS = [
   { value: "dashboard", label: "داشبورد", icon: Activity },
+  { value: "debate", label: "مناظره ایجنت‌ها", icon: Swords },
+  { value: "risk", label: "پرتفوی مکمل", icon: Layers },
+  { value: "live", label: "زنده و T-60", icon: Radio },
+  { value: "calibration", label: "کالیبراسیون", icon: Gauge },
   { value: "engine", label: "موتور احتمالات", icon: Calculator },
-  { value: "analyst", label: "ایجنت تحلیلگر", icon: BrainCircuit },
-  { value: "risk", label: "مدیریت ریسک و داچینگ", icon: ShieldCheck },
-  { value: "backtest", label: "بک‌تستینگ و CLV", icon: LineChart },
+  { value: "backtest", label: "بک‌تست و CLV", icon: LineChart },
 ];
 
 export default function Home() {
   const [matches, setMatches] = useState<MatchDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("dashboard");
-  const [analyses, setAnalyses] = useState<Record<string, AnalysisResultDTO>>({});
+  const [debates, setDebates] = useState<Record<string, DebateResultDTO>>({});
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
 
   const loadMatches = useCallback(async () => {
@@ -55,8 +61,8 @@ export default function Home() {
     loadMatches();
   }, [loadMatches]);
 
-  const handleAnalyzed = useCallback((result: AnalysisResultDTO) => {
-    setAnalyses((prev) => ({ ...prev, [result.match.id]: result }));
+  const handleDebated = useCallback((result: DebateResultDTO) => {
+    setDebates((prev) => ({ ...prev, [result.match.id]: result }));
     setMatches((prev) =>
       prev.map((m) =>
         m.id === result.match.id
@@ -64,11 +70,11 @@ export default function Home() {
               ...m,
               status: "ANALYZED",
               latestAnalysis: {
-                id: result.analysis.id,
-                bestMarket: result.analysis.bestMarket,
-                bestEv: result.analysis.bestEv,
-                confidence: result.analysis.confidence,
-                source: result.analysis.source ?? "LLM",
+                id: result.final.analysisId,
+                bestMarket: "مناظره چندایجنتی",
+                bestEv: 0,
+                confidence: result.final.confidence,
+                source: result.source,
               },
             }
           : m
@@ -78,10 +84,11 @@ export default function Home() {
 
   const goToAnalyst = useCallback((matchId: string) => {
     setSelectedMatchId(matchId);
-    setTab("analyst");
+    setTab("debate");
   }, []);
 
-  const analyzedCount = Object.keys(analyses).length + matches.filter((m) => m.latestAnalysis).length;
+  const analyzedCount = Object.keys(debates).length + matches.filter((m) => m.latestAnalysis).length;
+  void analyzedCount;
 
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-background via-background to-emerald-950/5 dark:to-emerald-950/15">
@@ -104,7 +111,7 @@ export default function Home() {
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="hidden sm:inline-flex gap-1.5 items-center border-emerald-600/40 text-emerald-600 dark:text-emerald-400">
               <span className="size-1.5 rounded-full bg-emerald-500 agent-live-dot" />
-              ۴ ایجنت فعال
+              ۶ ماژول سطح اول فعال
             </Badge>
             <ThemeToggle />
           </div>
@@ -127,9 +134,22 @@ export default function Home() {
             <DashboardTab
               matches={matches}
               loading={loading}
-              analyzedCount={analyzedCount}
-              onAnalyze={goToAnalyst}
+              analyzedCount={Object.keys(debates).length + matches.filter((m) => m.latestAnalysis).length}
+              onAnalyze={(matchId) => {
+                setSelectedMatchId(matchId);
+                setTab("debate");
+              }}
               onRefresh={loadMatches}
+            />
+          </TabsContent>
+
+          <TabsContent value="debate">
+            <DebateTab
+              matches={matches}
+              selectedMatchId={selectedMatchId}
+              onSelectMatch={setSelectedMatchId}
+              debates={debates}
+              onDebated={handleDebated}
             />
           </TabsContent>
 
@@ -137,18 +157,16 @@ export default function Home() {
             <EngineTab />
           </TabsContent>
 
-          <TabsContent value="analyst">
-            <AnalystTab
-              matches={matches}
-              selectedMatchId={selectedMatchId}
-              onSelectMatch={setSelectedMatchId}
-              analyses={analyses}
-              onAnalyzed={handleAnalyzed}
-            />
+          <TabsContent value="risk">
+            <RiskTab matches={matches} analyses={{}} onGoToAnalyst={goToAnalyst} debates={debates} />
           </TabsContent>
 
-          <TabsContent value="risk">
-            <RiskTab matches={matches} analyses={analyses} onGoToAnalyst={goToAnalyst} />
+          <TabsContent value="live">
+            <LiveTab matches={matches} analyses={debates} />
+          </TabsContent>
+
+          <TabsContent value="calibration">
+            <CalibrationTab />
           </TabsContent>
 
           <TabsContent value="backtest">

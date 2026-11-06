@@ -1,0 +1,348 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  BarChart3,
+  Gauge,
+  GraduationCap,
+  Lightbulb,
+  RefreshCw,
+  ScrollText,
+} from "lucide-react";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "sonner";
+import { faNum, faPct } from "@/lib/format";
+import type { CalibrationDTO } from "@/lib/types";
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  label?: string | number;
+  payload?: { name?: string | number; value?: string | number | (string | number)[] }[];
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-border bg-background p-2.5 shadow-sm space-y-1 text-xs" dir="rtl">
+      <p className="font-medium">{label}</p>
+      {payload.map((p, i) => (
+        <p key={i} className="flex items-center gap-2">
+          <span
+            className="size-2 rounded-full shrink-0"
+            style={{ background: p.name === "پیش‌بینی‌شده" ? "#d97706" : "#059669" }}
+          />
+          {p.name}: <span dir="ltr" className="tabular-nums">{faNum(Number(p.value), 1)}٪</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/** تبدیل مقدار باکت به درصد — هم کسر ۰..۱ و هم درصد خام پشتیبانی می‌شود */
+const toPct = (v: number) => (v <= 1 ? Math.round(v * 1000) / 10 : Math.round(v * 10) / 10);
+
+function factorBadge(f: number): { label: string; className: string } {
+  if (f > 1.001) return { label: `تقویت ×${faNum(f, 2)}`, className: "border-emerald-600/40 text-emerald-600 dark:text-emerald-400" };
+  if (f < 0.999) return { label: `کاهش ×${faNum(f, 2)}`, className: "border-amber-600/40 text-amber-600 dark:text-amber-400" };
+  return { label: `خنثی ×${faNum(f, 2)}`, className: "" };
+}
+
+function outcomeBadge(outcome: string): { label: string; className: string } {
+  switch (outcome) {
+    case "WIN":
+      return { label: "برد", className: "border-emerald-600/40 text-emerald-600 dark:text-emerald-400" };
+    case "LOSS":
+      return { label: "باخت", className: "border-rose-600/40 text-rose-600 dark:text-rose-400" };
+    case "PUSH":
+      return { label: "بی‌اثر", className: "" };
+    default:
+      return { label: outcome, className: "" };
+  }
+}
+
+export function CalibrationTab() {
+  const [data, setData] = useState<CalibrationDTO | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/calibration", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((json: CalibrationDTO) => {
+        if (cancelled) return;
+        if (json?.success) {
+          setData(json);
+        } else {
+          toast.error("داده کالیبراسیون معتبر نیست");
+          setData(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) toast.error("دریافت داده کالیبراسیون ناموفق بود");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
+
+  if (loading) {
+    return (
+      <div className="space-y-4" aria-busy="true" aria-label="در حال بارگذاری کالیبراسیون">
+        <Skeleton className="h-36 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
+        <Skeleton className="h-72 w-full rounded-xl" />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Card className="border-dashed">
+        <CardContent className="py-10 text-center text-sm text-muted-foreground">
+          دریافت داده کالیبراسیون ناموفق بود — دوباره تلاش کنید.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const chartData = data.buckets.map((b) => ({
+    bucket: b.bucket,
+    predicted: toPct(b.predicted),
+    observed: toPct(b.observed),
+  }));
+
+  return (
+    <div className="space-y-4">
+      {/* هدر */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1.5">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Gauge className="size-4 text-emerald-600 dark:text-emerald-400" />
+                سیستم خوداصلاحی — امتیاز بریر و کالیبراسیون
+              </CardTitle>
+              <CardDescription className="text-xs leading-relaxed">
+                امتیاز بریر میانگین مربعات خط احتمال‌های پیش‌بینی‌شده است:{" "}
+                <span dir="ltr" className="tabular-nums font-bold">Brier = (p − نتیجه)²</span> — صفر یعنی پیش‌بینی بی‌نقص و{" "}
+                <span className="tabular-nums">۰.۲۵</span> معادل حدس تصادفی. سیستم بر اساس همین امتیاز، ضریب اصلاحی هر
+                لیگ را در تحلیل‌های بعدی اعمال می‌کند (حافظه برداری).
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setLoading(true);
+                setReloadKey((k) => k + 1);
+              }}
+              className="gap-1.5 shrink-0"
+              aria-label="بروزرسانی داده کالیبراسیون"
+            >
+              <RefreshCw className="size-3.5" />
+              بروزرسانی
+            </Button>
+          </div>
+        </CardHeader>
+      </Card>
+
+      {data.overall.count === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            هنوز داده کالیبراسیون ثبت نشده است — پس از ثبت چند پیش‌بینی و نتیجه، این داشبورد خودکار پر می‌شود.
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          {/* آمار کلی */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-lg border border-border p-3 space-y-1">
+              <p className="text-[11px] text-muted-foreground">میانگین بریر</p>
+              <p className="text-lg font-bold tabular-nums" dir="ltr">{faNum(data.overall.avgBrier, 3)}</p>
+              <p className="text-[10px] text-muted-foreground">کمتر بهتر — صفر بی‌نقص</p>
+            </div>
+            <div className="rounded-lg border border-border p-3 space-y-1">
+              <p className="text-[11px] text-muted-foreground">نرخ اصابت</p>
+              <p className="text-lg font-bold tabular-nums" dir="ltr">{faPct(data.overall.hitRate, 0)}</p>
+              <p className="text-[10px] text-muted-foreground">سهم پیش‌بینی‌های درست</p>
+            </div>
+            <div className="rounded-lg border border-border p-3 space-y-1">
+              <p className="text-[11px] text-muted-foreground">مهارت نسبت به تصادف</p>
+              <p
+                className={`text-lg font-bold tabular-nums ${
+                  data.overall.brierSkillVsRandom > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"
+                }`}
+                dir="ltr"
+              >
+                {faPct(data.overall.brierSkillVsRandom, 0)}
+              </p>
+              <p className="text-[10px] text-muted-foreground">۱ − بریر ÷ ۰.۲۵</p>
+            </div>
+            <div className="rounded-lg border border-border p-3 space-y-1">
+              <p className="text-[11px] text-muted-foreground">تعداد پیش‌بینی‌ها</p>
+              <p className="text-lg font-bold tabular-nums" dir="ltr">{faNum(data.overall.count, 0)}</p>
+              <p className="text-[10px] text-muted-foreground">رکوردهای ثبت‌شده</p>
+            </div>
+          </div>
+
+          {/* نمودار پایایی */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <BarChart3 className="size-4 text-emerald-600 dark:text-emerald-400" />
+                نمودار پایایی (Reliability)
+              </CardTitle>
+              <CardDescription className="text-xs leading-relaxed">
+                در یک سیستم کالیبره، احتمال پیش‌بینی‌شده و نرخ مشاهده‌شده در هر باکت باید به هم نزدیک باشند.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div dir="ltr" className="w-full">
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={chartData} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="bucket" tick={{ fontSize: 10 }} />
+                    <YAxis
+                      domain={[0, 100]}
+                      tick={{ fontSize: 10 }}
+                      width={36}
+                      tickFormatter={(v: number) => faNum(v, 0)}
+                    />
+                    <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(0,0,0,0.04)" }} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Bar dataKey="predicted" name="پیش‌بینی‌شده" fill="#d97706" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                    <Bar dataKey="observed" name="مشاهده‌شده" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+            {/* کالیبراسیون در هر لیگ */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">کالیبراسیون در هر لیگ (حافظه برداری)</CardTitle>
+                <CardDescription className="text-xs">
+                  ضریب اصلاحی به‌صورت خودکار روی تحلیل‌های بعدی همان لیگ اعمال می‌شود.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="max-h-96 overflow-y-auto rounded-md border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-xs">لیگ</TableHead>
+                        <TableHead className="text-xs">تعداد</TableHead>
+                        <TableHead className="text-xs">بریر</TableHead>
+                        <TableHead className="text-xs">اصابت</TableHead>
+                        <TableHead className="text-xs">ضریب اصلاحی</TableHead>
+                        <TableHead className="text-xs">یادداشت</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.byLeague.map((l) => {
+                        const fb = factorBadge(l.calibrationFactor);
+                        return (
+                          <TableRow key={l.league}>
+                            <TableCell className="text-xs font-medium">{l.league}</TableCell>
+                            <TableCell className="text-xs tabular-nums" dir="ltr">{faNum(l.count, 0)}</TableCell>
+                            <TableCell className="text-xs tabular-nums" dir="ltr">{faNum(l.avgBrier, 3)}</TableCell>
+                            <TableCell className="text-xs tabular-nums" dir="ltr">{faPct(l.hitRate, 0)}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={`text-[10px] whitespace-nowrap ${fb.className}`}>
+                                {fb.label}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-[11px] text-muted-foreground leading-relaxed">{l.note}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* گزارش بازرس */}
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <ScrollText className="size-4 text-amber-500" />
+                  گزارش بازرس پس از بازی
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  هر پیش‌بینی پس از پایان بازی با امتیاز بریر بازرسی و درس استخراج می‌شود.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="max-h-96 overflow-y-auto space-y-2">
+                  {data.logs.map((log) => {
+                    const ob = outcomeBadge(log.outcome);
+                    return (
+                      <div key={log.id} className="rounded-lg border border-border p-2.5 space-y-1">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <p className="text-xs font-medium">{log.matchLabel}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <Badge variant="outline" className="text-[10px]">{log.pick}</Badge>
+                            <Badge variant="outline" className={`text-[10px] ${ob.className}`}>{ob.label}</Badge>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px] text-muted-foreground flex-wrap">
+                          <span>
+                            احتمال پیش‌بینی: <b className="tabular-nums text-foreground">{faPct(log.predictedProb, 0)}</b>
+                          </span>
+                          <span>
+                            بریر: <b className="tabular-nums text-foreground" dir="ltr">{faNum(log.brier, 3)}</b>
+                          </span>
+                          <span>{log.league}</span>
+                        </div>
+                        {log.lesson && (
+                          <p className="text-[11px] text-muted-foreground leading-relaxed">{log.lesson}</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* درس‌های سیستمی */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <GraduationCap className="size-4 text-emerald-600 dark:text-emerald-400" />
+                درس‌های سیستمی
+              </CardTitle>
+              <CardDescription className="text-xs">
+                جمع‌بندی خودکار بازرس از الگوهای خطا برای اصلاح مدل.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="space-y-2">
+                {data.lessons.map((lesson, i) => (
+                  <li key={`${i}-${lesson.slice(0, 16)}`} className="flex items-start gap-2 text-xs leading-relaxed">
+                    <Lightbulb className="size-3.5 text-amber-500 shrink-0 mt-0.5" />
+                    <span>{lesson}</span>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}

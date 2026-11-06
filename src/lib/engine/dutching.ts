@@ -8,7 +8,7 @@ export type DutchStrategy = "EQUAL_PROFIT" | "HEDGE_MAIN" | "AGGRESSIVE";
 export interface DutchLeg {
   label: string; // نام تیپ
   odds: number; // ضریب کل تیپ
-  prob: number; // احتمال وقوع سناریوی این تیپ (اختیاری، برای EV)
+  prob?: number; // احتمال وقوع سناریوی این تیپ (اختیاری، برای EV)
 }
 
 export interface DutchResult {
