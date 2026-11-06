@@ -1,15 +1,16 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// فلش‌کارت سه‌بعدی دوطرفه تیپ مکمل (3D Flip Flashcard) — v3.0
-//   روی کارت  : تصمیم‌گیری سریع در ۳ ثانیه — زوج‌تیپ دوقلو + شاخص‌ها + اکشن‌ها
-//   پشت کارت  : خلاصه مناظره ۳ خطی + مینی‌مپ پوشش ۶×۶ + وضعیت T-60
+// فلش‌کارت سه‌بعدی دوطرفه تیپ مکمل (3D Flip Flashcard) — v5.0
+//   روی کارت  : تصمیم‌گیری سریع در ۳ ثانیه — زوج‌تیپ دوقلو + الگوی متعامد + اکشن‌ها
+//   پشت کارت  : خلاصه مناظره ۳ خطی + مینی‌مپ پوشش ۶×۶ + وضعیت T-60 + تحلیل عمیق LLM
 // چرخش با transform-style: preserve-3d و rotateY(180deg)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from "react";
 import {
   BadgeCheck,
+  BrainCircuit,
   Check,
   Copy,
   Award,
@@ -17,11 +18,14 @@ import {
   RefreshCw,
   ShieldAlert,
   ShoppingCart,
+  Shuffle,
   Sparkles,
   Trophy,
   Scale,
   Banknote,
   AlertTriangle,
+  Loader2,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
@@ -40,28 +44,46 @@ const TRUST_ICONS: Record<FlashcardView["trust"]["kind"], typeof Award> = {
   SILVER: BadgeCheck,
 };
 
-/** متن آماده کپی تیپ — v4.0 (متن استاندارد UTF-8، بدون کاراکتر شکسته) */
+/** متن آماده کپی تیپ — v5.0 (متن استاندارد UTF-8، با نام الگوی متعامد) */
 export function cardCopyText(v: FlashcardView): string {
   const p = v.pair;
+  const head = p.archetype
+    ? `⚽ فوتبال‌کوانت v5.0 — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})
+📐 الگوی متعامد: ${p.archetype.short} — زاویه تمایز ۱۰۰٪ (بدون شرط تکراری)`
+    : `⚽ فوتبال‌کوانت v5.0 — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
   return [
-    `⚽ فوتبال‌کوانت v4.0 — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`,
+    head,
     `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeA, 1)} واحد`,
     `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeB, 1)} واحد`,
-    `✅ سود خالص تضمینی: +${p.guaranteedMarginPct.toFixed(1)}% | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
+    `✅ پوشش سناریوها: ${(p.archetype ? p.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100).toFixed(0)}٪ | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
     `⚖️ ${p.verdict}`,
   ].join("\n");
 }
+
+export type DeepLlmState = "IDLE" | "RUNNING" | "CACHED" | "RATELIMITED";
 
 export function FlashCard({
   view,
   inCart,
   onToggleCart,
   compact = false,
+  onSwitchArchetype,
+  archetypeLoading = false,
+  hasArchetypes = false,
+  onDeepLlm,
+  deepLlmState = "IDLE",
 }: {
   view: FlashcardView;
   inCart: boolean;
   onToggleCart: () => void;
   compact?: boolean;
+  /** v5.0 — سوییچ بین ۵ الگوی متعامد برای همین بازی */
+  onSwitchArchetype?: () => void;
+  archetypeLoading?: boolean;
+  hasArchetypes?: boolean;
+  /** v5.0 — تحلیل عمیق LLM فقط با تقاضای کاربر (کش ۶۰ دقیقه‌ای + صف ۱۵ ثانیه‌ای) */
+  onDeepLlm?: () => void;
+  deepLlmState?: DeepLlmState;
 }) {
   const [flipped, setFlipped] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -132,6 +154,30 @@ export function FlashCard({
               )}
             </div>
           </div>
+
+          {/* ═══ v5.0 — نوار الگوی متعامد + سوییچر ۵ الگو ═══ */}
+          {pair.archetype && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/[0.07] px-2 py-1" onClick={(e) => e.stopPropagation()}>
+              <p className="flex min-w-0 items-center gap-1 text-[10px] font-semibold text-fuchsia-300">
+                <Shuffle className="size-3 shrink-0" />
+                <span className="truncate">{pair.archetype.short}</span>
+                <span className="shrink-0 rounded-full bg-fuchsia-500/20 px-1.5 py-0.5 text-[9px] text-fuchsia-200">۱۰۰٪ متعامد</span>
+              </p>
+              {onSwitchArchetype && hasArchetypes && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 shrink-0 gap-1 rounded-full px-1.5 text-[9px] text-fuchsia-300 hover:bg-fuchsia-500/15"
+                  onClick={onSwitchArchetype}
+                  disabled={archetypeLoading}
+                  aria-label="سوییچ بین ۵ الگوی مکمل متعامد برای همین بازی"
+                >
+                  {archetypeLoading ? <Loader2 className="size-3 animate-spin" /> : <Shuffle className="size-3" />}
+                  الگوی بعدی
+                </Button>
+              )}
+            </div>
+          )}
 
           {/* باکس دوقلوی تیپ مکمل */}
           <div className="grid grid-cols-2 gap-2">
@@ -245,6 +291,50 @@ export function FlashCard({
             <Scale className="size-4 text-cyan-400" /> کالبدشکافی تحلیلی — {match.homeTeam} × {match.awayTeam}
           </p>
 
+          {/* v5.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه + صف ۱۵ ثانیه) */}
+          {onDeepLlm && (
+            <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.06] p-2.5" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between gap-2">
+                <p className="flex items-center gap-1 text-[11px] font-semibold text-cyan-300">
+                  <BrainCircuit className="size-3.5" /> تحلیل عمیق LLM برای این بازی
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 border-cyan-500/40 px-2 text-[10px] text-cyan-300 hover:bg-cyan-500/10"
+                  onClick={onDeepLlm}
+                  disabled={deepLlmState === "RUNNING"}
+                  aria-label="اجرای تحلیل عمیق LLM برای این بازی"
+                >
+                  {deepLlmState === "RUNNING" ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
+                  {deepLlmState === "RUNNING" ? "در حال تحلیل…" : deepLlmState === "CACHED" ? "اجرای مجدد" : "اجرای LLM"}
+                </Button>
+              </div>
+              <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+                فقط با کلیک شما اجرا می‌شود — صف حداکثر ۱ درخواست در ۱۵ ثانیه + کش ۶۰ دقیقه‌ای (سپر Rate-Limit)
+              </p>
+              {deepLlmState === "CACHED" && (
+                <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-emerald-300">⚡ بارگذاری از کش هوشمند (صرفه‌جویی در نرخ API)</p>
+              )}
+            </div>
+          )}
+
+          {/* v5.0 — روایت الگوی متعامد جاری */}
+          {pair.archetype && (
+            <div className="rounded-xl border border-fuchsia-500/25 bg-fuchsia-500/[0.05] p-2.5 text-[11px] leading-5">
+              <p className="mb-1 flex items-center gap-1 font-semibold text-fuchsia-300">
+                <Shuffle className="size-3.5" /> {pair.archetype.name}
+              </p>
+              <p className="text-muted-foreground">{pair.archetype.rationale}</p>
+              <p className="mt-1 text-[10px] text-fuchsia-200/80">
+                زاویه تمایز: <b>۱۰۰٪ متعامد — بدون شرط تکراری</b> · پوشش سناریوها: <b dir="ltr">{faNum(pair.archetype.coveragePct * 100, 0)}%</b>
+                {pair.archetype.overlapPct > 0.02 && (
+                  <> · دو برد همزمان: <b dir="ltr">{faPct(pair.archetype.overlapPct, 1)}</b></>
+                )}
+              </p>
+            </div>
+          )}
+
           {/* خلاصه مناظره در ۳ خط */}
           <div className="space-y-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-2.5 text-[11px] leading-5">
             <p className="flex gap-1.5">
@@ -290,6 +380,7 @@ export function FlashCard({
                 <> · ناحیه طلایی: <b className="text-amber-300" dir="ltr">{faNum(coverage.stats.bothWinProb * 100, 1)}%</b> شانس دو برد همزمان</>
               )}
               {coverage.isConditional && <span className="text-amber-300"> · پوشش مشروط (پایه مشترک روی این بازی)</span>}
+              {coverage.hasOffMatrixLegs && <span className="text-fuchsia-300"> · شامل بازار خارج ماتریس (کرنر/کارت/نیمه اول) — پوشش تخمینی</span>}
             </p>
           </div>
 

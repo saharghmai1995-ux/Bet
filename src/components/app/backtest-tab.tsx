@@ -24,7 +24,103 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { faNum } from "@/lib/format";
-import type { BacktestResultDTO } from "@/lib/types";
+import type { BacktestResultDTO, FootballDataDTO } from "@/lib/types";
+
+/** v5.0 — فید واقعی Football-Data.co.uk: خطوط افتتاحیه/پایانی پیناکل برای بک‌تست CLV */
+function FootballDataFeed() {
+  const [league, setLeague] = useState("E0");
+  const [feed, setFeed] = useState<FootballDataDTO | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async (lg: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/odds/football-data?league=${lg}&limit=10`, { cache: "no-store" });
+      const data = (await res.json()) as FootballDataDTO & { error?: string };
+      if (data.success) setFeed(data);
+      else toast.error(data.error ?? "فید Football-Data بارگذاری نشد");
+    } catch {
+      toast.error("ارتباط با مخزن Football-Data برقرار نشد");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load(league);
+  }, [league, load]);
+
+  const LEAGUES: { key: string; label: string }[] = [
+    { key: "E0", label: "انگلیس" },
+    { key: "SP1", label: "اسپانیا" },
+    { key: "I1", label: "ایتالیا" },
+    { key: "D1", label: "آلمان" },
+    { key: "F1", label: "فرانسه" },
+  ];
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <BadgeCheck className="size-4 text-cyan-400" />
+          مخزن ضرایب واقعی Football-Data.co.uk — خطوط پیناکل (PSH/PSD/PSA)
+        </CardTitle>
+        <CardDescription className="text-xs leading-relaxed">
+          {feed
+            ? `فصل ${feed.season} — ${feed.leagueName} · ${faNum(feed.rows.length, 0)} بازی اخیر با خط افتتاحیه/پایانی بوک‌میکر برای بک‌تست CLV واقعی (بدون کلید)`
+            : "در حال بارگذاری CSV خطوط پیناکل…"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {LEAGUES.map((lg) => (
+            <Button
+              key={lg.key}
+              size="sm"
+              variant="outline"
+              className={`h-7 rounded-full border-white/10 px-2.5 text-[10px] ${league === lg.key ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-300" : "text-muted-foreground"}`}
+              onClick={() => setLeague(lg.key)}
+              aria-pressed={league === lg.key}
+            >
+              {lg.label}
+            </Button>
+          ))}
+          {loading && <Loader2 className="size-3.5 animate-spin text-cyan-400" />}
+        </div>
+        {feed && (
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-white/8">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-white/8 hover:bg-transparent">
+                  <TableHead className="text-xs">بازی</TableHead>
+                  <TableHead className="text-xs">نتیجه</TableHead>
+                  <TableHead className="text-xs">PSH</TableHead>
+                  <TableHead className="text-xs">PSD</TableHead>
+                  <TableHead className="text-xs">PSA</TableHead>
+                  <TableHead className="text-xs">P&gt;2.5</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {feed.rows.map((r, i) => (
+                  <TableRow key={`${r.date}-${r.homeTeam}-${i}`} className="border-white/6">
+                    <TableCell className="text-xs">{r.homeTeam} — {r.awayTeam}</TableCell>
+                    <TableCell className="font-num text-xs text-muted-foreground" dir="ltr">
+                      {r.fthg !== null && r.ftag !== null ? `${r.fthg}-${r.ftag}` : r.date}
+                    </TableCell>
+                    <TableCell className="font-num text-xs" dir="ltr">{r.psh?.toFixed(2) ?? "—"}</TableCell>
+                    <TableCell className="font-num text-xs" dir="ltr">{r.psd?.toFixed(2) ?? "—"}</TableCell>
+                    <TableCell className="font-num text-xs" dir="ltr">{r.psa?.toFixed(2) ?? "—"}</TableCell>
+                    <TableCell className="font-num text-xs" dir="ltr">{r.pOver25?.toFixed(2) ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 const VERDICT_STYLES: Record<string, { label: string; cls: string }> = {
   EXCELLENT: { label: "عالی — لبه واقعی تأیید شد", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" },
@@ -400,6 +496,9 @@ export function BacktestTab() {
           </div>
         </>
       )}
+
+      {/* ═══ v5.0 — مخزن ضرایب واقعی Football-Data.co.uk برای بک‌تست CLV ═══ */}
+      <FootballDataFeed />
     </div>
   );
 }

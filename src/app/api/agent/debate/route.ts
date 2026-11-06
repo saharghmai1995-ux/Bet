@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ensureSeeded } from "@/lib/seed";
-import { computeMatchEngine, devigRows, sharpOu } from "@/lib/engine/matchEngine";
-import { runBullAgent, runBearAgent, runJudgeAgent, type Brief } from "@/lib/agents/debate";
+import { computeMatchEngine, devigRows } from "@/lib/engine/matchEngine";
+import { runBullAgent, runBearAgent, runJudgeAgent, type Brief, type JudgeOutput } from "@/lib/agents/debate";
+import { localBullBrief, localBearBrief, localJudgeOutput } from "@/lib/agents/quant-debater";
+import { RateLimitedError, llmSlotRetryAfterSec } from "@/lib/server/llm-limiter";
 import { leagueCalibration } from "@/lib/engine/calibration";
 import { getNewsForTeams } from "@/lib/server/live-ingest";
 import type { AgentBriefDTO, DebateResultDTO } from "@/lib/types";
@@ -10,7 +12,7 @@ import type { AgentBriefDTO, DebateResultDTO } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const maxDuration = 180;
 
-function toBrief(b: Brief, role: "BULL" | "BEAR", source: "LLM" | "ENGINE_FALLBACK"): AgentBriefDTO {
+function toBrief(b: Brief, role: "BULL" | "BEAR", source: AgentBriefDTO["source"]): AgentBriefDTO {
   return {
     role,
     title: role === "BULL" ? "ایجنت گاو (Bull)" : "ایجنت خرس (Bear)",
@@ -23,13 +25,18 @@ function toBrief(b: Brief, role: "BULL" | "BEAR", source: "LLM" | "ENGINE_FALLBA
 }
 
 /**
- * POST /api/agent/debate { matchId }
- * مناظره چندایجنتی: موتور کمّی + شین دی‌ویگ → گاو/خرس → قاضی → کالیبراسیون خودکار
+ * POST /api/agent/debate { matchId, mode? }
+ * v5.0 — سپر ضد Rate-Limit:
+ *   mode = "LOCAL_QUANT" (پیش‌فرض): مناظره ۱۰۰٪ با موتور ریاضی محلی — صفر درخواست LLM، صفر توکن.
+ *   mode = "LLM": فراخوان تقاضامحور کاربر؛ از صف ۱۵ ثانیه‌ای عبور می‌کند و در صورت شلوغی
+ *                 به‌صورت شفاف به موتور محلی fallback می‌شود (rateLimited: true).
  */
 export async function POST(req: NextRequest) {
   try {
     await ensureSeeded();
-    const { matchId } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const { matchId } = body;
+    const mode: "LOCAL_QUANT" | "LLM" = body.mode === "LLM" ? "LLM" : "LOCAL_QUANT";
     if (!matchId) {
       return NextResponse.json({ success: false, error: "matchId الزامی است" }, { status: 400 });
     }
@@ -57,7 +64,7 @@ export async function POST(req: NextRequest) {
     const leagueCal = cal.find((c) => c.league === match.league) ?? null;
     const shrink = leagueCal && leagueCal.calibrationFactor < 1 ? 1 - leagueCal.calibrationFactor : 0;
 
-    // ─── ۴) مناظره: گاو و خرس (موازی) سپس قاضی ───
+    // ─── ۴) زمینه مشترک گاو/خرس/قاضی ───
     const context = {
       homeTeam: match.homeTeam,
       awayTeam: match.awayTeam,
@@ -91,7 +98,7 @@ export async function POST(req: NextRequest) {
         headline: n.headline,
         description: n.description,
         url: n.url,
-        side: n.leagueSlug !== "" ? ("HOME" as const) : ("HOME" as const),
+        side: "HOME" as "HOME" | "AWAY",
       })),
     };
     // تعیین سمت خبر بر اساس حضور نام واقعی هر تیم در متن
@@ -105,10 +112,40 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const [bullRes, bearRes] = await Promise.all([runBullAgent(context), runBearAgent(context)]);
-    // v4.0: تشخیص دقیق fallback (فلگ صریح به‌جای جستجوی رشته)
-    const source: "LLM" | "ENGINE_FALLBACK" =
-      bullRes.fallback || bearRes.fallback ? "ENGINE_FALLBACK" : "LLM";
+    // ─── ۵) مناظره: موتور محلی (پیش‌فرض) یا LLM تقاضامحور با سپر ۱۵ ثانیه ───
+    let bullRes: Brief;
+    let bearRes: Brief;
+    let source: DebateResultDTO["source"];
+    let rateLimited = false;
+    let notice: string | null = null;
+    let judgeRes: JudgeOutput | null = null;
+    let judgeIsLlm = false;
+
+    if (mode === "LLM") {
+      try {
+        const [b, r] = await Promise.all([runBullAgent(context), runBearAgent(context)]);
+        bullRes = b;
+        bearRes = r;
+        source = bullRes.fallback || bearRes.fallback ? "ENGINE_FALLBACK" : "LLM";
+        if (source === "ENGINE_FALLBACK") notice = "پاسخ LLM معتبر نبود — موتور کمّی جایگزین شد";
+      } catch (err) {
+        if (err instanceof RateLimitedError) {
+          rateLimited = true;
+          notice = `⚠️ صف Rate-Limit فعال است (حداکثر ۱ درخواست LLM در ۱۵ ثانیه) — نتیجه موتور کمّی محلی نمایش داده شد. ${llmSlotRetryAfterSec() || Math.ceil(err.retryAfterMs / 1000)} ثانیه دیگر دوباره امتحان کنید.`;
+        } else {
+          rateLimited = false;
+          notice = "خطای LLM — مناظره با موتور کمّی محلی بازسازی شد";
+        }
+        bullRes = localBullBrief(context);
+        bearRes = localBearBrief(context);
+        source = "LOCAL_QUANT";
+      }
+    } else {
+      bullRes = localBullBrief(context);
+      bearRes = localBearBrief(context);
+      source = "LOCAL_QUANT";
+      notice = "⚡ موتور استدلال کمّی محلی — صفر توکن، صفر درخواست LLM (سپر Rate-Limit فعال)";
+    }
 
     // ترکیب وزنی: موتور + خط شارپ + دلتاهای ایجنت‌ها (وزن‌دهی با اطمینان)
     const bw = bullRes.confidence;
@@ -146,11 +183,26 @@ export async function POST(req: NextRequest) {
       calibrationApplied = `ضریب اصلاحی لیگ (${leagueCal?.calibrationFactor.toFixed(2)}) اعمال شد — ${(shrink * 100).toFixed(0)}٪ گرایش به خط شارپ پیناکل`;
     }
 
-    const judgeRes = await runJudgeAgent(context, bullRes, bearRes, blend);
+    // ─── ۶) قاضی: LLM (فقط در حالت تقاضامحور) یا حکم قطعی محلی ───
+    if (mode === "LLM" && !rateLimited && source !== "ENGINE_FALLBACK") {
+      try {
+        judgeRes = await runJudgeAgent(context, bullRes, bearRes, blend);
+        judgeIsLlm = Boolean(judgeRes);
+      } catch (err) {
+        if (err instanceof RateLimitedError) {
+          rateLimited = true;
+          notice = `⚠️ صف Rate-Limit روی قاضی فعال شد — حکم با موتور کمّی محلی صادر شد. ${llmSlotRetryAfterSec() || Math.ceil(err.retryAfterMs / 1000)} ثانیه دیگر دوباره امتحان کنید.`;
+        }
+        judgeRes = null;
+      }
+    }
+    if (!judgeRes) {
+      judgeRes = localJudgeOutput(context, bullRes, bearRes, blend);
+    }
 
     // محدودسازی خروجی قاضی به پنجره ±۸ واحد درصدی اطراف مرجع کمّی (ضد هذیان)
     let final = { ...blend };
-    if (judgeRes) {
+    {
       const clamp = (v: number, ref: number) => Math.min(ref + 0.08, Math.max(ref - 0.08, v));
       final = {
         home: clamp(judgeRes.probabilities.home, blend.home),
@@ -164,7 +216,7 @@ export async function POST(req: NextRequest) {
       final.away /= s2;
     }
 
-    // ─── ۵) ذخیره تحلیل ───
+    // ─── ۷) ذخیره تحلیل ───
     const analysis = await db.agentAnalysis.create({
       data: {
         matchId: match.id,
@@ -181,9 +233,9 @@ export async function POST(req: NextRequest) {
         evUnder25: (1 - final.over25) * match.oddsUnder25 - 1,
         bestMarket: "مناظره چندایجنتی",
         bestEv: Math.max(final.home * match.oddsHome - 1, final.away * match.oddsAway - 1, final.draw * match.oddsDraw - 1, final.over25 * match.oddsOver25 - 1),
-        confidence: judgeRes?.confidence ?? 0.65,
+        confidence: judgeRes.confidence ?? 0.65,
         riskFlag: final.home + final.draw >= 0.72 ? "OK" : "MIDDLE_TRAP_RISK",
-        source,
+        source: judgeIsLlm ? "LLM" : source,
       },
     });
     // v4.0: وضعیت‌های ویژه (LIVE/ARCHIVED/FINISHED) نباید با ANALYZED بازنویسی شوند
@@ -196,18 +248,17 @@ export async function POST(req: NextRequest) {
     const judgeBrief: AgentBriefDTO = {
       role: "JUDGE",
       title: "قاضی کمّی ارشد",
-      thesis: judgeRes?.thesis ?? "حکم نهایی از ترکیب وزنی موتور کمّی، خط شارپ پیناکل و دلتاهای دو ایجنت محاسبه شد.",
-      arguments: judgeRes?.arguments ?? [
-        "ترکیب ۴۵٪ دیکسون-کولز + ۳۰٪ خط شارپ + ۲۵٪ دلتاهای مناظره",
-        "خروجی قاضی در پنجره ±۸ واحد درصدی اطراف مرجع کمّی قفل شد",
-      ],
-      confidence: judgeRes?.confidence ?? 0.65,
-      source: judgeRes ? "LLM" : "ENGINE_FALLBACK",
+      thesis: judgeRes.thesis,
+      arguments: judgeRes.arguments,
+      confidence: judgeRes.confidence ?? 0.65,
+      source: judgeIsLlm ? "LLM" : "LOCAL_QUANT",
     };
 
     const result: DebateResultDTO = {
       success: true,
       source,
+      rateLimited,
+      notice,
       match: {
         id: match.id,
         homeTeam: match.homeTeam,
@@ -240,7 +291,7 @@ export async function POST(req: NextRequest) {
         pAway: final.away,
         pOver25: final.over25,
         analysisId: analysis.id,
-        confidence: judgeRes?.confidence ?? 0.65,
+        confidence: judgeRes.confidence ?? 0.65,
         calibrationApplied,
       },
     };

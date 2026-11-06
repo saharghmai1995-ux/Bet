@@ -5,6 +5,7 @@ import { computeMatchEngine } from "@/lib/engine/matchEngine";
 import { runMonteCarlo, jointStates, MC_SELECTIONS, type SelectionKey, type MonteCarloResult } from "@/lib/engine/montecarlo";
 import { simultaneousKelly } from "@/lib/engine/kelly";
 import { checkMiddleTrap, type SelectionKind, type TrapLeg } from "@/lib/engine/dutching";
+import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair } from "@/lib/engine/orthogonal";
 import type { PortfolioPairDTO, PortfolioResultDTO, PortfolioSelectionDTO } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -414,6 +415,47 @@ export async function POST(req: NextRequest) {
     const picked = [...bestOf.values()];
     const rest = deduped.filter((p) => !picked.includes(p));
     const topPairs = [...picked, ...rest].slice(0, 6);
+
+    // ─── v5.0: ادغام زوج متعامد پیشنهادی (۱۵ بازار، بدون شرط تکراری) ───
+    // موتور ارتوگونال برای همین بازی اجرا و بهترین الگو به صدر فهرست تیپ‌ها می‌رود
+    try {
+      const primCached = mcInputCache.get(primary.id) as Parameters<typeof computeMatchEngine>[0] | undefined;
+      if (primCached) {
+        const eng = computeMatchEngine(primCached);
+        const pinOdds = primaryOdds.find((o) => o.bookmaker === "PINNACLE") ?? primaryOdds[0];
+        const orthoCtx = {
+          lambdaHome: eng.dc.lambdaHome,
+          lambdaAway: eng.dc.lambdaAway,
+          matrix: eng.dc.matrix,
+          lambdaCorners: eng.lambdaCorners,
+          lambdaCards: eng.lambdaCards,
+          prices: pinOdds
+            ? {
+                HOME: pinOdds.oddsHome,
+                DRAW: pinOdds.oddsDraw,
+                AWAY: pinOdds.oddsAway,
+                DC_1X: 1 / (1 / pinOdds.oddsHome + 1 / pinOdds.oddsDraw),
+                DC_X2: 1 / (1 / pinOdds.oddsAway + 1 / pinOdds.oddsDraw),
+                O25: pinOdds.oddsOver25,
+                U25: pinOdds.oddsUnder25,
+                C_O95: pinOdds.oddsCornersOver95,
+                C_U95: pinOdds.oddsCornersUnder95,
+              }
+            : undefined,
+        };
+        const ortho = generateOrthogonalComplementarySlips(orthoCtx);
+        const rec = ortho.archetypes.find((a) => a.code === ortho.recommended) ?? ortho.archetypes[0];
+        if (rec) {
+          const orthoPair = buildOrthoPortfolioPair(rec, primary, bankroll);
+          if (!topPairs.some((p) => p.id === orthoPair.id)) {
+            topPairs.unshift(orthoPair);
+            if (topPairs.length > 7) topPairs.length = 7;
+          }
+        }
+      }
+    } catch (orthoErr) {
+      console.error("orthogonal merge failed:", orthoErr);
+    }
 
     // ─── ذخیره TipSet برای زوج برتر ───
     const recommendedId = topPairs[0]?.id ?? null;

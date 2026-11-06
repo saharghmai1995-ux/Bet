@@ -95,7 +95,9 @@ export function useAutopilot() {
         setStage(m.id, "t60", "ERROR");
       }
 
-      // ─── ۳) مناظره گاو/خرس/قاضی (LLM یا اسکیپ در اسکن سبک بدون تغییر) ───
+      // ─── ۳) مناظره گاو/خرس/قاضی — v5.0: موتور کمّی محلی (صفر توکن، صفر LLM) ───
+      // سپر ضد Rate-Limit: اسکن پس‌زمینه هرگز به LLM نمی‌رود؛ تحلیل عمیق LLM فقط
+      // با کلیک دستی کاربر (دکمه 🧠) و از راه کش/صف ۱۵ ثانیه‌ای انجام می‌شود.
       const existing = useQuantStore.getState().autopilot[m.id];
       const hasDebate = Boolean(existing?.debate);
       if (!opts.allowDebate) {
@@ -105,10 +107,14 @@ export function useAutopilot() {
       } else {
         setStage(m.id, "debate", "RUNNING");
         try {
-          const debate = await postJson<DebateResultDTO>("/api/agent/debate", { matchId: m.id });
+          const debate = await postJson<DebateResultDTO>("/api/agent/debate", {
+            matchId: m.id,
+            mode: "LOCAL_QUANT",
+          });
           if (!debate.success) throw new Error("debate failed");
           patchAutopilot(m.id, { debate });
           useQuantStore.getState().setDebate(m.id, debate);
+          useQuantStore.getState().bumpLlmShield("localQuant");
           setStage(m.id, "debate", "DONE");
         } catch {
           setStage(m.id, "debate", "ERROR");
@@ -166,8 +172,8 @@ export function useAutopilot() {
             store.patchAutopilot(m.id, {});
           }
         }
-        // v4.0: مناظره LLM فقط برای نزدیک‌ترین ۸ بازی upcoming — بازی‌های LIVE/FINISHED
-        // مناظره نمی‌شوند (پیش‌بازی معنا ندارد) و هزینه LLM با فید ۲۵+ بازی کنترل می‌شود
+        // v5.0: اسکن پس‌زمینه ۱۰۰٪ موتور کمّی محلی است (Zero-Token Shield) —
+        // مناظره فقط برای نزدیک‌ترین ۸ بازی upcoming اجرا می‌شود و هیچ درخواست LLM ندارد
         const debateSet = new Set(
           matches
             .filter((m) => m.status === "UPCOMING" || m.status === "ANALYZED")

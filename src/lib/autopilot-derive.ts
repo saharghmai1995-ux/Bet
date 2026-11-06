@@ -10,13 +10,16 @@ import { useQuantStore } from "./store";
 import type { FlashcardView } from "./autopilot-types";
 import type { DebateResultDTO, LineupShockDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "./types";
 
-/** بهترین زوج یک خروجی پرتفوی — اولویت با زوج‌های باندی دو-برد باکیفیت (محصول پرچمدار v3.0) */
+/** بهترین زوج یک خروجی پرتفوی — v5.0: پرچمدار = زوج متعامد ۱۵ بازاره، سپس باندی دو-برد */
 export function pickBestPair(p: PortfolioResultDTO | null): PortfolioPairDTO | null {
   if (!p || !p.pairs || p.pairs.length === 0) return null;
-  // ۱) زوج باندی/دو-برد با حاشیه معتبر (ناحیه طلایی روی فلش‌کارت)
+  // ۱) زوج متعامد v5.0 — تیپ A و B هیچ شرط تکراری ندارند (با ریسک معقول)
+  const ortho = p.pairs.find((x) => x.archetype && x.jointStates.bothLose < 0.45);
+  if (ortho) return ortho;
+  // ۲) زوج باندی/دو-برد با حاشیه معتبر (ناحیه طلایی روی فلش‌کارت)
   const golden = p.pairs.find((x) => x.structure.doubleWin && x.guaranteedMarginPct >= 4);
   if (golden) return golden;
-  // ۲) پیشنهاد رسمی موتور
+  // ۳) پیشنهاد رسمی موتور
   return p.pairs.find((x) => x.id === p.recommendedId) ?? p.pairs[0];
 }
 
@@ -60,6 +63,7 @@ export function buildFlashcard(
     judgeLine: firstSentence(debate?.judge?.thesis ?? null),
     lambdaHome: portfolio?.primary?.lambdaHome ?? 1.35,
     lambdaAway: portfolio?.primary?.lambdaAway ?? 1.25,
+    isArchetype: Boolean(pair.archetype),
   };
 }
 
@@ -100,8 +104,8 @@ export function useCartItems(): { key: string; view: FlashcardView; pair: Portfo
 }
 
 /**
- * خروجی متنی سبد برای تلگرام / برگه‌ساز — v4.0
- * اصلاح کامل باگ کاراکترهای شکسته (ٱٱٱ): تمام رشته‌ها با متن فارسی استاندارد UTF-8
+ * خروجی متنی سبد برای تلگرام / برگه‌ساز — v5.0
+ * متن استاندارد UTF-8 با نام الگوی متعامد (بدون کاراکتر شکسته)
  */
 export function buildTelegramText(
   items: { view: FlashcardView; stakeA: number; stakeB: number; profit: number }[],
@@ -109,16 +113,17 @@ export function buildTelegramText(
   strategyLabel: string
 ): string {
   const lines: string[] = [];
-  lines.push("⚽ فوتبال‌کوانت v4.0 — سبد هوشمند تیپ‌های مکمل روزانه");
+  lines.push("⚽ فوتبال‌کوانت v5.0 — سبد هوشمند تیپ‌های مکمل متعامد");
   lines.push(`💰 کل بودجه روزانه: ${budget} واحد | استراتژی: ${strategyLabel}`);
   lines.push("─────────────────────");
   for (const it of items) {
     const p = it.view.pair;
     lines.push(`🏆 ${it.view.match.homeTeam} مقابل ${it.view.match.awayTeam} (${it.view.match.league})`);
+    if (p.archetype) lines.push(`📐 الگوی متعامد: ${p.archetype.short} — زاویه تمایز ۱۰۰٪`);
     lines.push(`🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${it.stakeA} واحد`);
     lines.push(`🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${it.stakeB} واحد`);
     lines.push(
-      `✅ سود خالص تضمینی: +${p.guaranteedMarginPct.toFixed(1)}% | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`
+      `✅ پوشش سناریوها: ${(it.view.pair.archetype ? it.view.pair.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100).toFixed(0)}٪ | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`
     );
     lines.push("─────────────────────");
   }

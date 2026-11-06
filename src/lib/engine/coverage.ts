@@ -40,10 +40,27 @@ export function selectionCoversCell(key: string, h: number, a: number): boolean 
     case "U25": return tot < 2.5;
     case "O15": return tot > 1.5;
     case "U35": return tot < 3.5;
+    case "O35": return tot > 3.5;
     case "BTTS_Y": return h > 0 && a > 0;
     case "BTTS_N": return h === 0 || a === 0;
-    default: return false; // کرنر/کارت خارج از ماتریس نمره است
+    case "DNB_HOME": return h >= a; // مساوی = بازگشت
+    case "DNB_AWAY": return a >= h;
+    case "NO_DRAW": return h !== a;
+    case "AH_AWAY_15": return h - a <= 1;
+    case "ASIAN_O20": return tot >= 2; // دقیقاً ۲ = نیم‌برد
+    case "ASIAN_U20": return tot <= 2;
+    case "TGOAL_HOME": return h >= 1;
+    case "TGOAL_AWAY": return a >= 1;
+    case "WIN_NIL_HOME": return h > a && a === 0;
+    case "WIN_NIL_AWAY": return a > h && h === 0;
+    default: return false; // کرنر/کارت/نیمه اول خارج از ماتریس نمره است
   }
+}
+
+/** پایه‌های خارج از ماتریس نمره (کرنر/کارت/نیمه اول) — پوشش مینی‌مپ تخمینی می‌شود */
+const OFF_MATRIX_KEYS = new Set(["HT_O05", "HT_00", "C_O95", "C_U95", "CARDS_O35", "CARDS_O45", "CARDS_U45"]);
+export function isOffMatrixKey(key: string): boolean {
+  return OFF_MATRIX_KEYS.has(key);
 }
 
 export type CoverKind = "A_ONLY" | "B_ONLY" | "BOTH" | "NONE";
@@ -59,15 +76,30 @@ export interface CoverageMap {
   cells: CoverageCell[][];
   stats: { aCells: number; bCells: number; bothCells: number; coveredPct: number; bothWinProb: number };
   isConditional: boolean; // میکس دو بازی: متغیر روی بازی دوم است — پوشش روی این بازی مشروط به پایه
+  /** v5.0 — تیپ شامل بازار خارج ماتریس (کرنر/کارت/نیمه اول) است — پوشش تخمینی */
+  hasOffMatrixLegs: boolean;
+}
+
+interface CoverageStructure {
+  baseKey: string;
+  varAKey: string;
+  varBKey: string;
+  varAMatchId: string;
+  varBMatchId: string;
+  legsA?: string[];
+  legsB?: string[];
 }
 
 /**
  * ساخت گرید پوشش برای زوج تیپ:
  * - بیلدر تک‌بازی: هر دو متغیر روی همین بازی → رنگ‌بندی کامل (آبی/سبز/طلایی)
  * - میکس دو بازی: فقط پایه مشترک روی این بازی رنگ می‌شود (پوشش مشروط)
+ * - v5.0 زوج متعامد (legsA/legsB): هر سلول با همه شرط‌های همان تیپ سنجیده می‌شود؛
+ *   پایه‌های خارج ماتریس (کرنر/کارت/نیمه اول) در رنگ‌بندی لحاظ نمی‌شوند و با برچسب
+ *   «پوشش تخمینی» اعلام می‌گردند.
  */
 export function coverageGrid(
-  structure: { baseKey: string; varAKey: string; varBKey: string; varAMatchId: string; varBMatchId: string },
+  structure: CoverageStructure,
   primaryMatchId: string,
   matrix: number[][]
 ): CoverageMap {
@@ -80,22 +112,48 @@ export function coverageGrid(
   let bothWinProb = 0;
 
   const isConditional = structure.varAMatchId !== primaryMatchId || structure.varBMatchId !== primaryMatchId;
+  const legsA = structure.legsA && structure.legsA.length > 0 ? structure.legsA : null;
+  const legsB = structure.legsB && structure.legsB.length > 0 ? structure.legsB : null;
+  const hasOffMatrixLegs = Boolean(
+    legsA?.some(isOffMatrixKey) || legsB?.some(isOffMatrixKey)
+  );
+  const matA = legsA ? legsA.filter((k) => !isOffMatrixKey(k)) : null;
+  const matB = legsB ? legsB.filter((k) => !isOffMatrixKey(k)) : null;
 
   for (let h = 0; h < n; h++) {
     cells[h] = [];
     for (let a = 0; a < n; a++) {
       const p = matrix[h][a];
-      const base = selectionCoversCell(structure.baseKey, h, a);
       let kind: CoverKind = "NONE";
 
-      if (isConditional) {
+      if (legsA && matA && matB) {
+        // ═══ زوج متعامد v5.0 — بدون پایه مشترک ═══
+        const winsA = matA.length > 0 ? matA.every((k) => selectionCoversCell(k, h, a)) : false;
+        const winsB = matB.length > 0 ? matB.every((k) => selectionCoversCell(k, h, a)) : false;
+        if (winsA && winsB) {
+          kind = "BOTH";
+          bothCells++;
+          bothWinProb += p;
+          covered += p;
+        } else if (winsA) {
+          kind = "A_ONLY";
+          aCells++;
+          covered += p;
+        } else if (winsB) {
+          kind = "B_ONLY";
+          bCells++;
+          covered += p;
+        }
+      } else if (isConditional) {
         // میکس دو بازی: هر دو تیپ پایه مشترک روی این بازی دارند
+        const base = selectionCoversCell(structure.baseKey, h, a);
         kind = base ? "A_ONLY" : "NONE";
         if (base) {
           aCells++;
           covered += p;
         }
       } else {
+        const base = selectionCoversCell(structure.baseKey, h, a);
         const winsA = base && selectionCoversCell(structure.varAKey, h, a);
         const winsB = base && selectionCoversCell(structure.varBKey, h, a);
         if (winsA && winsB) {
@@ -118,6 +176,7 @@ export function coverageGrid(
   }
 
   const totalCells = n * n;
+  void totalCells;
   return {
     cells,
     stats: {
@@ -128,6 +187,7 @@ export function coverageGrid(
       bothWinProb,
     },
     isConditional,
+    hasOffMatrixLegs,
   };
 }
 

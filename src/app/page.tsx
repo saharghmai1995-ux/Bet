@@ -33,7 +33,7 @@ import { BacktestTab } from "@/components/app/backtest-tab";
 import { useQuantStore } from "@/lib/store";
 import { useAutopilot } from "@/lib/use-autopilot";
 import { AutopilotConfigModal } from "@/components/app/autopilot/config-modal";
-import { AutopilotStatusBar } from "@/components/app/autopilot/status-bar";
+import { AutopilotStatusBar, LlmShieldBadge } from "@/components/app/autopilot/status-bar";
 import { FlashcardDeck } from "@/components/app/autopilot/flashcard-deck";
 import { PipelineRadar } from "@/components/app/autopilot/radar";
 import { SmartCartDrawer } from "@/components/app/autopilot/cart-drawer";
@@ -162,11 +162,11 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 فوتبال‌کوانت
                 <Badge className="gap-1 border-violet-500/40 bg-violet-500/15 px-1.5 py-0 text-[9px] text-violet-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v4.0 Live Telemetry
+                  <Sparkles className="size-2.5" /> v5.0 Orthogonal Shield
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                موتور کمّی تمام‌اتوماتیک با دیتای زنده واقعی مسابقات، اخبار و ضرایب
+                موتور کمّی تمام‌اتوماتیک با سپر ضد Rate-Limit، تیپ‌های متعامد ۱۵ بازاره و ضرایب زنده ۴ منبع رایگان
               </p>
             </div>
           </div>
@@ -174,6 +174,9 @@ export default function Home() {
           <div className="flex items-center gap-2">
             {/* نشانگر زنده فید چند-API + دکمه همگام‌سازی */}
             <LiveSyncBadge />
+
+            {/* v5.0 — نشانگر سپر ضد Rate-Limit (در هدر) */}
+            <LlmShieldBadge />
 
             {/* سوییچ دو حالته: Smart Autopilot ↔ Pro Quant Terminal */}
             <div
@@ -348,7 +351,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۴.۰ — فید زنده ESPN/TheSportsDB/Open-Meteo/The Odds API ← اسکن اتوماتیک ← T-60 ← دیکسون-کولز + شین ← مناظره گاو/خرس با اخبار واقعی ← زوج‌تیپ مکمل ← کلِی همزمان ← پوشش زنده
+            فوتبال‌کوانت ۵.۰ — فید زنده ESPN/Polymarket/The Odds API/Odds-API.io ← اسکن اتوماتیک صفر-توکن ← T-60 ← دیکسون-کولز + شین ← موتور متعامد ۱۵ بازاره ← مناظره گاو/خرس (LLM تقاضامحور با کش) ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

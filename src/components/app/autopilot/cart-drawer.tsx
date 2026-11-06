@@ -262,7 +262,10 @@ export function SmartCartDrawer() {
                     dir="rtl"
                     value={telegram}
                     rows={5}
-                    className="h-24 w-full resize-none rounded-lg border border-white/10 bg-black/30 p-2 font-mono text-[10px] leading-4 text-foreground/85"
+                    /* v5.0 — فونت مونواسپیس لاتین گلیف فارسی ندارد (مربع‌های خالی)؛
+                       فونت فارسی Vazirmatn/Tahoma با جهت rtl جایگزین شد */
+                    style={{ fontFamily: "'Vazirmatn', 'Tahoma', 'Segoe UI', system-ui, sans-serif" }}
+                    className="h-24 w-full resize-none rounded-lg border border-white/10 bg-black/30 p-2 text-[10px] leading-4 text-foreground/85"
                     aria-label="خروجی متنی سبد برای تلگرام"
                   />
                 </div>

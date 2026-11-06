@@ -279,13 +279,17 @@ export interface AgentBriefDTO {
   arguments: string[];
   factorDeltas?: { home: number; draw: number; away: number; over25: number };
   confidence: number;
-  source: "LLM" | "ENGINE_FALLBACK";
+  source: "LLM" | "ENGINE_FALLBACK" | "LOCAL_QUANT";
 }
 
 /** پاسخ کامل مناظره چندایجنتی */
 export interface DebateResultDTO {
   success: boolean;
-  source: "LLM" | "ENGINE_FALLBACK";
+  source: "LLM" | "ENGINE_FALLBACK" | "LOCAL_QUANT";
+  /** v5.0 — سپر ضد Rate-Limit: true یعنی درخواست LLM به صف خورد و موتور محلی جایگزین شد */
+  rateLimited?: boolean;
+  /** v5.0 — پیام وضعیت سپر (کش / صف / موتور محلی) */
+  notice?: string | null;
   match: {
     id: string;
     homeTeam: string;
@@ -338,11 +342,14 @@ export interface PortfolioSelectionDTO {
 
 /** ساختار داخلی زوج — کلیدهای پایه/متغیر برای نقشه پوشش و اشکال‌زدایی */
 export interface PairStructureDTO {
-  baseKey: string; // پایه امن (DC_1X | DC_X2)
+  baseKey: string; // پایه امن (DC_1X | DC_X2) — برای زوج متعامد v5.0: "ORTHO"
   varAKey: string; // متغیر تیپ A (O25 | U25 | O15 | U35 | BTTS_Y | BTTS_N | C_O95 | C_U95)
   varBKey: string; // متغیر تیپ B (مقابل متغیر A یا بازار دوگانه)
   varAMatchId: string; // بازی متغیر A (میکس دو بازی = بازی دوم)
   varBMatchId: string;
+  /** v5.0 — زوج متعامد: فهرست کامل شرط‌های تیپ A و B از ۱۵ بازار (بدون پایه مشترک) */
+  legsA?: string[];
+  legsB?: string[];
   /** زوج باندی (خطوط هم‌خانواده با ناحیه طلایی) — O15_U25 یا O25_U35 */
   band: "O15_U25" | "O25_U35" | null;
   /** حاوی خط سینتتیک مبتنی بر مدل (O15/U35 بدون قیمت واقعی بوک‌میکر) */
@@ -369,6 +376,8 @@ export interface PortfolioPairDTO {
   kelly: { fA: number; fB: number; growth: number };
   /** لبه CLV تقریبی نسبت به خط شارپ پیناکل (null = خط سینتتیک/در دسترس نیست) */
   sharpEdgePct: number | null;
+  /** v5.0 — متادیتای الگوی متعامد (روی فلش‌کارت نمایش داده می‌شود) */
+  archetype?: { code: string; name: string; short: string; rationale: string; orthogonalityPct: number; coveragePct: number; overlapPct: number };
   trap: { verdict: "NONE" | "WARNING" | "CRITICAL"; title: string; message: string };
   verdict: string;
 }
@@ -400,6 +409,55 @@ export interface PortfolioResultDTO {
   recommendedId: string | null;
   batchId: string | null;
   bankroll: number;
+}
+
+// ═══════════════════════════════════════════════════════
+// v5.0 — منابع ضرایب رایگان (Free Odds APIs)
+// ═══════════════════════════════════════════════════════
+
+export type OddsSourceKey = "ESPN_CORE" | "POLYMARKET" | "THE_ODDS_API" | "ODDS_API_IO" | "FOOTBALL_DATA";
+
+/** وضعیت سلامت هر منبع ضرایب (مودال API + جدول مقایسه‌ای تب ۲) */
+export interface OddsSourceStatusDTO {
+  key: OddsSourceKey;
+  label: string;
+  ok: boolean;
+  detail: string;
+  latencyMs: number;
+  keyRequired: boolean;
+  keyPresent: boolean;
+  signupUrl: string;
+  docsUrl: string;
+  oddsCount: number;
+}
+
+/** یک سطر جدول مقایسه ضرایب بین منابع */
+export interface OddsComparisonRowDTO {
+  source: string;
+  sourceLabel: string;
+  home: number | null;
+  draw: number | null;
+  away: number | null;
+  note: string;
+}
+
+/** فید واقعی Football-Data.co.uk برای بک‌تست CLV */
+export interface FootballDataDTO {
+  success: boolean;
+  leagueName: string;
+  season: string;
+  rows: {
+    date: string;
+    homeTeam: string;
+    awayTeam: string;
+    fthg: number | null;
+    ftag: number | null;
+    psh: number | null;
+    psd: number | null;
+    psa: number | null;
+    pOver25: number | null;
+    pUnder25: number | null;
+  }[];
 }
 
 /** گزارش شوک T-60 — اعلام ترکیب رسمی و بازمحاسبه قدرت با VAEP/xT */

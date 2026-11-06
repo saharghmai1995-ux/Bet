@@ -3,7 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "فوتبال‌کوانت ۴.۰ | تلهمتری زنده چند-API و موتور کمّی مکمل",
+  title: "فوتبال‌کوانت ۵.۰ | سپر ضد Rate-Limit و تیپ‌های متعامد ۱۵ بازاره",
   description:
     "دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، اسکن خودکار، مناظره گاو/خرس با اخبار واقعی، زوج‌تیپ‌های مکمل با ناحیه طلایی دو-برد، فلش‌کارت‌های سه‌بعدی، کلِی همزمان و پوشش زنده",
   icons: {

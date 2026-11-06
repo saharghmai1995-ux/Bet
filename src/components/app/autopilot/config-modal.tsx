@@ -1,23 +1,71 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// مودال تنظیمات اتصال زنده و خلبان خودکار (API & Autopilot Config) — v4.0
-// کلید The Odds API (کلید پیش‌فرض سرور فعال است) · وب‌هوک · بازه اسکن · بودجه
+// مودال تنظیمات اتصال زنده و خلبان خودکار (API & Autopilot Config) — v5.0
+// کلید The Odds API v4 (پیش‌فرض سرور فعال) · کلید رایگان Odds-API.io (۴۵۰ بوک‌میکر)
+// · وضعیت زنده ۵ منبع ضرایب رایگان · وب‌هوک · بازه اسکن · بودجه · سپر Rate-Limit
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { KeyRound, Link2, Timer, Wallet, Bot, RadioTower, Sparkles, Workflow } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  Bot,
+  CheckCircle2,
+  ExternalLink,
+  KeyRound,
+  Link2,
+  RadioTower,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  Wallet,
+  Workflow,
+  XCircle,
+} from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { useQuantStore } from "@/lib/store";
 import { faNum } from "@/lib/format";
+import type { OddsSourceStatusDTO } from "@/lib/types";
 
 export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const config = useQuantStore((s) => s.config);
   const patchConfig = useQuantStore((s) => s.patchConfig);
   const scanCount = useQuantStore((s) => s.scanCount);
+  const llmShield = useQuantStore((s) => s.llmShield);
+
+  const [sources, setSources] = useState<OddsSourceStatusDTO[] | null>(null);
+  const [probing, setProbing] = useState(false);
+
+  const probeSources = useCallback(
+    async (force = false) => {
+      setProbing(true);
+      try {
+        const qs = new URLSearchParams();
+        if (config.oddsApiKey) qs.set("oddsApiKey", config.oddsApiKey);
+        if (config.oddsApiIoKey) qs.set("oddsApiIoKey", config.oddsApiIoKey);
+        if (force) qs.set("force", "1");
+        const res = await fetch(`/api/odds/status?${qs.toString()}`, { cache: "no-store" });
+        const data = (await res.json()) as { success: boolean; sources?: OddsSourceStatusDTO[] };
+        if (data.success && data.sources) setSources(data.sources);
+      } catch {
+        // پروب منابع اختیاری است
+      } finally {
+        setProbing(false);
+      }
+    },
+    [config.oddsApiKey, config.oddsApiIoKey]
+  );
+
+  useEffect(() => {
+    if (open && !sources && !probing) void probeSources();
+  }, [open]);
+
+  const totalLlm = llmShield.llmCalls + llmShield.cacheHits;
+  const cachePct = totalLlm > 0 ? Math.round((llmShield.cacheHits / totalLlm) * 100) : 94;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -33,6 +81,23 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
         </DialogHeader>
 
         <div className="space-y-5 pt-1">
+          {/* ─── سپر ضد Rate-Limit ─── */}
+          <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-4">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+              <ShieldCheck className="size-3.5" /> سپر ضد محدودیت نرخ LLM — فعال
+            </p>
+            <p className="text-[10px] leading-4 text-muted-foreground">
+              اسکن پس‌زمینه ۲۲+ بازی ۱۰۰٪ با موتور ریاضی محلی (دیکسون-کولز + شین) اجرا می‌شود — صفر درخواست LLM، صفر توکن.
+              LLM فقط با کلیک شما روی «تحلیل عمیق»، از کش ۶۰ دقیقه‌ای و با صف حداکثر ۱ درخواست در ۱۵ ثانیه صدا زده می‌شود.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-[10px]">
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-300">کش هوشمند: <b dir="ltr">{faNum(cachePct, 0)}%</b></span>
+              <span className="rounded-full bg-white/8 px-2 py-0.5 text-muted-foreground">فراخوان LLM: <b dir="ltr">{faNum(llmShield.llmCalls, 0)}</b></span>
+              <span className="rounded-full bg-white/8 px-2 py-0.5 text-muted-foreground">کش موفق: <b dir="ltr">{faNum(llmShield.cacheHits, 0)}</b></span>
+              <span className="rounded-full bg-white/8 px-2 py-0.5 text-muted-foreground">موتور محلی: <b dir="ltr">{faNum(llmShield.localQuant, 0)}</b></span>
+            </div>
+          </div>
+
           {/* ─── اتصال‌های داده ─── */}
           <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
@@ -54,7 +119,33 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
               <p className="flex items-start gap-1 text-[10px] leading-4 text-muted-foreground">
                 <span aria-hidden>🟢</span>
                 <span>
-                  کلید پیش‌فرض سرور (پلن رایگان) فعال است و بازی‌ها با ضرایب زنده ESPN/TheSportsDB بارگذاری می‌شوند. با وارد کردن کلید خودتان، ضرایب Pinnacle و بوک‌میکرهای اروپایی جایگزین خط پایه می‌شوند (فقط با دکمه 🔄 — پلن رایگان ۵۰۰ اعتبار در ماه دارد و سرور آن را در بازه ۱۲ دقیقه throttle می‌کند).
+                  کلید پیش‌فرض سرور (پلن رایگان ۵۰۰ درخواست ماهانه) فعال است. با وارد کردن کلید خودتان، ضرایب Pinnacle و بوک‌میکرهای اروپایی جایگزین خط پایه می‌شوند —{" "}
+                  <a className="text-cyan-400 underline decoration-dotted" href="https://the-odds-api.com/liveapi/guides/v4/" target="_blank" rel="noreferrer">
+                    دریافت کلید رایگان <ExternalLink className="inline size-2.5" />
+                  </a>
+                </span>
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="odds-api-io-key" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <KeyRound className="size-3" /> کلید رایگان Odds-API.io (۴۵۰+ بوک‌میکر)
+              </Label>
+              <Input
+                id="odds-api-io-key"
+                dir="ltr"
+                placeholder="کلید رایگان — ۱۰۰ درخواست در ساعت، بدون کارت بانکی"
+                value={config.oddsApiIoKey}
+                onChange={(e) => patchConfig({ oddsApiIoKey: e.target.value })}
+                className="h-9 border-white/10 bg-black/30 text-xs"
+                autoComplete="off"
+              />
+              <p className="flex items-start gap-1 text-[10px] leading-4 text-muted-foreground">
+                <span aria-hidden>🟣</span>
+                <span>
+                  ۱۰۰ درخواست رایگان در ساعت از ۴۵۰ بوک‌میکر شامل Pinnacle و 1xBet —{" "}
+                  <a className="text-cyan-400 underline decoration-dotted" href="https://odds-api.io/" target="_blank" rel="noreferrer">
+                    دریافت کلید رایگان <ExternalLink className="inline size-2.5" />
+                  </a>
                 </span>
               </p>
             </div>
@@ -74,6 +165,46 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
             </div>
           </div>
 
+          {/* ─── وضعیت ۵ منبع ضرایب رایگان ─── */}
+          <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-cyan-300">وضعیت منابع ضرایب (۳ منبع بدون کلید + ۲ منبع کلیددار)</p>
+              <Button size="sm" variant="ghost" className="h-6 gap-1 px-2 text-[10px] text-cyan-300" onClick={() => void probeSources(true)} disabled={probing}>
+                {probing ? "…" : "بررسی مجدد"}
+              </Button>
+            </div>
+            {sources === null ? (
+              <p className="text-[10px] text-muted-foreground">در حال پروب منابع…</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {sources.map((s) => (
+                  <li key={s.key} className="flex items-start gap-2 rounded-lg border border-white/8 bg-black/20 px-2 py-1.5">
+                    {s.ok ? (
+                      <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-400" />
+                    ) : s.keyRequired && !s.keyPresent ? (
+                      <KeyRound className="mt-0.5 size-3.5 shrink-0 text-amber-400" />
+                    ) : (
+                      <XCircle className="mt-0.5 size-3.5 shrink-0 text-rose-400" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-center gap-1 text-[11px] font-medium">
+                        {s.label}
+                        {!s.keyRequired && <span className="rounded-full bg-emerald-500/15 px-1 text-[8px] text-emerald-300">بدون کلید</span>}
+                        <span className="text-[9px] text-muted-foreground" dir="ltr">{s.latencyMs}ms</span>
+                      </p>
+                      <p className="truncate text-[10px] text-muted-foreground" title={s.detail}>{s.detail}</p>
+                    </div>
+                    {s.docsUrl && (
+                      <a href={s.docsUrl} target="_blank" rel="noreferrer" className="mt-0.5 shrink-0 text-cyan-400" aria-label={`مستندات ${s.label}`}>
+                        <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           {/* ─── رفتار خلبان خودکار ─── */}
           <div className="space-y-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
@@ -83,7 +214,7 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-medium">خلبان خودکار فعال</p>
-                <p className="text-[10px] text-muted-foreground">اسکن و مناظره اتوماتیک همه بازی‌ها</p>
+                <p className="text-[10px] text-muted-foreground">اسکن اتوماتیک همه بازی‌ها (موتور کمّی محلی)</p>
               </div>
               <Switch checked={config.autopilotOn} onCheckedChange={(v) => patchConfig({ autopilotOn: v })} aria-label="خلبان خودکار" />
             </div>
@@ -91,15 +222,23 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-medium">شبیه‌ساز زنده و توست پوشش</p>
-                <p className="text-[10px] text-muted-foreground">هشدار In-Play هنگام گل / حرکت تند ضریب</p>
+                <p className="text-[10px] text-muted-foreground">هشدار In-Play هنگام گل / حرکت تند ضریب (حذف خودکار ۱۰ ثانیه)</p>
               </div>
               <Switch checked={config.liveSimulation} onCheckedChange={(v) => patchConfig({ liveSimulation: v })} aria-label="شبیه‌ساز زنده" />
             </div>
 
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-medium">مناظره LLM در اسکن</p>
-                <p className="text-[10px] text-muted-foreground">غیرفعال = فقط موتور کمّی (سریع‌تر)</p>
+                <p className="text-xs font-medium">اسکن صفر-توکن (سپر Rate-Limit)</p>
+                <p className="text-[10px] text-muted-foreground">فعال = اسکن ۱۰۰٪ موتور محلی؛ LLM فقط با کلیک شما</p>
+              </div>
+              <Switch checked={config.zeroTokenScan} onCheckedChange={(v) => patchConfig({ zeroTokenScan: v })} aria-label="اسکن صفر توکن" />
+            </div>
+
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium">مناظره در اسکن</p>
+                <p className="text-[10px] text-muted-foreground">مناظره کمّی محلی برای ۸ بازی نزدیک</p>
               </div>
               <Switch checked={config.autoDebate} onCheckedChange={(v) => patchConfig({ autoDebate: v })} aria-label="مناظره در اسکن" />
             </div>

@@ -29,7 +29,8 @@ import { faNum } from "@/lib/format";
 import { PulseFlow, type FlowNode } from "@/components/app/fx/pulse-flow";
 import { AnimNum } from "@/components/app/fx/anim-num";
 import { useQuantStore } from "@/lib/store";
-import type { AgentBriefDTO, DebateResultDTO } from "@/lib/types";
+import { getCachedDebate, setCachedDebate } from "@/lib/llm-cache";
+import type { AgentBriefDTO, DebateResultDTO, OddsComparisonRowDTO, OddsSourceStatusDTO } from "@/lib/types";
 
 const STEPS = [
   "۱. اجرای موتور دیکسون-کولز + تعدیل باخبری/سفر/داور...",
@@ -94,6 +95,11 @@ function AgentCard({ agent }: { agent: AgentBriefDTO }) {
               موتور کمّی (fallback)
             </Badge>
           )}
+          {agent.source === "LOCAL_QUANT" && (
+            <Badge variant="outline" className="border-emerald-500/40 text-[10px] text-emerald-300">
+              ⚡ موتور کمّی محلی (صفر توکن)
+            </Badge>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -129,6 +135,35 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
   const [stepIdx, setStepIdx] = useState(0);
   const [result, setResult] = useState<DebateResultDTO | null>(null);
   const stepTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const bumpLlmShield = useQuantStore((s) => s.bumpLlmShield);
+  const config = useQuantStore((s) => s.config);
+
+  // ─── v5.0 — وضعیت منابع ضرایب + جدول مقایسه (تب ۲) ───
+  const [oddsSources, setOddsSources] = useState<OddsSourceStatusDTO[] | null>(null);
+  const [comparison, setComparison] = useState<OddsComparisonRowDTO[]>([]);
+
+  useEffect(() => {
+    if (!selectedMatchId) return;
+    let dead = false;
+    void (async () => {
+      try {
+        const qs = new URLSearchParams({ matchId: selectedMatchId });
+        if (config.oddsApiKey) qs.set("oddsApiKey", config.oddsApiKey);
+        if (config.oddsApiIoKey) qs.set("oddsApiIoKey", config.oddsApiIoKey);
+        const res = await fetch(`/api/odds/status?${qs.toString()}`, { cache: "no-store" });
+        const data = (await res.json()) as { success: boolean; sources?: OddsSourceStatusDTO[]; comparison?: OddsComparisonRowDTO[] };
+        if (!dead && data.success) {
+          setOddsSources(data.sources ?? null);
+          setComparison(data.comparison ?? []);
+        }
+      } catch {
+        // جدول مقایسه اختیاری است
+      }
+    })();
+    return () => {
+      dead = true;
+    };
+  }, [selectedMatchId, config.oddsApiKey, config.oddsApiIoKey]);
 
   // اگر مناظره کش‌شده برای بازی انتخابی هست، نمایش بده
   useEffect(() => {
@@ -143,41 +178,77 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
     };
   }, []);
 
-  const runDebate = useCallback(async () => {
-    if (!selectedMatchId || running) return;
-    setRunning(true);
-    setStepIdx(0);
-    stepTimer.current = setInterval(() => {
-      setStepIdx((i) => Math.min(i + 1, STEPS.length - 1));
-    }, 2600);
+  /**
+   * v5.0 — اجرای مناظره در دو حالت:
+   *  LOCAL_QUANT (پیش‌فرض): موتور ریاضی محلی — صفر توکن، صفر LLM
+   *  LLM: فراخوان تقاضامحور کاربر — کش ۶۰ دقیقه‌ای + صف ۱۵ ثانیه‌ای سرور
+   */
+  const runDebate = useCallback(
+    async (mode: "LOCAL_QUANT" | "LLM" = "LOCAL_QUANT") => {
+      if (!selectedMatchId || running) return;
+      setRunning(true);
+      setStepIdx(0);
+      stepTimer.current = setInterval(() => {
+        setStepIdx((i) => Math.min(i + 1, STEPS.length - 1));
+      }, mode === "LLM" ? 4200 : 700);
 
-    try {
-      const res = await fetch("/api/agent/debate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId: selectedMatchId }),
-      });
-      const data = (await res.json()) as DebateResultDTO & { error?: string };
-      if (data.success) {
-        setResult(data);
-        onDebated(data);
-        if (data.source === "ENGINE_FALLBACK") {
-          toast.warning("پاسخ LLM معتبر نبود — مناظره با موتور کمّی بازسازی شد (fallback)");
+      try {
+        if (mode === "LLM") {
+          // ۱) کش هوشمند با اثر انگشت λ — پاسخ بدون توکن
+          const lambdaHome = debates[selectedMatchId]?.quantitative.lambdaHome ?? enginePub?.lambdaHome ?? 1.35;
+          const cached = getCachedDebate(selectedMatchId, lambdaHome);
+          if (cached) {
+            setResult(cached.result);
+            onDebated(cached.result);
+            bumpLlmShield("cacheHits");
+            toast.success("⚡ بارگذاری از کش هوشمند (صرفه‌جویی در نرخ API)", {
+              description: "پاسخ LLM این بازی در ۶۰ دقیقه اخیر قبلاً گرفته شده — برای اجرای مجدد LLM یک ساعت صبر کنید یا λ را از تب ۶ تغییر دهید",
+            });
+            return;
+          }
+          bumpLlmShield("llmCalls");
         } else {
-          toast.success("مناظره کامل شد و قاضی رأی نهایی را صادر کرد", {
-            description: "حکم قاضی به تب ۳ (پرتفوی مکمل) منتقل شد",
-          });
+          bumpLlmShield("localQuant");
         }
-      } else {
-        toast.error(data.error ?? "خطا در اجرای مناظره");
+
+        const res = await fetch("/api/agent/debate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ matchId: selectedMatchId, mode }),
+        });
+        const data = (await res.json()) as DebateResultDTO & { error?: string };
+        if (data.success) {
+          setResult(data);
+          onDebated(data);
+          setCachedDebate(selectedMatchId, data.quantitative.lambdaHome, data);
+          if (data.rateLimited) {
+            bumpLlmShield("rateLimited");
+            toast.warning("⚠️ صف Rate-Limit — نتیجه موتور کمّی محلی نمایش داده شد", {
+              description: data.notice ?? "حداکثر ۱ درخواست LLM در هر ۱۵ ثانیه مجاز است",
+            });
+          } else if (data.source === "LLM") {
+            toast.success("مناظره LLM کامل شد و قاضی رأی نهایی را صادر کرد", {
+              description: "پاسخ در کش ۶۰ دقیقه‌ای localStorage ذخیره شد — حکم در پنجره ±۸٪ مرجع کمّی قفل است",
+            });
+          } else if (data.source === "LOCAL_QUANT") {
+            toast.success("⚡ مناظره با موتور کمّی محلی کامل شد (صفر توکن)", {
+              description: "برای تحلیل عمیق‌تر، دکمه 🧠 تحلیل عمیق LLM را بزنید",
+            });
+          } else {
+            toast.warning("پاسخ LLM معتبر نبود — مناظره با موتور کمّی بازسازی شد (fallback)");
+          }
+        } else {
+          toast.error(data.error ?? "خطا در اجرای مناظره");
+        }
+      } catch {
+        toast.error("ارتباط با سرور برقرار نشد");
+      } finally {
+        if (stepTimer.current) clearInterval(stepTimer.current);
+        setRunning(false);
       }
-    } catch {
-      toast.error("ارتباط با سرور برقرار نشد");
-    } finally {
-      if (stepTimer.current) clearInterval(stepTimer.current);
-      setRunning(false);
-    }
-  }, [selectedMatchId, running, onDebated]);
+    },
+    [selectedMatchId, running, onDebated, debates, enginePub, bumpLlmShield]
+  );
 
   const q = result?.quantitative;
   const f = result?.final;
@@ -232,12 +303,23 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
             </SelectContent>
           </Select>
           <Button
-            onClick={runDebate}
+            onClick={() => void runDebate("LOCAL_QUANT")}
             disabled={running || !selectedMatchId}
             className="gap-2 bg-emerald-600 text-white hover:bg-emerald-500"
+            aria-label="اجرای مناظره با موتور کمّی محلی بدون مصرف توکن"
           >
             {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-            {running ? "در حال مناظره..." : "اجرای مناظره"}
+            {running ? "در حال مناظره..." : "⚡ اجرای مناظره (موتور محلی — صفر توکن)"}
+          </Button>
+          <Button
+            onClick={() => void runDebate("LLM")}
+            disabled={running || !selectedMatchId}
+            variant="outline"
+            className="gap-2 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/10"
+            aria-label="تحلیل عمیق LLM برای این بازی — فقط با تقاضای کاربر"
+          >
+            <BrainCircuit className="size-4" />
+            🧠 تحلیل عمیق LLM برای این بازی
           </Button>
           {result && !running && (
             <Badge variant="outline" className="w-fit gap-1.5 border-emerald-500/40 text-[11px] text-emerald-400">
@@ -368,9 +450,17 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
                     اطمینان نهایی: <span dir="ltr" className="tabular-nums">{Math.round(f.confidence * 100)}</span>٪
                   </Badge>
                   <Badge variant="outline" className="text-[11px]">
-                    منبع: {result.source === "LLM" ? "مناظره LLM" : "موتور کمّی (fallback)"}
+                    منبع: {result.source === "LLM" ? "مناظره LLM" : result.source === "LOCAL_QUANT" ? "موتور کمّی محلی (صفر توکن)" : "موتور کمّی (fallback)"}
                   </Badge>
+                  {result.rateLimited && (
+                    <Badge variant="outline" className="border-amber-500/50 text-[10px] text-amber-300">
+                      ⚠️ صف Rate-Limit فعال شد
+                    </Badge>
+                  )}
                 </div>
+                {result.notice && (
+                  <p className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[10px] leading-4 text-muted-foreground">{result.notice}</p>
+                )}
                 {f.calibrationApplied && (
                   <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5">
                     <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-amber-400" />
@@ -470,6 +560,77 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
           </Card>
         </div>
       )}
+
+      {/* ═══ v5.0 — مقایسه ضرایب زنده ۵ منبع رایگان + وضعیت منابع (همیشه برای بازی فعال) ═══ */}
+      <Card className="glass">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Link2 className="size-4 text-emerald-400" />
+            مقایسه ضرایب زنده ۵ منبع رایگان — ESPN Core · Polymarket · The Odds API · Odds-API.io · مدل
+          </CardTitle>
+          <CardDescription className="text-xs">
+            ضرایب American بوک‌میکرهای ESPN به اعشاری تبدیل شده؛ Polymarket ضریب بدون کارمزد بازار آزاد است — بهترین مرجع برای کشف +EV
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* وضعیت منابع */}
+          {oddsSources && (
+            <div className="flex flex-wrap gap-1.5">
+              {oddsSources.map((s) => (
+                <span
+                  key={s.key}
+                  className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${
+                    s.ok ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-white/10 bg-white/[0.03] text-muted-foreground"
+                  }`}
+                  title={`${s.detail} · ${s.latencyMs}ms`}
+                >
+                  <span className={`size-1.5 rounded-full ${s.ok ? "bg-emerald-400" : "bg-zinc-500"}`} />
+                  {s.label}
+                </span>
+              ))}
+            </div>
+          )}
+          {comparison.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow className="border-white/8 hover:bg-transparent">
+                  <TableHead className="text-xs">منبع</TableHead>
+                  <TableHead className="text-xs">میزبان</TableHead>
+                  <TableHead className="text-xs">مساوی</TableHead>
+                  <TableHead className="text-xs">میهمان</TableHead>
+                  <TableHead className="text-xs">حاشیه 1X2</TableHead>
+                  <TableHead className="text-xs">توضیح</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {comparison.map((row) => {
+                  const margin =
+                    row.home && row.draw && row.away
+                      ? (1 / row.home + 1 / row.draw + 1 / row.away - 1) * 100
+                      : null;
+                  const isModel = row.source === "MODEL_FAIR";
+                  return (
+                    <TableRow key={row.source} className={isModel ? "border-cyan-500/20 bg-cyan-500/5" : "border-white/6"}>
+                      <TableCell className="text-xs font-medium">{row.sourceLabel}</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{row.home?.toFixed(2) ?? "—"}</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{row.draw?.toFixed(2) ?? "—"}</TableCell>
+                      <TableCell className="font-num text-xs" dir="ltr">{row.away?.toFixed(2) ?? "—"}</TableCell>
+                      <TableCell className={`font-num text-xs ${margin !== null && margin < 2 ? "text-emerald-300" : margin !== null && margin > 7 ? "text-rose-300" : ""}`} dir="ltr">
+                        {margin !== null ? `${margin.toFixed(1)}%` : "—"}
+                      </TableCell>
+                      <TableCell className="max-w-[220px] truncate text-[10px] text-muted-foreground" title={row.note}>{row.note}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          ) : (
+            <p className="text-[10px] text-muted-foreground">
+              برای بازی فعال هنوز ضرایب چندمنبعه یافت نشد — ESPN Core و Polymarket فقط رویدادهای دارای پوشش را برمی‌گردانند.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {!result && !running && (
         <Card className="glass border-dashed">

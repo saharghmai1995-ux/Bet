@@ -6,6 +6,7 @@
 
 import ZAI from "z-ai-web-dev-sdk";
 import { z } from "zod";
+import { runWithLlmSlot, RateLimitedError } from "@/lib/server/llm-limiter";
 
 const BriefSchema = z.object({
   thesis: z.string(),
@@ -78,21 +79,14 @@ function stripJson(raw: string): string {
   return s;
 }
 
-// ─── صف سراسری LLM با فاصله‌گذاری + backoff ضد 429 (v4.0 — اسکن‌های حجیم فید زنده) ───
-let llmChain: Promise<unknown> = Promise.resolve();
-const LLM_MIN_GAP_MS = 1300;
-
-function llmSlot<T>(fn: () => Promise<T>): Promise<T> {
-  const run = llmChain.then(fn, fn);
-  llmChain = run.catch(() => undefined);
-  return run;
-}
+// ─── سپر ضد 429 (v5.0): صف سراسری با فاصله حداقل ۱۵ ثانیه بین درخواست‌های LLM ───
+// اسکن پس‌زمینه اصلاً به این مسیر نمی‌آید (موتور کمّی محلی)؛ فقط فراخوان دستی کاربر.
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 async function callLlm(system: string, user: string): Promise<string | null> {
-  return llmSlot(async () => {
-    for (let attempt = 0; attempt < 3; attempt++) {
+  return runWithLlmSlot(async () => {
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const zai = await ZAI.create();
         const completion = await zai.chat.completions.create({
@@ -106,10 +100,12 @@ async function callLlm(system: string, user: string): Promise<string | null> {
         return content && content.trim().length > 0 ? content : null;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("429") && attempt < 2) {
-          await sleep(3500 * (attempt + 1));
+        if (msg.includes("429") && attempt < 1) {
+          await sleep(4000);
           continue;
         }
+        // 429 پایدار = RateLimitedError تا فراخوان به موتور کمّی محلی fallback کند
+        if (msg.includes("429")) throw new RateLimitedError(15_000);
         console.error("Debate LLM call failed:", err);
         return null;
       }
@@ -153,10 +149,15 @@ factorDeltas: پیشنهاد جابه‌جایی احتمال نسبت به خر
   const user = `${contextBlock(c)}
 
 قوی‌ترین پرونده را به نفع سناریوی صعودی (برد میزبان / بازی پرگل) بساز. اگر داده‌ها علیه توست، بهترین چرخش ممکن را پیدا کن.`;
-  const raw = await callLlm(system, user);
-  if (!raw) return { ...fallbackBrief(c, "BULL"), fallback: true };
-  const parsed = BriefSchema.safeParse(JSON.parse(stripJson(raw)));
-  return parsed.success ? parsed.data : { ...fallbackBrief(c, "BULL"), fallback: true };
+  try {
+    const raw = await callLlm(system, user);
+    if (!raw) return { ...fallbackBrief(c, "BULL"), fallback: true };
+    const parsed = BriefSchema.safeParse(JSON.parse(stripJson(raw)));
+    return parsed.success ? parsed.data : { ...fallbackBrief(c, "BULL"), fallback: true };
+  } catch (err) {
+    if (err instanceof RateLimitedError) throw err; // v5.0 — صف پر: به موتور محلی منتقل شود
+    return { ...fallbackBrief(c, "BULL"), fallback: true };
+  }
 }
 
 export async function runBearAgent(c: DebateContext): Promise<Brief> {
@@ -166,10 +167,15 @@ export async function runBearAgent(c: DebateContext): Promise<Brief> {
   const user = `${contextBlock(c)}
 
 قوی‌ترین پرونده را علیه سناریوی صعودی بساز؛ مساوی و بازی بسته را جدی بگیر.`;
-  const raw = await callLlm(system, user);
-  if (!raw) return { ...fallbackBrief(c, "BEAR"), fallback: true };
-  const parsed = BriefSchema.safeParse(JSON.parse(stripJson(raw)));
-  return parsed.success ? parsed.data : { ...fallbackBrief(c, "BEAR"), fallback: true };
+  try {
+    const raw = await callLlm(system, user);
+    if (!raw) return { ...fallbackBrief(c, "BEAR"), fallback: true };
+    const parsed = BriefSchema.safeParse(JSON.parse(stripJson(raw)));
+    return parsed.success ? parsed.data : { ...fallbackBrief(c, "BEAR"), fallback: true };
+  } catch (err) {
+    if (err instanceof RateLimitedError) throw err;
+    return { ...fallbackBrief(c, "BEAR"), fallback: true };
+  }
 }
 
 export async function runJudgeAgent(
@@ -196,10 +202,15 @@ ${bull.arguments.map((a) => "- " + a).join("\n")}
 ${bear.arguments.map((a) => "- " + a).join("\n")}
 
 حالا حکم نهایی را با توزیع احتمال اصلاح‌شده صادر کن.`;
-  const raw = await callLlm(system, user);
-  if (!raw) return null;
-  const parsed = JudgeSchema.safeParse(JSON.parse(stripJson(raw)));
-  return parsed.success ? parsed.data : null;
+  try {
+    const raw = await callLlm(system, user);
+    if (!raw) return null;
+    const parsed = JudgeSchema.safeParse(JSON.parse(stripJson(raw)));
+    return parsed.success ? parsed.data : null;
+  } catch (err) {
+    if (err instanceof RateLimitedError) throw err;
+    return null;
+  }
 }
 
 // ─── fallback قطعی وقتی LLM در دسترس نیست ───

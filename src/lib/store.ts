@@ -118,6 +118,12 @@ interface AppState {
   liveSyncing: boolean;
   patchLiveFeed: (feed: LiveFeedDTO | null) => void;
   setLiveSyncing: (v: boolean) => void;
+
+  // ═══════════ v5.0 — سپر ضد Rate-Limit ═══════════
+
+  /** شمارنده مصرف LLM و کش هوشمند — برای نشانگر سپر در هدر */
+  llmShield: { llmCalls: number; cacheHits: number; localQuant: number; rateLimited: number };
+  bumpLlmShield: (k: "llmCalls" | "cacheHits" | "localQuant" | "rateLimited") => void;
 }
 
 export const useQuantStore = create<AppState>()(
@@ -224,9 +230,14 @@ export const useQuantStore = create<AppState>()(
       liveSyncing: false,
       patchLiveFeed: (feed) => set({ liveFeed: feed }),
       setLiveSyncing: (v) => set({ liveSyncing: v }),
+
+      // ═══════════ v5.0 ═══════════
+      llmShield: { llmCalls: 0, cacheHits: 0, localQuant: 0, rateLimited: 0 },
+      bumpLlmShield: (k) =>
+        set((st) => ({ llmShield: { ...st.llmShield, [k]: st.llmShield[k] + 1 } })),
     }),
     {
-      name: "football-quant-v3",
+      name: "football-quant-v5",
       storage: createJSONStorage(() => localStorage),
       // فقط کانفیگ و سبد پایدار می‌مانند — داده‌های زنده سرورمحورند
       partialize: (st) => ({ config: st.config, cart: st.cart, bankroll: st.bankroll }),

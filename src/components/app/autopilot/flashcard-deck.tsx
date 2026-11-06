@@ -1,18 +1,23 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// دک فلش‌کارت‌های تیپ آماده (3D Flashcard Deck) — v3.0
+// دک فلش‌کارت‌های تیپ آماده (3D Flashcard Deck) — v5.0
 // دو نما: کاروسل ۳بعدی با کلیدهای جهت‌نما ↔ گرید وال | فیلترهای سریع
+// v5.0: سوییچر ۵ الگوی متعامد + تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه +
+// صف ۱۵ ثانیه‌ای) + دکمه «تحلیل عمیق ۳ بازی برتر +EV»
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Grid3X3, Layers, Sparkles, TriangleAlert, Wallet } from "lucide-react";
+import { BrainCircuit, ChevronLeft, ChevronRight, Grid3X3, Layers, Loader2, Sparkles, TriangleAlert, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuantStore } from "@/lib/store";
-import { useFlashcards } from "@/lib/autopilot-derive";
-import { FlashCard } from "./flash-card";
+import { buildFlashcard, useFlashcards } from "@/lib/autopilot-derive";
+import { FlashCard, type DeepLlmState } from "./flash-card";
 import { faNum } from "@/lib/format";
+import { getCachedDebate, setCachedDebate } from "@/lib/llm-cache";
+import type { DebateResultDTO, PortfolioPairDTO } from "@/lib/types";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 type FilterKey = "ALL" | "PROFIT15" | "RISK10" | "DOUBLE";
@@ -23,6 +28,16 @@ const FILTERS: { key: FilterKey; label: string; icon: typeof Layers }[] = [
   { key: "RISK10", label: "ریسک باخت همزمان زیر ۱۰٪", icon: TriangleAlert },
   { key: "DOUBLE", label: "فرصت‌های Double-Win", icon: Sparkles },
 ];
+
+/** فاصله حداقل بین درخواست‌های LLM در اجرای توالی ۳ بازی برتر (سپر سمت کلاینت) */
+const LLM_GAP_MS = 15_000;
+
+interface OrthoState {
+  pairs: PortfolioPairDTO[];
+  idx: number;
+  loading: boolean;
+  loaded: boolean;
+}
 
 export function FlashcardDeck({
   compact = false,
@@ -38,11 +53,19 @@ export function FlashcardDeck({
   const toggleCart = useQuantStore((s) => s.toggleCart);
   const scanning = useQuantStore((s) => s.scanning);
   const matchesCount = useQuantStore((s) => s.matches.length);
+  const autopilot = useQuantStore((s) => s.autopilot);
+  const bumpLlmShield = useQuantStore((s) => s.bumpLlmShield);
 
   const [view, setView] = useState<"carousel" | "grid">(defaultView);
   const [filter, setFilter] = useState<FilterKey>("ALL");
   const [index, setIndex] = useState(0);
   const activeMatchId = useQuantStore((s) => s.activeMatchId);
+
+  // ═══ v5.0 — سوییچر الگوهای متعامد ═══
+  const [ortho, setOrtho] = useState<Record<string, OrthoState>>({});
+  // ═══ v5.0 — وضعیت تحلیل عمیق LLM هر بازی ═══
+  const [deepLlm, setDeepLlm] = useState<Record<string, DeepLlmState>>({});
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   const filtered = useMemo(() => {
     switch (filter) {
@@ -67,6 +90,142 @@ export function FlashcardDeck({
     [cards]
   );
 
+  /** نمای نهایی هر کارت: اگر کاربر الگو عوض کرده، زوج متعامد جایگزین می‌شود */
+  const viewOf = useCallback(
+    (base: (typeof cards)[number]) => {
+      const st = ortho[base.match.id];
+      if (!st || st.idx === 0 || !st.pairs[st.idx]) return base;
+      const pair = st.pairs[st.idx];
+      const ap = autopilot[base.match.id];
+      return buildFlashcard(base.match, pair, ap?.debate ?? null, ap?.lineup ?? null, ap?.portfolio ?? null);
+    },
+    [ortho, autopilot]
+  );
+
+  const fetchArchetypes = useCallback(async (matchId: string): Promise<PortfolioPairDTO[]> => {
+    const res = await fetch("/api/agent/orthogonal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matchId }),
+    });
+    const data = (await res.json()) as { success: boolean; pairs?: PortfolioPairDTO[] };
+    return data.success && data.pairs ? data.pairs : [];
+  }, []);
+
+  const switchArchetype = useCallback(
+    async (matchId: string) => {
+      const cur = ortho[matchId];
+      if (cur?.loading) return;
+      if (cur?.loaded && cur.pairs.length > 0) {
+        setOrtho((m) => ({ ...m, [matchId]: { ...cur, idx: (cur.idx + 1) % cur.pairs.length } }));
+        return;
+      }
+      setOrtho((m) => ({ ...m, [matchId]: { pairs: [], idx: 0, loading: true, loaded: false } }));
+      try {
+        const pairs = await fetchArchetypes(matchId);
+        if (pairs.length === 0) {
+          toast.error("الگوی متعامد برای این بازی ساخته نشد");
+          setOrtho((m) => ({ ...m, [matchId]: { pairs: [], idx: 0, loading: false, loaded: true } }));
+          return;
+        }
+        // پیشنهاد رسمی (الگوی اول) از قبل روی کارت است — اولین کلیک مستقیم به الگوی دوم می‌رود
+        const startIdx = pairs.length > 1 ? 1 : 0;
+        setOrtho((m) => ({ ...m, [matchId]: { pairs, idx: startIdx, loading: false, loaded: true } }));
+        toast.success(`۵ الگوی متعامد از ۱۵ بازار ساخته شد — الگوی «${pairs[startIdx].archetype?.short ?? ""}» فعال شد`, {
+          description: "با دکمه «الگوی بعدی» بین ۵ روایت متضاد همان بازی سوییچ کنید",
+        });
+      } catch {
+        toast.error("خطا در ساخت الگوهای متعامد");
+        setOrtho((m) => ({ ...m, [matchId]: { pairs: [], idx: 0, loading: false, loaded: true } }));
+      }
+    },
+    [ortho, fetchArchetypes]
+  );
+
+  // ═══ v5.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه‌ای + صف سرور ۱۵ ثانیه‌ای) ═══
+  const deepLlmFor = useCallback(
+    async (matchId: string, lambdaHome: number, silent = false): Promise<boolean> => {
+      if (deepLlm[matchId] === "RUNNING") return false;
+      // ۱) کش هوشمند با اثر انگشت λ — اگر معتبر، صفر توکن
+      const cached = getCachedDebate(matchId, lambdaHome);
+      if (cached) {
+        const store = useQuantStore.getState();
+        store.setDebate(matchId, cached.result);
+        store.patchAutopilot(matchId, { debate: cached.result });
+        bumpLlmShield("cacheHits");
+        setDeepLlm((m) => ({ ...m, [matchId]: "CACHED" }));
+        if (!silent) {
+          toast.success("⚡ بارگذاری از کش هوشمند (صرفه‌جویی در نرخ API)", {
+            description: "پاسخ LLM این بازی با همان امید گل در ۶۰ دقیقه اخیر قبلاً گرفته شده است",
+          });
+        }
+        return true;
+      }
+      // ۲) فراخوان LLM فقط با تقاضای کاربر — سرور صف ۱۵ ثانیه‌ای دارد
+      setDeepLlm((m) => ({ ...m, [matchId]: "RUNNING" }));
+      try {
+        const res = await fetch("/api/agent/debate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ matchId, mode: "LLM" }),
+        });
+        const data = (await res.json()) as DebateResultDTO & { error?: string };
+        if (!data.success) throw new Error(data.error ?? "LLM failed");
+        const store = useQuantStore.getState();
+        store.setDebate(matchId, data);
+        store.patchAutopilot(matchId, { debate: data });
+        setCachedDebate(matchId, lambdaHome, data);
+        if (data.rateLimited) {
+          bumpLlmShield("rateLimited");
+          setDeepLlm((m) => ({ ...m, [matchId]: "RATELIMITED" }));
+          toast.warning("⚠️ صف Rate-Limit — نتیجه موتور کمّی محلی نمایش داده شد", {
+            description: data.notice ?? "حداکثر ۱ درخواست LLM در هر ۱۵ ثانیه مجاز است",
+          });
+          return false;
+        }
+        bumpLlmShield("llmCalls");
+        setDeepLlm((m) => ({ ...m, [matchId]: "IDLE" }));
+        if (!silent) {
+          toast.success("🧠 تحلیل عمیق LLM کامل شد و در کش ۶۰ دقیقه‌ای ذخیره شد", {
+            description: "حکم قاضی LLM در پنجره ±۸ واحد درصدی مرجع کمّی قفل شده است",
+          });
+        }
+        return true;
+      } catch {
+        bumpLlmShield("llmCalls");
+        setDeepLlm((m) => ({ ...m, [matchId]: "IDLE" }));
+        if (!silent) toast.error("تحلیل عمیق LLM ناموفق بود — موتور کمّی محلی معتبر است");
+        return false;
+      }
+    },
+    [deepLlm, bumpLlmShield]
+  );
+
+  // ─── تحلیل عمیق ۳ بازی برتر +EV با فاصله ۱۵ ثانیه ───
+  const runTop3DeepLlm = useCallback(async () => {
+    if (bulkRunning) return;
+    const top3 = [...cards].sort((a, b) => b.pair.selectionA.evPct - a.pair.selectionA.evPct).slice(0, 3);
+    if (top3.length === 0) return;
+    setBulkRunning(true);
+    try {
+      for (let i = 0; i < top3.length; i++) {
+        const c = top3[i];
+        if (i > 0) {
+          toast.info(`⏳ سپر Rate-Limit: ${LLM_GAP_MS / 1000} ثانیه صبر برای بازی بعدی (${i}/${top3.length - 1})`, {
+            description: `${c.match.homeTeam} - ${c.match.awayTeam}`,
+          });
+          await new Promise((r) => setTimeout(r, LLM_GAP_MS));
+        }
+        await deepLlmFor(c.match.id, c.lambdaHome, true);
+      }
+      toast.success("🧠 تحلیل عمیق ۳ بازی برتر +EV کامل شد", {
+        description: "نتایج در کش ۶۰ دقیقه‌ای localStorage ذخیره شدند — اسکن پس‌زمینه همچنان صفر توکن است",
+      });
+    } finally {
+      setBulkRunning(false);
+    }
+  }, [bulkRunning, cards, deepLlmFor]);
+
   // ایندکس امن بدون افکت — هنگام رندر نرمال می‌شود
   const safeIndex = filtered.length === 0 ? 0 : index % filtered.length;
   let effectiveIndex = safeIndex;
@@ -82,7 +241,7 @@ export function FlashcardDeck({
       effectiveIndex = wi;
     }
   }
-  const activeKey = filtered.length > 0 ? filtered[effectiveIndex].key : "";
+  const activeKey = filtered.length > 0 ? viewOf(filtered[effectiveIndex]).key : "";
 
   const go = useCallback(
     (dir: 1 | -1) => setIndex((i) => (filtered.length === 0 ? 0 : (i + dir + filtered.length) % filtered.length)),
@@ -117,27 +276,43 @@ export function FlashcardDeck({
             </span>
           )}
         </h2>
-        <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist" aria-label="نمای دک فلش‌کارت">
-          <Button
-            size="sm"
-            variant="ghost"
-            role="tab"
-            aria-selected={view === "carousel"}
-            className={cn("h-7 gap-1 px-2 text-[11px]", view === "carousel" && "bg-emerald-500/15 text-emerald-300")}
-            onClick={() => setView("carousel")}
-          >
-            <Layers className="size-3.5" /> ورق زدن تکی
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            role="tab"
-            aria-selected={view === "grid"}
-            className={cn("h-7 gap-1 px-2 text-[11px]", view === "grid" && "bg-emerald-500/15 text-emerald-300")}
-            onClick={() => setView("grid")}
-          >
-            <Grid3X3 className="size-3.5" /> گرید وال
-          </Button>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* v5.0 — تحلیل عمیق ۳ بازی برتر +EV (فقط تقاضای کاربر، با فاصله ۱۵ ثانیه) */}
+          {cards.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 border-cyan-500/40 bg-cyan-500/5 px-2 text-[10px] text-cyan-300 hover:bg-cyan-500/15 sm:text-[11px]"
+              onClick={runTop3DeepLlm}
+              disabled={bulkRunning}
+              aria-label="تحلیل عمیق LLM برای ۳ بازی برتر دارای بالاترین ارزش"
+            >
+              {bulkRunning ? <Loader2 className="size-3 animate-spin" /> : <BrainCircuit className="size-3" />}
+              🧠 تحلیل عمیق ۳ بازی برتر +EV
+            </Button>
+          )}
+          <div className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist" aria-label="نمای دک فلش‌کارت">
+            <Button
+              size="sm"
+              variant="ghost"
+              role="tab"
+              aria-selected={view === "carousel"}
+              className={cn("h-7 gap-1 px-2 text-[11px]", view === "carousel" && "bg-emerald-500/15 text-emerald-300")}
+              onClick={() => setView("carousel")}
+            >
+              <Layers className="size-3.5" /> ورق زدن تکی
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              role="tab"
+              aria-selected={view === "grid"}
+              className={cn("h-7 gap-1 px-2 text-[11px]", view === "grid" && "bg-emerald-500/15 text-emerald-300")}
+              onClick={() => setView("grid")}
+            >
+              <Grid3X3 className="size-3.5" /> گرید وال
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -177,7 +352,7 @@ export function FlashcardDeck({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                خلبان خودکار در حال اسکن و ساخت زوج‌تیپ‌های مکمل است…
+                خلبان خودکار در حال اسکن با موتور کمّی محلی (صفر توکن) و ساخت زوج‌تیپ‌های متعامد است…
               </p>
               <div className="grid w-full max-w-md grid-cols-3 gap-2" aria-hidden>
                 {[0, 1, 2].map((i) => (
@@ -201,10 +376,15 @@ export function FlashcardDeck({
               {activeKey && (
                 <FlashCard
                   key={activeKey}
-                  view={filtered[effectiveIndex]}
+                  view={viewOf(filtered[effectiveIndex])}
                   inCart={cart.includes(activeKey)}
                   onToggleCart={() => toggleCart(activeKey)}
                   compact={compact}
+                  onSwitchArchetype={() => void switchArchetype(filtered[effectiveIndex].match.id)}
+                  archetypeLoading={ortho[filtered[effectiveIndex].match.id]?.loading ?? false}
+                  hasArchetypes
+                  onDeepLlm={() => void deepLlmFor(filtered[effectiveIndex].match.id, filtered[effectiveIndex].lambdaHome)}
+                  deepLlmState={deepLlm[filtered[effectiveIndex].match.id] ?? "IDLE"}
                 />
               )}
             </div>
@@ -233,15 +413,23 @@ export function FlashcardDeck({
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((c) => (
-            <FlashCard
-              key={c.key}
-              view={c}
-              inCart={cart.includes(c.key)}
-              onToggleCart={() => toggleCart(c.key)}
-              compact={compact}
-            />
-          ))}
+          {filtered.map((c) => {
+            const v = viewOf(c);
+            return (
+              <FlashCard
+                key={c.key}
+                view={v}
+                inCart={cart.includes(v.key)}
+                onToggleCart={() => toggleCart(v.key)}
+                compact={compact}
+                onSwitchArchetype={() => void switchArchetype(c.match.id)}
+                archetypeLoading={ortho[c.match.id]?.loading ?? false}
+                hasArchetypes
+                onDeepLlm={() => void deepLlmFor(c.match.id, c.lambdaHome)}
+                deepLlmState={deepLlm[c.match.id] ?? "IDLE"}
+              />
+            );
+          })}
         </div>
       )}
     </section>

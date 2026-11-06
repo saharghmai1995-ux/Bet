@@ -244,10 +244,13 @@ function resolveOdds(ev: LiveMatchEvent, oddsEv: OddsApiEvent | null, probs: Ret
   // ─── ۲) خط پایه ESPN (معمولاً DraftKings) ───
   if (ev.espnOdds && ev.espnOdds.home && ev.espnOdds.draw && ev.espnOdds.away) {
     const o = ev.espnOdds;
+    const h = o.home as number;
+    const d2 = o.draw as number;
+    const a2 = o.away as number;
     return {
-      oddsHome: o.home,
-      oddsDraw: o.draw,
-      oddsAway: o.away,
+      oddsHome: h,
+      oddsDraw: d2,
+      oddsAway: a2,
       oddsOver25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
       oddsUnder25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
       odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
@@ -256,11 +259,11 @@ function resolveOdds(ev: LiveMatchEvent, oddsEv: OddsApiEvent | null, probs: Ret
         {
           bookmaker: "SOFT_A",
           bookmakerLabel: `${o.provider} (ESPN)`,
-          home: o.home,
-          draw: o.draw,
-          away: o.away,
-          over25: o.over25,
-          under25: o.under25,
+          home: h,
+          draw: d2,
+          away: a2,
+          over25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
+          under25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
         },
       ],
     };
@@ -461,7 +464,7 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     // را با ضرایب مدل جایگزین کند (فقط ضرایب کهنه‌تر از ۶ ساعت بازمحاسبه می‌شوند)
     const existing = await db.match.findUnique({
       where: { externalId: ev.externalId },
-      select: { id: true, oddsSource: true, oddsHome: true, oddsDraw: true, oddsAway: true, oddsOver25: true, oddsUnder25: true, odds1x: true, oddsFetchedAt: true },
+      select: { id: true, status: true, oddsSource: true, oddsHome: true, oddsDraw: true, oddsAway: true, oddsOver25: true, oddsUnder25: true, odds1x: true, oddsFetchedAt: true },
     });
     const keepLiveOdds =
       odds.source === "ENGINE" &&
