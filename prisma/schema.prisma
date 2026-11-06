@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// سیستم هوشمند پیش‌بینی و مدیریت سرمایه فوتبال
+// Multi-Agent Football Prediction & Capital Management System
+// ─────────────────────────────────────────────────────────────
+
+// لایه ۱: پایپ‌لاین گردآوری داده‌ها (Data Ingestion)
+model Match {
+  id        String   @id @default(cuid())
+  league    String
+  homeTeam  String
+  awayTeam  String
+  kickoff   DateTime
+
+  // قدرت تیم‌ها (ضریب نسبت به میانگین لیگ)
+  homeAttack  Float
+  homeDefense Float
+  awayAttack  Float
+  awayDefense Float
+
+  // امتیاز الو
+  homeElo Int
+  awayElo Int
+
+  // آمار پیشرفته
+  homeXg        Float
+  awayXg        Float
+  homePpda      Float
+  awayPpda      Float
+  homeFieldTilt Float
+  awayFieldTilt Float
+  homeForm      String // مثال: WWDLW
+  awayForm      String
+
+  // شرایط باخبری و محیطی
+  weather        String
+  homeAbsence    String?
+  awayAbsence    String?
+  homeMotivation String?
+  awayMotivation String?
+  tacticalNote   String?
+
+  // ضرایب بازار (با حاشیه سود سایت)
+  oddsHome   Float
+  oddsDraw   Float
+  oddsAway   Float
+  oddsOver25 Float
+  oddsUnder25 Float
+  odds1x     Float
+
+  // UPCOMING | ANALYZED
+  status    String         @default("UPCOMING")
+  analyses  AgentAnalysis[]
+  createdAt DateTime       @default(now())
+}
+
+// خروجی ایجنت تحلیلگر ارشد (لایه ۳)
+model AgentAnalysis {
+  id      String @id @default(cuid())
+  match   Match  @relation(fields: [matchId], references: [id])
+  matchId String
+
+  // خروجی کامل ایجنت (JSON)
+  payload String
+
+  // احتمالات واقعی (True Probability) — نرمال‌شده
+  pHome   Float
+  pDraw   Float
+  pAway   Float
+  pOver25 Float
+  pUnder25 Float
+
+  // ارزش مورد انتظار (+EV) در برابر ضرایب سایت
+  evHome   Float
+  evDraw   Float
+  evAway   Float
+  evOver25 Float
+  evUnder25 Float
+
+  bestMarket String
+  bestEv     Float
+  confidence Float
+  riskFlag   String @default("OK")
+  source     String @default("LLM") // LLM | ENGINE_FALLBACK
+  createdAt  DateTime @default(now())
+}
+
+// خروجی ایجنت مدیریت ریسک (لایه ۴): تیپ‌های مکمل
+model TipSet {
+  id       String  @id @default(cuid())
+  label    String // تیپ A (بازی باز) / تیپ B (بازی بسته)
+  strategy String // EQUAL_PROFIT | HEDGE_MAIN | AGGRESSIVE
+  mode     String // SINGLE_MATCH | TWO_MATCH
+  legs     String // JSON: [{match, market, selection, odds, prob}]
+  totalOdds Float
+  stake     Float
+  potentialReturn Float
+  guaranteedProfit Float
+  coverageProb    Float
+  coverageOk      Boolean
+  trapRisk        String // NONE | WARNING | CRITICAL
+  batchId  String?
+  notes    String?
+  createdAt DateTime @default(now())
+}
+
+// لایه ۵: بک‌تستینگ و ارزیابی CLV
+model BacktestRun {
+  id        String @id @default(cuid())
+  totalBets Int
+  wins      Int
+  roi       Float
+  strikeRate Float
+  avgClv    Float
+  positiveClvRate Float
+  maxDrawdown Float
+  finalEquity Float
+  equityCurve String // JSON: [{i, equity, clv}]
+  config     String // JSON config
+  createdAt  DateTime @default(now())
+}
