@@ -223,8 +223,8 @@ export function BacktestTab() {
                 مقایسه ضریب لحظه انتخاب با ضریب پایانی — شاخص Sharp Money
               </CardDescription>
             </CardHeader>
-            <CardContent className="max-h-72 overflow-y-auto">
-              <table className="w-full text-xs">
+            <CardContent className="max-h-72 overflow-auto">
+              <table className="w-full min-w-[640px] text-xs">
                 <thead className="sticky top-0 bg-card">
                   <tr className="border-b border-border text-muted-foreground">
                     <th className="py-2 text-right font-medium">#</th>
