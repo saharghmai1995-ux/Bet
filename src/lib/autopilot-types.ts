@@ -96,7 +96,7 @@ export interface FlashcardView {
   isArchetype?: boolean;
 }
 
-/** رویداد زنده برای توست پوشش In-Play */
+/** رویداد زنده برای توست پوشش In-Play — v6.1: منبع واقعی ESPN یا تست دستی موتور */
 export interface LiveEventToast {
   id: string;
   matchId: string;
@@ -111,4 +111,8 @@ export interface LiveEventToast {
   message: string;
   createdAt: number;
   actioned: boolean;
+  /** v6.1 — REAL: فید زنده ESPN (گل/کارت واقعی) · MANUAL: تست دستی موتور در تب زنده */
+  source?: "REAL" | "MANUAL";
+  /** v6.1 — ساعت خام رسمی ESPN مثل «45'+2'» (فقط منبع REAL) */
+  clock?: string;
 }

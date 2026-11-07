@@ -66,13 +66,21 @@ function ToastItem({ id }: { id: string }) {
 
       <div className="p-2">
         <div className="flex items-start justify-between gap-1.5">
-          <p className="flex items-center gap-1 text-[10px] font-bold">
+          <p className="flex flex-wrap items-center gap-1 text-[10px] font-bold">
             <span className="relative flex size-1.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500/60" />
               <span className="relative inline-flex size-1.5 rounded-full bg-rose-500" />
             </span>
             <Radio className="size-3 text-rose-400" />
-            {EVENT_LABELS[toast.event] ?? "رویداد زنده"} · دقیقه <b dir="ltr">{faNum(toast.minute, 0)}</b>
+            {EVENT_LABELS[toast.event] ?? "رویداد زنده"}
+            {/* v6.1 — نشان منبع دیتا: ESPN زنده (واقعی) یا تست دستی موتور */}
+            {toast.source === "MANUAL" ? (
+              <span className="rounded bg-amber-500/15 px-1 py-px text-[8px] font-bold text-amber-300">تست دستی</span>
+            ) : (
+              <span className="rounded bg-emerald-500/15 px-1 py-px text-[8px] font-bold text-emerald-300" title="فید رسمی ESPN">ESPN زنده</span>
+            )}
+            · دقیقه <b dir="ltr">{faNum(toast.minute, 0)}</b>
+            {toast.clock && <span className="font-num text-[9px] text-muted-foreground" dir="ltr">({toast.clock})</span>}
             <span className="font-num text-muted-foreground" dir="ltr">({toast.score})</span>
           </p>
           <div className="flex shrink-0 items-center gap-1">

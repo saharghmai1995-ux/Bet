@@ -22,6 +22,15 @@ export async function POST(req: NextRequest) {
     const selection: PreSelection = ["HOME", "AWAY", "O25"].includes(body.selection) ? body.selection : "HOME";
     const preOdds = Math.max(1.01, Number(body.odds) || 2.1);
     const preStake = Math.max(1, Number(body.stake) || 100);
+    // v6.1 — نتیجه واقعی لحظه‌ای ESPN (اختیاری؛ سناریوی فرضی فقط برای تست دستی موتور)
+    const scoreHome =
+      body.scoreHome === undefined || body.scoreHome === null || body.scoreHome === ""
+        ? undefined
+        : Math.max(0, Math.floor(Number(body.scoreHome) || 0));
+    const scoreAway =
+      body.scoreAway === undefined || body.scoreAway === null || body.scoreAway === ""
+        ? undefined
+        : Math.max(0, Math.floor(Number(body.scoreAway) || 0));
 
     const match = await db.match.findUnique({ where: { id: matchId } });
     if (!match) {
@@ -40,6 +49,8 @@ export async function POST(req: NextRequest) {
       preSelection: selection,
       preOdds,
       preStake,
+      scoreHome,
+      scoreAway,
     });
 
     const preLabel = selection === "HOME" ? "برد میزبان" : selection === "AWAY" ? "برد میهمان" : "بالای ۲.۵ گل";

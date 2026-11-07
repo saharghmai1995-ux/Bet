@@ -27,6 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { toast } from "sonner";
 import { faNum, faPct, signed } from "@/lib/format";
 import { TacticalPitch, type PitchNode } from "@/components/app/fx/tactical-pitch";
+import { LiveEspnStrip } from "@/components/app/live-espn-strip";
 import { useQuantStore } from "@/lib/store";
 import type { LineupPlayerDTO, LineupShockDTO, LiveHedgeDTO } from "@/lib/types";
 
@@ -541,9 +542,9 @@ function LiveHedgeCard() {
         const data = (await res.json()) as LiveHedgeDTO & { error?: string };
         if (data.success) {
           setResult(data);
-          toast.success("سناریوی زنده شبیه‌سازی شد — λ با تابع توانی ۰.۸۵ بازمحاسبه شد");
+          toast.success("سناریوی دستی روی موتور اجرا شد — λ با تابع توانی ۰.۸۵ بازمحاسبه شد (تست موتور؛ رصد زنده ESPN جداگانه فعال است)");
         } else {
-          toast.error(data.error ?? "خطا در شبیه‌سازی رویداد زنده");
+          toast.error(data.error ?? "خطا در اجرای سناریوی دستی");
         }
       } catch {
         toast.error("ارتباط با سرور برقرار نشد");
@@ -847,6 +848,7 @@ interface Props {
 export function LiveTab(_props: Props) {
   return (
     <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+      <LiveEspnStrip />
       <LineupShockCard />
       <LiveHedgeCard />
     </div>

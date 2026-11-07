@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// هوک خلبان خودکار (Zero-Touch Autonomous Pipeline) — v3.0
+// هوک خلبان خودکار (Zero-Touch Autonomous Pipeline) — v6.1
 //
 // وظایف:
 //   ۱) اسکن کامل اتوماتیک ۸ بازی بلافاصله پس از بارگذاری صفحه:
@@ -7,7 +7,8 @@
 //      (با استخر همزمانی ۳ بازی موازی)
 //   ۲) اسکن دوره‌ای سبک (Odds & T-60 sweep) با تایمر شمارش معکوس؛
 //      مناظره فقط در تغییر مادی ضرایب/ترکیب دوباره اجرا می‌شود
-//   ۳) شبیه‌ساز رویداد زنده (In-Play) + توست پوشش Live Hedge
+//   ۳) v6.1 — ردیاب رویداد زنده واقعی ESPN (گل/کارت قرمز از فید رسمی؛ صفر شبیه‌سازی)
+//      + توست پوشش Live Hedge با دقیقه/نتیجه/ساعت واقعی ESPN
 //
 // این هوک باید «فقط یک‌بار» در صفحه روت mount شود.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,6 +65,9 @@ export function useAutopilot() {
   const scanningRef = useRef(false);
   const fingerprintRef = useRef<Map<string, string>>(new Map());
   const lastToastRef = useRef<Map<string, number>>(new Map());
+  /** v6.1 — شناسه‌های رویداد واقعی ESPN که قبلاً توست شده‌اند (dedupe کلاینت) */
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
+  const livePollBusyRef = useRef(false);
 
   // ─── خط لوله یک بازی ───
   const scanMatch = useCallback(
@@ -203,85 +207,137 @@ export function useAutopilot() {
     [scanMatch]
   );
 
-  // ─── شبیه‌ساز رویداد زنده + توست پوشش ───
-  const maybeFireLiveEvent = useCallback(async (tick: number) => {
+  // ─── v6.1 — ردیاب رویداد زنده واقعی ESPN + توست پوشش ───
+  // گل‌ها: اختلاف امتیاز اسکوربورد ESPN بین دو پول · کارت قرمز: keyEvents خلاصه ESPN
+  // دقیقه/ساعت/نتیجه: همه واقعی — صفر تاس‌ریزی، صفر hash-roll
+  interface RealLiveEventDTO {
+    eventId: string;
+    type: "GOAL_HOME" | "GOAL_AWAY" | "RED_HOME" | "RED_AWAY";
+    externalId: string;
+    dbMatchId: string | null;
+    leagueName: string;
+    homeTeam: string;
+    awayTeam: string;
+    homeScore: number;
+    awayScore: number;
+    minute: number;
+    clock: string;
+    detectedAt: number;
+  }
+
+  const pollLiveEvents = useCallback(async () => {
+    if (livePollBusyRef.current) return;
     const store = useQuantStore.getState();
     const cfg = store.config;
     if (!cfg.liveSimulation || !cfg.autopilotOn) return;
     if (typeof document !== "undefined" && document.hidden) return;
 
-    const candidates = store.matches.filter((m) => {
-      const st = store.autopilot[m.id];
-      return st?.portfolio?.pairs?.length;
-    });
-    if (candidates.length === 0) return;
+    livePollBusyRef.current = true;
+    try {
+      const res = await fetch("/api/live/events", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { success: boolean; events?: RealLiveEventDTO[] };
+      if (!data.success || !data.events?.length) return;
 
-    // دو بازی «زنده» هر تیک — چرخش قطعی برای پوشش همه بازی‌ها
-    const picks: MatchDTO[] = [];
-    for (let i = 0; i < Math.min(2, candidates.length); i++) {
-      picks.push(candidates[(tick * 2 + i) % candidates.length]);
-    }
+      for (const ev of data.events) {
+        if (seenEventIdsRef.current.has(ev.eventId)) continue;
+        seenEventIdsRef.current.add(ev.eventId);
 
-    for (const m of picks) {
-      const roll = hashStr(`${m.id}:${tick}:live`) % 100;
-      if (roll >= 12) continue; // ~۱۲٪ شانس رویداد در هر تیک برای بازی زنده (واقع‌گرایانه)
-      const event: LiveEventToast["event"] = roll < 5 ? "GOAL_HOME" : roll < 10 ? "GOAL_AWAY" : roll < 11 ? "RED_HOME" : "RED_AWAY";
+        // محدودسازی نرخ: حداکثر یک توست برای هر بازی در ۶۰ ثانیه
+        const last = lastToastRef.current.get(ev.externalId) ?? 0;
+        if (Date.now() - last < 60_000) continue;
 
-      // محدودسازی نرخ: حداکثر یک توست برای هر بازی در ۹۰ ثانیه
-      const last = lastToastRef.current.get(m.id) ?? 0;
-      if (Date.now() - last < 90_000) continue;
+        const matches = useQuantStore.getState().matches;
+        const m =
+          matches.find((x) => x.id === ev.dbMatchId) ??
+          matches.find((x) => (x as { externalId?: string | null }).externalId === ev.externalId);
 
-      const st = useQuantStore.getState().autopilot[m.id];
-      const pair = st?.portfolio?.pairs.find((p) => p.id === st.portfolio?.recommendedId) ?? st?.portfolio?.pairs[0];
-      if (!pair) continue;
+        const st = m ? useQuantStore.getState().autopilot[m.id] : undefined;
+        const pair = st?.portfolio?.pairs.find((p) => p.id === st.portfolio?.recommendedId) ?? st?.portfolio?.pairs[0];
 
-      const minute = 22 + (hashStr(`${m.id}:${tick}:min`) % 45);
-      const selection = pair.structure.baseKey === "DC_X2" ? "AWAY" : "HOME";
-      const liveSelection = pair.structure.varAKey === "O25" ? "O25" : selection;
+        const matchLabel = `${ev.homeTeam} - ${ev.awayTeam}`;
+        const realScore = `${ev.homeScore}-${ev.awayScore}`;
 
-      try {
-        const result = await postJson<{
-          success: boolean;
-          minute: number;
-          scenarioLabel: string;
-          score: string;
-          preBet: { selection: string; label: string; odds: number; stake: number };
-          hedge: LiveEventToast["hedge"];
-          recommendation: "HEDGE" | "HOLD";
-          message: string;
-        }>("/api/live", {
-          matchId: m.id,
-          minute,
-          event,
-          selection: liveSelection,
-          odds: pair.totalOddsA,
-          stake: Math.max(1, pair.equalProfit.stakeA),
-        });
-        if (!result.success) return;
-        lastToastRef.current.set(m.id, Date.now());
-        const toast: LiveEventToast = {
-          id: `${m.id}:${tick}:${event}`,
-          matchId: m.id,
-          matchLabel: `${m.homeTeam} - ${m.awayTeam}`,
-          minute: result.minute,
-          event,
-          score: result.score,
-          scenarioLabel: result.scenarioLabel,
-          preBet: result.preBet,
-          hedge: result.hedge,
-          recommendation: result.recommendation,
-          message: result.message,
-          createdAt: Date.now(),
-          actioned: false,
-        };
-        useQuantStore.getState().pushLiveToast(toast);
-      } catch {
-        // خطای شبکه — توست بعدی
+        if (m && pair) {
+          // بازی دارای تیپ فعال ← محاسبه واقعی پوشش با نتیجه/دقیقه واقعی ESPN
+          const selection = pair.structure.baseKey === "DC_X2" ? "AWAY" : "HOME";
+          const liveSelection = pair.structure.varAKey === "O25" ? "O25" : selection;
+          try {
+            const result = await postJson<{
+              success: boolean;
+              minute: number;
+              scenarioLabel: string;
+              score: string;
+              preBet: { selection: string; label: string; odds: number; stake: number };
+              hedge: LiveEventToast["hedge"];
+              recommendation: "HEDGE" | "HOLD";
+              message: string;
+            }>("/api/live", {
+              matchId: m.id,
+              minute: ev.minute,
+              event: ev.type,
+              selection: liveSelection,
+              odds: pair.totalOddsA,
+              stake: Math.max(1, pair.equalProfit.stakeA),
+              scoreHome: ev.homeScore,
+              scoreAway: ev.awayScore,
+            });
+            if (!result.success) continue;
+            lastToastRef.current.set(ev.externalId, Date.now());
+            const toast: LiveEventToast = {
+              id: `real:${ev.eventId}`,
+              matchId: m.id,
+              matchLabel,
+              minute: ev.minute,
+              event: ev.type,
+              score: realScore, // نتیجه واقعی ESPN (نه سناریوی فرضی)
+              scenarioLabel: result.scenarioLabel,
+              preBet: result.preBet,
+              hedge: result.hedge,
+              recommendation: result.recommendation,
+              message: result.message,
+              createdAt: Date.now(),
+              actioned: false,
+              source: "REAL",
+              clock: ev.clock,
+            };
+            useQuantStore.getState().pushLiveToast(toast);
+          } catch {
+            // خطای شبکه — رویداد بعدی
+          }
+        } else {
+          // بازی بدون تیپ فعال ← توست اطلاع‌رسانی واقعی (بدون عدد ساختگی پوشش)
+          lastToastRef.current.set(ev.externalId, Date.now());
+          const eventLabel =
+            ev.type === "GOAL_HOME" ? "گل میزبان!" : ev.type === "GOAL_AWAY" ? "گل میهمان!" : ev.type === "RED_HOME" ? "کارت قرمز میزبان!" : "کارت قرمز میهمان!";
+          const toast: LiveEventToast = {
+            id: `real:${ev.eventId}`,
+            matchId: m?.id ?? ev.externalId,
+            matchLabel,
+            minute: ev.minute,
+            event: ev.type,
+            score: realScore,
+            scenarioLabel: `${eventLabel} — ESPN زنده`,
+            preBet: { selection: "—", label: "بدون تیپ فعال", odds: 0, stake: 0 },
+            hedge: null,
+            recommendation: "HOLD",
+            message: `رویداد زنده واقعی ESPN در دقیقه ${ev.minute} — این بازی تیپ پیش‌بازی فعال ندارد؛ برای فعال‌شدن رصد پوشش، از تب پرتفوی زوج‌تیپ بسازید.`,
+            createdAt: Date.now(),
+            actioned: false,
+            source: "REAL",
+            clock: ev.clock,
+          };
+          useQuantStore.getState().pushLiveToast(toast);
+        }
       }
+    } catch {
+      // خطای شبکه — پول بعدی
+    } finally {
+      livePollBusyRef.current = false;
     }
   }, []);
 
-  // ─── چرخه عمر: بارگذاری اولیه + اسکن دوره‌ای + شبیه‌ساز زنده ───
+  // ─── چرخه عمر: بارگذاری اولیه + اسکن دوره‌ای + رصد زنده واقعی ESPN ───
   const bootRef = useRef(false);
   useEffect(() => {
     if (bootRef.current) return;
@@ -297,7 +353,7 @@ export function useAutopilot() {
     return unsub;
   }, [runScan]);
 
-  // تیک یک‌ثانیه‌ای: شمارش معکوس اسکن + شبیه‌ساز زنده
+  // تیک یک‌ثانیه‌ای: شمارش معکوس اسکن
   useEffect(() => {
     const t = setInterval(() => {
       const st = useQuantStore.getState();
@@ -315,14 +371,22 @@ export function useAutopilot() {
     return () => clearInterval(t);
   }, [runScan]);
 
+  // v6.1 — پول دوره‌ای رویداد زنده واقعی ESPN (۲۵ ثانیه؛ فقط تب باز) + پول فوری پس از برگشت به تب
   useEffect(() => {
-    let tick = 0;
     const t = setInterval(() => {
-      tick += 1;
-      void maybeFireLiveEvent(tick);
-    }, 12_000);
-    return () => clearInterval(t);
-  }, [maybeFireLiveEvent]);
+      void pollLiveEvents();
+    }, 25_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void pollLiveEvents();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const warm = setTimeout(() => void pollLiveEvents(), 9_000);
+    return () => {
+      clearInterval(t);
+      clearTimeout(warm);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [pollLiveEvents]);
 
   const scanNow = useCallback(() => {
     void runScan("LIGHT");

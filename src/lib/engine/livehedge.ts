@@ -15,6 +15,10 @@ export interface InPlayInput {
   preSelection: PreSelection;
   preOdds: number;
   preStake: number;
+  // ─── v6.1 — نتیجه واقعی لحظه‌ای از فید ESPN (بعد از رویداد) ───
+  // وقتی ارائه شود، وضعیت بازی واقعی است (نه سناریوی فرضی ۰-۰)
+  scoreHome?: number;
+  scoreAway?: number;
 }
 
 export interface InPlayResult {
@@ -61,11 +65,18 @@ export function inPlayAnalysis(input: InPlayInput): InPlayResult {
   const fracRaw = Math.max(0.03, Math.min(0.95, (90 - minute) / 90));
   const frac = Math.pow(fracRaw, 0.85);
 
-  // نتیجه فعلی بر اساس رویداد
-  let homeGoals = 0;
-  let awayGoals = 0;
-  if (event === "GOAL_HOME") homeGoals = 1;
-  if (event === "GOAL_AWAY") awayGoals = 1;
+  // نتیجه فعلی — v6.1: امتیاز واقعی ESPN در اولویت؛ سناریوی فرضی فقط برای تست دستی موتور
+  let homeGoals: number;
+  let awayGoals: number;
+  if (input.scoreHome !== undefined && input.scoreAway !== undefined && Number.isFinite(input.scoreHome) && Number.isFinite(input.scoreAway)) {
+    homeGoals = Math.max(0, Math.floor(input.scoreHome));
+    awayGoals = Math.max(0, Math.floor(input.scoreAway));
+  } else {
+    homeGoals = 0;
+    awayGoals = 0;
+    if (event === "GOAL_HOME") homeGoals = 1;
+    if (event === "GOAL_AWAY") awayGoals = 1;
+  }
 
   let lamH = input.lambdaHome * frac;
   let lamA = input.lambdaAway * frac;

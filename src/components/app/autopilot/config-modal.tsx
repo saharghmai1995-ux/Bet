@@ -221,10 +221,10 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
 
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-medium">شبیه‌ساز زنده و توست پوشش</p>
-                <p className="text-[10px] text-muted-foreground">هشدار In-Play هنگام گل / حرکت تند ضریب (حذف خودکار ۱۰ ثانیه)</p>
+                <p className="text-xs font-medium">رصد زنده واقعی ESPN + توست پوشش</p>
+                <p className="text-[10px] text-muted-foreground">گل/کارت قرمز از فید رسمی ESPN (بدون شبیه‌سازی) — حذف خودکار ۱۰ ثانیه</p>
               </div>
-              <Switch checked={config.liveSimulation} onCheckedChange={(v) => patchConfig({ liveSimulation: v })} aria-label="شبیه‌ساز زنده" />
+              <Switch checked={config.liveSimulation} onCheckedChange={(v) => patchConfig({ liveSimulation: v })} aria-label="رصد زنده واقعی ESPN" />
             </div>
 
             <div className="flex items-center justify-between gap-3">
