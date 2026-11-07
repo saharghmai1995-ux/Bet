@@ -1,6 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// مشتق‌سازهای خلبان خودکار (Autopilot Derivations) — v3.0
-// ساخت FlashcardView از تلاقی مناظره + پرتفوی + T-60 و حل سبد انتخابی
+// مشتق‌سازهای خلبان خودکار (Autopilot Derivations) — v8.0
+// ساخت FlashcardView از تلاقی مناظره + پرتفوی + T-60 + ایجنت سوپروایزر ارشد
+// v8.0: به‌جای نمایش ۵ الگو و سردرگمی کاربر، «ایجنت سوپروایزر ارشد» از میان
+// کاندیدهای مونت‌کارلو تنها یک «تک‌تیپ طلایی» برای هر بازی انتخاب می‌کند.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -8,20 +10,8 @@
 import { useMemo } from "react";
 import { useQuantStore } from "./store";
 import type { FlashcardView } from "./autopilot-types";
+import { pickCrownPair, type SupervisorDecision } from "./supervisor";
 import type { DebateResultDTO, LineupShockDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "./types";
-
-/** بهترین زوج یک خروجی پرتفوی — v5.0: پرچمدار = زوج متعامد ۱۵ بازاره، سپس باندی دو-برد */
-export function pickBestPair(p: PortfolioResultDTO | null): PortfolioPairDTO | null {
-  if (!p || !p.pairs || p.pairs.length === 0) return null;
-  // ۱) زوج متعامد v5.0 — تیپ A و B هیچ شرط تکراری ندارند (با ریسک معقول)
-  const ortho = p.pairs.find((x) => x.archetype && x.jointStates.bothLose < 0.45);
-  if (ortho) return ortho;
-  // ۲) زوج باندی/دو-برد با حاشیه معتبر (ناحیه طلایی روی فلش‌کارت)
-  const golden = p.pairs.find((x) => x.structure.doubleWin && x.guaranteedMarginPct >= 4);
-  if (golden) return golden;
-  // ۳) پیشنهاد رسمی موتور
-  return p.pairs.find((x) => x.id === p.recommendedId) ?? p.pairs[0];
-}
 
 /** بریدن جمله اول یک استدلال برای نمای خلاصه فلش‌کارت */
 function firstSentence(text: string | null | undefined, maxLen = 130): string {
@@ -32,21 +22,30 @@ function firstSentence(text: string | null | undefined, maxLen = 130): string {
   return clean.length > maxLen ? `${clean.slice(0, maxLen)}…` : clean;
 }
 
-/** ساخت کارت از ورودی‌های خام */
+/** تصمیم سوپروایزر از پرتفوی یک بازی (با در نظر گرفتن حالت اجرایی) */
+export function supervisorFor(portfolio: PortfolioResultDTO | null, executionMode: "DUAL_BOOK" | "SINGLE_BOOK"): SupervisorDecision | null {
+  if (!portfolio?.pairs?.length) return null;
+  return pickCrownPair(portfolio.pairs, executionMode);
+}
+
+/** ساخت کارت از ورودی‌های خام — زوج = تک‌تیپ طلایی سوپروایزر */
 export function buildFlashcard(
   match: MatchDTO,
   pair: PortfolioPairDTO,
   debate: DebateResultDTO | null,
   lineup: LineupShockDTO | null,
-  portfolio: PortfolioResultDTO | null
+  portfolio: PortfolioResultDTO | null,
+  supervisor: SupervisorDecision | null = null
 ): FlashcardView {
   const confidence = debate?.final?.confidence ?? Math.max(pair.selectionA.modelProb, pair.selectionB.modelProb) * 0.9;
   const margin = pair.guaranteedMarginPct;
   const bothLose = pair.jointStates.bothLose;
 
   let trust: FlashcardView["trust"] = { kind: "SILVER", label: "پوشش استاندارد" };
-  if (margin >= 4 && bothLose <= 0.08 && confidence >= 0.72) {
-    trust = { kind: "GOLD", label: "سیگنال طلایی قاضی" };
+  if (supervisor && !supervisor.veto && supervisor.score.score100 >= 80) {
+    trust = { kind: "GOLD", label: `👑 تایید سوپروایزر ${supervisor.score.score100}/۱۰۰` };
+  } else if (supervisor && !supervisor.veto) {
+    trust = { kind: "T60", label: `تایید سوپروایزر ${supervisor.score.score100}/۱۰۰` };
   } else if (lineup?.isShock || match.lineupAnnounced) {
     trust = { kind: "T60", label: "شوک ترکیب T-60" };
   }
@@ -64,30 +63,65 @@ export function buildFlashcard(
     lambdaHome: portfolio?.primary?.lambdaHome ?? 1.35,
     lambdaAway: portfolio?.primary?.lambdaAway ?? 1.25,
     isArchetype: Boolean(pair.archetype),
+    supervisor: supervisor
+      ? {
+          raw: supervisor.score.raw,
+          score100: supervisor.score.score100,
+          veto: supervisor.veto,
+          vetoReason: supervisor.vetoReason,
+          guaranteedProfitPct: supervisor.score.guaranteedProfitPct,
+          doubleWinProbPct: supervisor.score.doubleWinProbPct,
+          jointLossRiskPct: supervisor.score.jointLossRiskPct,
+          executionMode: supervisor.executionMode,
+          rejected: supervisor.rejected,
+        }
+      : null,
   };
 }
 
-/** همه فلش‌کارت‌های آماده (به ترتیب بازی‌ها) */
+/** همه فلش‌کارت‌های آماده — هر بازی فقط و فقط با «تک‌تیپ طلایی سوپروایزر» */
 export function useFlashcards(): FlashcardView[] {
   const matches = useQuantStore((s) => s.matches);
   const autopilot = useQuantStore((s) => s.autopilot);
+  const executionMode = useQuantStore((s) => s.config.executionMode);
   return useMemo(() => {
     const out: FlashcardView[] = [];
     for (const m of matches) {
       const st = autopilot[m.id];
-      if (!st) continue;
-      const pair = pickBestPair(st.portfolio);
-      if (!pair) continue;
-      out.push(buildFlashcard(m, pair, st.debate, st.lineup, st.portfolio));
+      if (!st?.portfolio?.pairs?.length) continue;
+      const sup = supervisorFor(st.portfolio, executionMode);
+      if (!sup) continue;
+      out.push(buildFlashcard(m, sup.crown, st.debate, st.lineup, st.portfolio, sup));
     }
     return out;
-  }, [matches, autopilot]);
+  }, [matches, autopilot, executionMode]);
+}
+
+/** آمار کارایی سوپروایزر برای ویجت هیرو (تایید / وتو) */
+export function useSupervisorStats(): { scanned: number; approved: number; vetoed: number } {
+  const matches = useQuantStore((s) => s.matches);
+  const autopilot = useQuantStore((s) => s.autopilot);
+  const executionMode = useQuantStore((s) => s.config.executionMode);
+  return useMemo(() => {
+    let approved = 0;
+    let vetoed = 0;
+    for (const m of matches) {
+      const st = autopilot[m.id];
+      if (!st?.portfolio?.pairs?.length) continue;
+      const sup = supervisorFor(st.portfolio, executionMode);
+      if (!sup) continue;
+      if (sup.veto) vetoed += 1;
+      else approved += 1;
+    }
+    return { scanned: matches.length, approved, vetoed };
+  }, [matches, autopilot, executionMode]);
 }
 
 /** آیتم‌های سبد انتخابی — حل کلید matchId::pairId به کارت کامل */
 export function useCartItems(): { key: string; view: FlashcardView; pair: PortfolioPairDTO }[] {
   const matches = useQuantStore((s) => s.matches);
   const autopilot = useQuantStore((s) => s.autopilot);
+  const executionMode = useQuantStore((s) => s.config.executionMode);
   const cart = useQuantStore((s) => s.cart);
   return useMemo(() => {
     const out: { key: string; view: FlashcardView; pair: PortfolioPairDTO }[] = [];
@@ -97,15 +131,16 @@ export function useCartItems(): { key: string; view: FlashcardView; pair: Portfo
       const match = matches.find((m) => m.id === matchId);
       const pair = st?.portfolio?.pairs.find((p) => p.id === pairId);
       if (!st || !match || !pair) continue;
-      out.push({ key, pair, view: buildFlashcard(match, pair, st.debate, st.lineup, st.portfolio) });
+      const sup = supervisorFor(st.portfolio, executionMode);
+      out.push({ key, pair, view: buildFlashcard(match, pair, st.debate, st.lineup, st.portfolio, sup) });
     }
     return out;
-  }, [cart, autopilot, matches]);
+  }, [cart, autopilot, matches, executionMode]);
 }
 
 /**
- * خروجی متنی سبد برای تلگرام / برگه‌ساز — v5.0
- * متن استاندارد UTF-8 با نام الگوی متعامد (بدون کاراکتر شکسته)
+ * خروجی متنی سبد برای تلگرام / برگه‌ساز — v8.0
+ * متن استاندارد UTF-8 با امضای سوپروایزر و فرمول صحیح سود خالص واحد
  */
 export function buildTelegramText(
   items: { view: FlashcardView; stakeA: number; stakeB: number; profit: number }[],
@@ -113,13 +148,13 @@ export function buildTelegramText(
   strategyLabel: string
 ): string {
   const lines: string[] = [];
-  lines.push("⚽ فوتبال‌کوانت v6.0 — سبد هوشمند تیپ‌های مکمل متعامد");
+  lines.push("⚽ فوتبال‌کوانت v8.0 Supervisor Quant — سبد تک‌تیپ‌های طلایی مونت‌کارلو");
   lines.push(`💰 کل بودجه روزانه: ${budget} واحد | استراتژی: ${strategyLabel}`);
   lines.push("─────────────────────");
   for (const it of items) {
     const p = it.view.pair;
     lines.push(`🏆 ${it.view.match.homeTeam} مقابل ${it.view.match.awayTeam} (${it.view.match.league})`);
-    if (p.archetype) lines.push(`📐 الگوی متعامد: ${p.archetype.short} — زاویه تمایز ۱۰۰٪`);
+    if (p.archetype) lines.push(`👑 تک‌تیپ تاییدشده سوپروایزر: ${p.archetype.short}${it.view.supervisor ? ` — امتیاز ${it.view.supervisor.score100}/۱۰۰` : ""}`);
     lines.push(`🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${it.stakeA} واحد`);
     lines.push(`🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${it.stakeB} واحد`);
     lines.push(

@@ -8,26 +8,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from "react";
-import { Bot, Pause, Play, RefreshCcw, ScanLine, ShieldCheck, Zap } from "lucide-react";
+import { Bot, Pause, Play, RefreshCcw, ScanLine, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuantStore } from "@/lib/store";
 import { usePipelineProgress } from "@/lib/use-autopilot";
 import { faNum } from "@/lib/format";
 
-/** v5.0 — نشانگر سپر ضد Rate-Limit در هدر: مصرف سهمیه LLM بهینه با کش هوشمند */
+/** v8.0 — نشانگر سپر ضد Rate-Limit در هدر: بج جمع‌وجور با نقطه استاندارد (رفع تداخل) */
 export function LlmShieldBadge() {
   const llmShield = useQuantStore((s) => s.llmShield);
   const totalLlm = llmShield.llmCalls + llmShield.cacheHits;
   const cachePct = totalLlm > 0 ? Math.round((llmShield.cacheHits / totalLlm) * 100) : null;
   return (
     <span
-      className="hidden items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/[0.08] px-2 py-1 text-[10px] font-semibold text-emerald-300 md:inline-flex"
+      className="hidden items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/[0.08] px-2.5 py-1 text-xs font-semibold text-emerald-300 md:inline-flex"
       title="اسکن پس‌زمینه ۱۰۰٪ با موتور کمّی محلی اجرا می‌شود (صفر توکن)؛ LLM فقط با کلیک شما، از کش ۶۰ دقیقه‌ای و با صف ۱۵ ثانیه‌ای"
       role="status"
       aria-label="وضعیت سپر ضد محدودیت نرخ LLM"
     >
-      <ShieldCheck className="size-3.5" />
-      سپر Rate-Limit فعال | مصرف سهمیه LLM: بهینه
+      {/* نقطه کوچک استاندارد — v8.0: w-2 h-2 (رفع باگ تداخل با دکمه‌های زیرهدر) */}
+      <span className="relative inline-flex size-2 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />
+        <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
+      </span>
+      سپر Rate-Limit فعال
       {cachePct !== null ? (
         <span className="font-num" dir="ltr">(کش {faNum(cachePct, 0)}٪)</span>
       ) : (

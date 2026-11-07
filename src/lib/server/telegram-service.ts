@@ -10,7 +10,7 @@
 //      تصویر رختکن بهم‌ریخته برای کارت‌های بازنده (شفافیت کامل).
 //
 // توکن بات: env TELEGRAM_BOT_TOKEN یا ذخیره‌شده در Setting (مودال تنظیمات)
-// کانال: env TELEGRAM_VIP_CHANNEL_ID یا Setting (مثل @my_vip_channel یا -100...)
+// کانال: env TELEGRAM_VIP_CHANNEL_ID یا Setting — v8.0 پیش‌فرض رسمی کانال: @aineobet
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from "@/lib/db";
@@ -21,6 +21,9 @@ import type { IssuedSlip } from "@prisma/client";
 
 const KEY_TOKEN = "telegram_bot_token";
 const KEY_CHANNEL = "telegram_channel_id";
+
+/** v8.0 — کانال پیش‌فرض رسمی کانال VIP کارفرما (در صورت خالی بودن تنظیمات) */
+export const DEFAULT_VIP_CHANNEL = "@aineobet";
 
 export async function getSetting(key: string): Promise<string | null> {
   try {
@@ -42,7 +45,9 @@ async function botToken(): Promise<string | null> {
 
 async function channelId(): Promise<string | null> {
   const stored = await getSetting(KEY_CHANNEL);
-  return (stored && stored.trim()) || process.env.TELEGRAM_VIP_CHANNEL_ID || null;
+  const fromEnv = process.env.TELEGRAM_VIP_CHANNEL_ID;
+  // v8.0 — کانال @aineobet پیش‌فرض رسمی است؛ تنظیم کاربر/env در اولویت است
+  return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_VIP_CHANNEL;
 }
 
 export async function telegramStatus(): Promise<{ configured: boolean; channelSet: boolean }> {

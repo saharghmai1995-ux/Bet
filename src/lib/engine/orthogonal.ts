@@ -527,7 +527,9 @@ export function buildOrthoPortfolioPair(
   const impliedSum = a.impliedSum;
   const stakeA = bankroll * (1 / Math.max(1.01, a.slipA.odds)) / impliedSum;
   const stakeB = bankroll * (1 / Math.max(1.01, a.slipB.odds)) / impliedSum;
-  const profit = bankroll * impliedSum - bankroll;
+  // v8.0 — فرمول صحیح سود خالص واحد: Payout − B که Payout = B / S
+  // (رفع باگ عدد منفی متناقض «+۶.۲٪ (−۶۱.۶)» — S = مجموع معکوس ضرایب)
+  const profit = bankroll / impliedSum - bankroll;
 
   const selectionA: PortfolioSelectionDTO = {
     key: `ORTHO_${a.code}_A`,

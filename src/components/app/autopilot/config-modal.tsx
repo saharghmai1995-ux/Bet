@@ -290,7 +290,7 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
               <Input
                 id="tg-channel-modal"
                 dir="ltr"
-                placeholder="@my_vip_channel یا -1001234567890"
+                placeholder="@aineobet (پیش‌فرض) یا -1001234567890"
                 value={config.telegramChannelId}
                 onChange={(e) => patchConfig({ telegramChannelId: e.target.value })}
                 className="h-9 border-white/10 bg-black/30 text-xs"

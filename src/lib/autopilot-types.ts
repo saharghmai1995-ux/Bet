@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { DebateResultDTO, LineupShockDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "./types";
+import type { ExecutionMode, RejectedCandidate } from "./supervisor";
 
 /** پنج مرحله خط لوله اتوماتیک (رادار تب ۱) */
 export type StageKey = "ingest" | "t60" | "debate" | "pair" | "signal";
@@ -66,6 +67,10 @@ export interface AutopilotConfig {
   /** v7.0 — تلگرام VIP: توکن بات و شناسه کانال (نسخه سروری در Setting ذخیره می‌شود) */
   telegramBotToken: string;
   telegramChannelId: string;
+  /** v8.0 — سوییچ استراتژی اجرایی ضد گوبینگ (Anti-Gubbing Compliance) */
+  executionMode: ExecutionMode;
+  /** v8.0 — شبیه‌ساز سطح اشتراک: Free تار می‌کند / Pro و VIP کاملاً باز */
+  tier: "FREE" | "PRO" | "VIP";
 }
 
 export const DEFAULT_CONFIG: AutopilotConfig = {
@@ -81,6 +86,8 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   zeroTokenScan: true,
   telegramBotToken: "",
   telegramChannelId: "",
+  executionMode: "DUAL_BOOK",
+  tier: "FREE",
 };
 
 /** نمای آماده فلش‌کارت — از تلاقی مناظره + پرتفوی + T-60 ساخته می‌شود */
@@ -97,8 +104,23 @@ export interface FlashcardView {
   /** لامبداهای نهایی موتور برای مینی‌مپ پوشش ۶×۶ */
   lambdaHome: number;
   lambdaAway: number;
-  /** v5.0 — تیپ جاری یک الگوی متعامد است؟ (برای نشانگر و سوییچر) */
+  /** v5.0 — تیپ جاری یک الگوی متعامد است؟ (برای نشانگر) */
   isArchetype?: boolean;
+  /** v8.0 — تصمیم ایجنت سوپروایزر ارشد (تک‌تیپ طلایی مونت‌کارلو) */
+  supervisor: {
+    /** امتیاز خام فرمول سند ارتقا */
+    raw: number;
+    /** نمایش ۰..۱۰۰ (مثل ۹۴/۱۰۰) */
+    score100: number;
+    veto: boolean;
+    vetoReason: string | null;
+    guaranteedProfitPct: number;
+    doubleWinProbPct: number;
+    jointLossRiskPct: number;
+    executionMode: ExecutionMode;
+    /** ۴ الگوی رد‌شده + دلیل — پشت کارت */
+    rejected: RejectedCandidate[];
+  } | null;
 }
 
 /** رویداد زنده برای توست پوشش In-Play — v6.1: منبع واقعی ESPN یا تست دستی موتور */

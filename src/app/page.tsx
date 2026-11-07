@@ -32,6 +32,8 @@ import { LiveTab } from "@/components/app/live-tab";
 import { SettlementTab } from "@/components/app/settlement-tab";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
+import { HeroPerformance } from "@/components/app/hero-performance";
+import { SupervisorRadar } from "@/components/app/fx/supervisor-radar";
 import { useQuantStore } from "@/lib/store";
 import { useAutopilot } from "@/lib/use-autopilot";
 import { AutopilotConfigModal } from "@/components/app/autopilot/config-modal";
@@ -148,6 +150,15 @@ export default function Home() {
     [mode]
   );
 
+  /** v8.0 — دسترسی ۱ کلیکی به جدول SHA-256 کارنامه */
+  const openShaTable = useCallback(() => {
+    if (mode === "PRO") {
+      setTab("settlement");
+    } else {
+      document.getElementById("settlement-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [mode]);
+
   const analyzedCount = Object.keys(debates).length + matches.filter((m) => m.latestAnalysis).length;
   const isSimple = mode === "SIMPLE";
 
@@ -164,14 +175,16 @@ export default function Home() {
             <div>
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 فوتبال‌کوانت
-                <Badge className="gap-1 border-violet-500/40 bg-violet-500/15 px-1.5 py-0 text-[9px] text-violet-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v6.0 Zero-Mock Verified
+                <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
+                  <Sparkles className="size-2.5" /> v8.0 Supervisor Quant
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                موتور کمّی تمام‌اتوماتیک با سپر ضد Rate-Limit، تیپ‌های متعامد ۱۵ بازاره و ضرایب زنده ۴ منبع رایگان
+                ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی — انطباق ضد گوبینگ و ضرایب زنده ۴ منبع رایگان
               </p>
             </div>
+            {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
+            <SupervisorRadar className="hidden sm:inline-flex" />
           </div>
 
           <div className="flex items-center gap-2">
@@ -258,14 +271,17 @@ export default function Home() {
       <TickerBar matches={matches} />
 
       {/* ─── محتوا ─── */}
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-28">
         {isSimple ? (
           /* ═══ حالت ۱: داشبورد سریع و فلش‌کارت‌ها (Smart Autopilot) ═══ */
           <div className="space-y-4">
+            <HeroPerformance onOpenSha={openShaTable} />
             <FlashcardDeck />
             <NewsTickerStrip />
             <PipelineRadar onOpenCard={openFlashcardsFor} />
-            <SettlementTab />
+            <div id="settlement-section">
+              <SettlementTab />
+            </div>
           </div>
         ) : (
           /* ═══ حالت ۲: آزمایشگاه مهندسی کوانت (Pro Quant Terminal) ═══ */
@@ -284,7 +300,9 @@ export default function Home() {
             </TabsList>
 
             <TabsContent value="dashboard">
-              <DashboardTab
+              <div className="space-y-4">
+                <HeroPerformance onOpenSha={openShaTable} />
+                <DashboardTab
                 loading={loading}
                 analyzedCount={analyzedCount}
                 onAnalyze={(matchId) => {
@@ -308,7 +326,8 @@ export default function Home() {
                     defaultView="grid"
                   />
                 }
-              />
+                />
+              </div>
             </TabsContent>
 
             <TabsContent value="flashcards">

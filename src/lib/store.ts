@@ -124,6 +124,12 @@ interface AppState {
   /** شمارنده مصرف LLM و کش هوشمند — برای نشانگر سپر در هدر */
   llmShield: { llmCalls: number; cacheHits: number; localQuant: number; rateLimited: number };
   bumpLlmShield: (k: "llmCalls" | "cacheHits" | "localQuant" | "rateLimited") => void;
+
+  // ═══════════ v8.0 — مودال پرداخت USDT (مشترک بین هیرو و فلش‌کارت‌ها) ═══════════
+
+  /** باز/بسته بودن مودال ارتقا به VIP — حالت گذرا (persist نمی‌شود) */
+  usdtModalOpen: boolean;
+  setUsdtModalOpen: (v: boolean) => void;
 }
 
 export const useQuantStore = create<AppState>()(
@@ -235,6 +241,10 @@ export const useQuantStore = create<AppState>()(
       llmShield: { llmCalls: 0, cacheHits: 0, localQuant: 0, rateLimited: 0 },
       bumpLlmShield: (k) =>
         set((st) => ({ llmShield: { ...st.llmShield, [k]: st.llmShield[k] + 1 } })),
+
+      // ═══════════ v8.0 ═══════════
+      usdtModalOpen: false,
+      setUsdtModalOpen: (v) => set({ usdtModalOpen: v }),
     }),
     {
       name: "football-quant-v5",

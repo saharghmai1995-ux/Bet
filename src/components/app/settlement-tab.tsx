@@ -76,7 +76,8 @@ export function SettlementTab() {
   const [issuing, setIssuing] = useState(false);
   const [savingTg, setSavingTg] = useState(false);
   const [tgToken, setTgToken] = useState(config.telegramBotToken ?? "");
-  const [tgChannel, setTgChannel] = useState(config.telegramChannelId ?? "");
+  // v8.0 — کانال پیش‌فرض رسمی @aineobet (در صورت خالی بودن تنظیمات کاربر)
+  const [tgChannel, setTgChannel] = useState(config.telegramChannelId || "@aineobet");
   const [preview, setPreview] = useState<string | null>(null);
 
   const loadLedger = useCallback(async () => {

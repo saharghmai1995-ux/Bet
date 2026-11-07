@@ -1,10 +1,13 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// فلش‌کارت سه‌بعدی دوطرفه تیپ مکمل (3D Flip Flashcard) — v5.0
-//   روی کارت  : تصمیم‌گیری سریع در ۳ ثانیه — زوج‌تیپ دوقلو + الگوی متعامد + اکشن‌ها
-//   پشت کارت  : خلاصه مناظره ۳ خطی + مینی‌مپ پوشش ۶×۶ + وضعیت T-60 + تحلیل عمیق LLM
-// چرخش با transform-style: preserve-3d و rotateY(180deg)
+// فلش‌کارت سه‌بعدی دوطرفه تیپ مکمل (3D Flip Flashcard) — v8.0 Supervisor Quant
+//   روی کارت  : 👑 تنها «تک‌تیپ طلایی مونت‌کارلو» تاییدشده ایجنت سوپروایزر ارشد
+//               + مهر هولوگرافیک + برچسب بوک‌میکر (ضد گوبینگ) + اکشن‌ها
+//   پشت کارت  : سناریوی تصمیم سوپروایزر (فرمول امتیاز + ۴ الگوی رد‌شده)
+//               + خلاصه مناظره ۳ خطی + مینی‌مپ پوشش ۶×۶ + وضعیت T-60 + ESPN
+// v8.0: حذف «الگوی بعدی» — کاربر فقط یک زوج برنده نهایی می‌بیند.
+// فرمول صحیح سود واحد: netUnits = +(Payout − B) که Payout = B / S
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useMemo, useState } from "react";
@@ -21,7 +24,6 @@ import {
   SearchCheck,
   ShieldAlert,
   ShoppingCart,
-  Shuffle,
   Sparkles,
   Trophy,
   Scale,
@@ -29,10 +31,15 @@ import {
   AlertTriangle,
   Loader2,
   Zap,
+  Crown,
+  Lock,
+  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
 import { faNum, faPct } from "@/lib/format";
+import { useQuantStore } from "@/lib/store";
+import { SupervisorSeal } from "@/components/app/fx/supervisor-seal";
 import type { FlashcardView } from "@/lib/autopilot-types";
 
 const TRUST_STYLES: Record<FlashcardView["trust"]["kind"], string> = {
@@ -47,20 +54,31 @@ const TRUST_ICONS: Record<FlashcardView["trust"]["kind"], typeof Award> = {
   SILVER: BadgeCheck,
 };
 
-/** متن آماده کپی تیپ — v5.0 (متن استاندارد UTF-8، با نام الگوی متعامد) */
+/** متن آماده کپی تیپ — v8.0 (تک‌تیپ طلایی سوپروایزر + فرمول صحیح سود) */
 export function cardCopyText(v: FlashcardView): string {
   const p = v.pair;
-  const head = p.archetype
-    ? `⚽ فوتبال‌کوانت v6.0 — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})
-📐 الگوی متعامد: ${p.archetype.short} — زاویه تمایز ۱۰۰٪ (بدون شرط تکراری)`
-    : `⚽ فوتبال‌کوانت v6.0 — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
+  const sup = v.supervisor;
+  const head = `⚽ فوتبال‌کوانت v8.0 Supervisor Quant — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
+  const crownLine = sup
+    ? `👑 تک‌تیپ تاییدشده سوپروایزر — امتیاز مونت‌کارلو: ${sup.score100}/۱۰۰${p.archetype ? ` (${p.archetype.short})` : ""}`
+    : p.archetype
+      ? `📐 الگو: ${p.archetype.short}`
+      : "";
+  const profitLine =
+    p.guaranteedMarginPct > 0
+      ? `💰 سود تضمینی: +${p.guaranteedMarginPct.toFixed(1)}٪ (+${faNum(p.equalProfit.profit, 1)} واحد سود خالص)`
+      : `🛡️ پوشش بیمه سرمایه — بازگشت وجه در سناریوی پایه`;
   return [
     head,
+    crownLine,
     `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeA, 1)} واحد`,
     `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeB, 1)} واحد`,
+    profitLine,
     `✅ پوشش سناریوها: ${(p.archetype ? p.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100).toFixed(0)}٪ | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
     `⚖️ ${p.verdict}`,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export type DeepLlmState = "IDLE" | "RUNNING" | "CACHED" | "RATELIMITED";
@@ -70,9 +88,6 @@ export function FlashCard({
   inCart,
   onToggleCart,
   compact = false,
-  onSwitchArchetype,
-  archetypeLoading = false,
-  hasArchetypes = false,
   onDeepLlm,
   deepLlmState = "IDLE",
 }: {
@@ -80,16 +95,15 @@ export function FlashCard({
   inCart: boolean;
   onToggleCart: () => void;
   compact?: boolean;
-  /** v5.0 — سوییچ بین ۵ الگوی متعامد برای همین بازی */
-  onSwitchArchetype?: () => void;
-  archetypeLoading?: boolean;
-  hasArchetypes?: boolean;
   /** v5.0 — تحلیل عمیق LLM فقط با تقاضای کاربر (کش ۶۰ دقیقه‌ای + صف ۱۵ ثانیه‌ای) */
   onDeepLlm?: () => void;
   deepLlmState?: DeepLlmState;
 }) {
   const [flipped, setFlipped] = useState(false);
   const [copied, setCopied] = useState(false);
+  const tier = useQuantStore((s) => s.config.tier);
+  const setUsdtModalOpen = useQuantStore((s) => s.setUsdtModalOpen);
+  const isFree = tier === "FREE";
 
   const { pair, match } = view;
   const matrix = useMemo(() => buildScoreMatrix(view.lambdaHome, view.lambdaAway), [view.lambdaHome, view.lambdaAway]);
@@ -112,6 +126,10 @@ export function FlashCard({
   const bothLosePct = pair.jointStates.bothLose * 100;
   const riskTone = bothLosePct < 8 ? "text-emerald-400" : bothLosePct < 15 ? "text-amber-400" : "text-rose-400";
   const riskBar = bothLosePct < 8 ? "bg-emerald-500" : bothLosePct < 15 ? "bg-amber-500" : "bg-rose-500";
+  const sup = view.supervisor;
+  const vetoed = sup?.veto ?? false;
+  const dualBook = (sup?.executionMode ?? "DUAL_BOOK") === "DUAL_BOOK";
+  const insuranceMode = marginPct <= 0; // S ≥ 1 → بدون عدد سود متناقض
 
   return (
     <div className={`[perspective:1400px] ${compact ? "h-[430px]" : "h-[470px]"} w-full`}>
@@ -127,30 +145,31 @@ export function FlashCard({
             setFlipped((f) => !f);
           }
         }}
-        className="glass relative size-full cursor-pointer rounded-2xl border border-white/10 [transform-style:preserve-3d] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+        className={`glass relative size-full cursor-pointer rounded-2xl border [transform-style:preserve-3d] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+          vetoed ? "border-rose-500/30" : "border-white/10"
+        }`}
         style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
-      >        {/* ═══════════ روی کارت ═══════════ */}
+      >
+        {/* ═══════════ روی کارت ═══════════ */}
         <div aria-hidden={flipped} className="absolute inset-0 flex flex-col gap-3 rounded-2xl bg-[rgba(10,14,24,0.92)] p-4 [backface-visibility:hidden]">
-          {/* هدر */}
+          {/* هدر — v8.0: نام کامل تیم‌ها بدون برش (flex-wrap + leading-snug) */}
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
                 <span className="inline-block size-1.5 rounded-full bg-cyan-400" />
                 {match.league}
                 <Clock className="size-3" />
                 <span dir="ltr">{new Date(match.kickoff).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}</span>
               </div>
-              <h3 className="truncate text-sm font-bold sm:text-base">
-                {match.homeTeam} <span className="text-muted-foreground">×</span> {match.awayTeam}
+              <h3 className="text-sm font-bold leading-snug sm:text-base">
+                <span className="break-words">{match.homeTeam}</span> <span className="text-muted-foreground">×</span>{" "}
+                <span className="break-words">{match.awayTeam}</span>
               </h3>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">
               <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${TRUST_STYLES[view.trust.kind]}`}>
                 <TrustIcon className="size-3" />
                 {view.trust.label}
-                {view.trust.kind === "GOLD" && (
-                  <span className="font-num" dir="ltr">| {Math.round(view.confidence * 100)}%</span>
-                )}
               </span>
               {match.weatherAdjusted && (
                 <span
@@ -163,27 +182,23 @@ export function FlashCard({
             </div>
           </div>
 
-          {/* ═══ v5.0 — نوار الگوی متعامد + سوییچر ۵ الگو ═══ */}
-          {pair.archetype && (
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-fuchsia-500/25 bg-fuchsia-500/[0.07] px-2 py-1" onClick={(e) => e.stopPropagation()}>
-              <p className="flex min-w-0 items-center gap-1 text-[10px] font-semibold text-fuchsia-300">
-                <Shuffle className="size-3 shrink-0" />
-                <span className="truncate">{pair.archetype.short}</span>
-                <span className="shrink-0 rounded-full bg-fuchsia-500/20 px-1.5 py-0.5 text-[9px] text-fuchsia-200">۱۰۰٪ متعامد</span>
+          {/* ═══ v8.0 — نوار تک‌تیپ طلایی سوپروایزر (یا وتو) ═══ */}
+          {vetoed ? (
+            <div className="flex items-center gap-2 rounded-lg border border-rose-500/35 bg-rose-500/[0.09] px-2.5 py-1.5">
+              <ShieldAlert className="size-4 shrink-0 text-rose-400" />
+              <p className="text-[10px] font-bold leading-4 text-rose-300">
+                وتو شده توسط ایجنت سوپروایزر: ریسک نامتقارن — عدم پیشنهاد شرط
+                {sup?.vetoReason && <span className="block font-normal text-rose-200/80">{sup.vetoReason}</span>}
               </p>
-              {onSwitchArchetype && hasArchetypes && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-5 shrink-0 gap-1 rounded-full px-1.5 text-[9px] text-fuchsia-300 hover:bg-fuchsia-500/15"
-                  onClick={onSwitchArchetype}
-                  disabled={archetypeLoading}
-                  aria-label="سوییچ بین ۵ الگوی مکمل متعامد برای همین بازی"
-                >
-                  {archetypeLoading ? <Loader2 className="size-3 animate-spin" /> : <Shuffle className="size-3" />}
-                  الگوی بعدی
-                </Button>
-              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-gradient-to-l from-amber-500/[0.12] to-emerald-500/[0.08] px-2.5 py-1.5">
+              <SupervisorSeal size={34} approved score={sup?.score100} />
+              <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[10px] font-bold text-amber-200">
+                <Crown className="size-3.5 shrink-0 text-amber-300" />
+                تنها تیپ تاییدشده سوپروایزر (Monte-Carlo Winner)
+                {pair.archetype && <span className="font-medium text-amber-200/85">· {pair.archetype.short}</span>}
+              </p>
             </div>
           )}
 
@@ -205,43 +220,81 @@ export function FlashCard({
                   <p className="font-num text-base font-bold text-foreground" dir="ltr">{faNum(pair.equalProfit.stakeA, 1)}</p>
                 </div>
               </div>
+              {/* v8.0 — برچسب انطباق ضد گوبینگ */}
+              <p className="mt-1.5 flex items-center gap-1 border-t border-white/10 pt-1 text-[8.5px] font-medium text-sky-200/80">
+                <MapPin className="size-2.5 shrink-0" />
+                {dualBook ? "ثبت در بوک‌میکر اول (سایت A)" : "سایت واحد — برگه ۱ (پایه امن)"}
+              </p>
             </div>
-            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5">
+            <div className="relative overflow-hidden rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5">
               <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold text-emerald-300">
                 <span className="inline-block size-2 rounded-sm bg-emerald-500" />
                 تیپ B مکمل — ضریب ~۳
               </p>
-              <p className="line-clamp-3 min-h-[42px] text-[11px] leading-4 text-foreground/90">{pair.labelB}</p>
+              <p className={`line-clamp-3 min-h-[42px] text-[11px] leading-4 text-foreground/90 ${isFree ? "select-none blur-[5px]" : ""}`} aria-hidden={isFree}>
+                {pair.labelB}
+              </p>
+              {isFree ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setUsdtModalOpen(true);
+                  }}
+                  className="absolute inset-x-2.5 bottom-9 flex items-center justify-center gap-1 rounded-lg border border-emerald-400/40 bg-emerald-500/20 py-1 text-[9px] font-bold text-emerald-200 backdrop-blur-[2px] transition hover:bg-emerald-500/30"
+                  aria-label="تیپ B مخصوص اعضای کانال VIP — باز کردن مودال اشتراک"
+                >
+                  <Lock className="size-3" /> 🔒 مخصوص اعضای کانال VIP
+                </button>
+              ) : null}
               <div className="mt-1.5 flex items-end justify-between gap-1">
                 <div>
                   <p className="text-[9px] text-muted-foreground">ضریب</p>
-                  <p className="font-num text-base font-bold text-emerald-300" dir="ltr">{pair.totalOddsB.toFixed(2)}</p>
+                  <p className={`font-num text-base font-bold text-emerald-300 ${isFree ? "blur-[3px]" : ""}`} dir="ltr" aria-hidden={isFree}>
+                    {pair.totalOddsB.toFixed(2)}
+                  </p>
                 </div>
                 <div className="text-left">
                   <p className="text-[9px] text-muted-foreground">استیک خودکار</p>
-                  <p className="font-num text-base font-bold text-foreground" dir="ltr">{faNum(pair.equalProfit.stakeB, 1)}</p>
+                  <p className={`font-num text-base font-bold text-foreground ${isFree ? "blur-[3px]" : ""}`} dir="ltr" aria-hidden={isFree}>
+                    {faNum(pair.equalProfit.stakeB, 1)}
+                  </p>
                 </div>
               </div>
+              {/* v8.0 — برچسب انطباق ضد گوبینگ */}
+              <p className="mt-1.5 flex items-center gap-1 border-t border-white/10 pt-1 text-[8.5px] font-medium text-emerald-200/80">
+                <MapPin className="size-2.5 shrink-0" />
+                {dualBook ? "ثبت در بوک‌میکر دوم یا صرافی (سایت B / Exchange)" : "سایت واحد — برگه ۲ (میکس امن دو بازی)"}
+              </p>
             </div>
           </div>
 
-          {/* شاخص‌های کلیدی */}
+          {/* شاخص‌های کلیدی — v8.0: فرمول صحیح سود واحد / حالت بیمه سرمایه */}
           <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="flex items-center gap-1 text-muted-foreground">
-                <Banknote className="size-3.5 text-emerald-400" /> سود خالص تضمینی داچینگ
-              </span>
-              <b className="text-emerald-300" dir="ltr">
-                +{faNum(marginPct, 1)}% ({faNum(pair.equalProfit.profit, 1)})
-              </b>
-            </div>
+            {insuranceMode ? (
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <ShieldAlert className="size-3.5 text-amber-400" /> پوشش بیمه سرمایه (S ≥ ۱)
+                </span>
+                <b className="text-amber-300">بازگشت سرمایه در سناریوی پایه — بدون سود تضمینی</b>
+              </div>
+            ) : (
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="flex items-center gap-1 text-muted-foreground">
+                  <Banknote className="size-3.5 text-emerald-400" /> سود خالص تضمینی داچینگ
+                </span>
+                <b className="text-emerald-300" dir="ltr">
+                  +{faNum(marginPct, 1)}٪ (+{faNum(pair.equalProfit.profit, 1)} واحد سود خالص)
+                </b>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-2 text-[11px]">
               <span className="flex items-center gap-1 text-muted-foreground">
                 <ShieldAlert className="size-3.5 text-amber-400" /> ریسک باخت همزمان
               </span>
               <span className="flex items-center gap-1.5">
                 <b className={riskTone} dir="ltr">{faNum(bothLosePct, 1)}%</b>
-                <span className={`text-[9px] ${riskTone}`}>{bothLosePct < 8 ? "بسیار امن" : bothLosePct < 15 ? "قابل قبول" : "پرریسک"}</span>
+                <span className={`text-[9px] ${riskTone}`}>{bothLosePct < 8 ? "بسیار امن" : bothLosePct < 12 ? "قابل قبول" : bothLosePct < 15 ? "مرزی" : "پرریسک"}</span>
               </span>
             </div>
             <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
@@ -299,6 +352,49 @@ export function FlashCard({
             <Scale className="size-4 text-cyan-400" /> کالبدشکافی تحلیلی — {match.homeTeam} × {match.awayTeam}
           </p>
 
+          {/* ═══ v8.0 — سناریوی تصمیم ایجنت سوپروایزر ارشد ═══ */}
+          {sup && (
+            <div className={`rounded-xl border p-2.5 text-[11px] leading-5 ${vetoed ? "border-rose-500/30 bg-rose-500/[0.06]" : "border-amber-500/30 bg-amber-500/[0.06]"}`}>
+              <p className={`mb-1.5 flex items-center gap-1.5 font-bold ${vetoed ? "text-rose-300" : "text-amber-300"}`}>
+                <SupervisorSeal size={26} approved={!vetoed} score={sup.score100} />
+                {vetoed ? "وتو ایجنت سوپروایزر — عدم پیشنهاد شرط" : "چرا سوپروایزر این الگو را برگزید؟"}
+              </p>
+              <p className="text-muted-foreground">
+                از میان <b className="text-foreground">{faNum(sup.rejected.length + 1, 0)}</b> کاندید بازرسی‌شده روی{" "}
+                <b className="font-num text-foreground" dir="ltr">۱۰,۰۰۰</b> شبیه‌سازی مونت‌کارلو، این الگو بالاترین امتیاز کیفیت را گرفت:
+              </p>
+              <p className="mt-1 rounded-lg bg-black/30 p-1.5 text-[10px] leading-4">
+                <b className="text-foreground">UtilityScore</b> = (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۴) + (شانس دو-برد{" "}
+                {faNum(sup.doubleWinProbPct, 1)}٪ × ۱.۸) − (ریسک باخت همزمان {faNum(sup.jointLossRiskPct, 1)}٪ × ۲.۵) ={" "}
+                <b className={vetoed ? "text-rose-300" : "text-emerald-300"} dir="ltr">
+                  {sup.raw}
+                </b>{" "}
+                → امتیاز نهایی <b className="text-amber-300" dir="ltr">{sup.score100}/100</b>
+              </p>
+              {sup.vetoReason && (
+                <p className="mt-1 flex items-start gap-1 text-[10px] text-rose-300">
+                  <AlertTriangle className="mt-0.5 size-3 shrink-0" /> {sup.vetoReason}
+                </p>
+              )}
+              {sup.rejected.length > 0 && (
+                <div className="mt-1.5">
+                  <p className="mb-1 text-[10px] font-semibold text-muted-foreground">الگوهای رد‌شده:</p>
+                  <ul className="space-y-0.5 text-[10px]">
+                    {sup.rejected.slice(0, 6).map((r) => (
+                      <li key={r.id} className="flex items-center justify-between gap-2 rounded-md bg-white/[0.03] px-1.5 py-0.5">
+                        <span className="min-w-0 truncate text-muted-foreground">✕ {r.short}</span>
+                        <span className="flex shrink-0 items-center gap-1">
+                          <b className={r.veto ? "text-rose-300" : "text-zinc-400"} dir="ltr">{r.score100}/100</b>
+                          <span className="text-[9px] text-muted-foreground/70">{r.veto ? "وتو" : "پایین‌تر"}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* v5.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه + صف ۱۵ ثانیه) */}
           {onDeepLlm && (
             <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.06] p-2.5" onClick={(e) => e.stopPropagation()}>
@@ -327,11 +423,11 @@ export function FlashCard({
             </div>
           )}
 
-          {/* v5.0 — روایت الگوی متعامد جاری */}
+          {/* روایت الگوی متعامد جاری */}
           {pair.archetype && (
             <div className="rounded-xl border border-fuchsia-500/25 bg-fuchsia-500/[0.05] p-2.5 text-[11px] leading-5">
               <p className="mb-1 flex items-center gap-1 font-semibold text-fuchsia-300">
-                <Shuffle className="size-3.5" /> {pair.archetype.name}
+                <Sparkles className="size-3.5" /> {pair.archetype.name}
               </p>
               <p className="text-muted-foreground">{pair.archetype.rationale}</p>
               <p className="mt-1 text-[10px] text-fuchsia-200/80">

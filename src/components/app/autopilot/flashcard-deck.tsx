@@ -1,29 +1,32 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// دک فلش‌کارت‌های تیپ آماده (3D Flashcard Deck) — v5.0
-// دو نما: کاروسل ۳بعدی با کلیدهای جهت‌نما ↔ گرید وال | فیلترهای سریع
-// v5.0: سوییچر ۵ الگوی متعامد + تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه +
-// صف ۱۵ ثانیه‌ای) + دکمه «تحلیل عمیق ۳ بازی برتر +EV»
+// دک فلش‌کارت‌های تیپ آماده (3D Flashcard Deck) — v8.0 Supervisor Quant
+// هر بازی فقط و فقط با «تک‌تیپ طلایی مونت‌کارلو» انتخاب‌شده ایجنت سوپروایزر
+// نمایش داده می‌شود (بدون دکمه «الگوی بعدی» — حذف سرگردانی کاربر).
+// + سوییچ استراتژی اجرایی ضد گوبینگ (دو سایت مجزا ↔ سایت واحد امن)
+// + فیلتر پیش‌فرض «فقط بازی‌های تاییدشده سوپروایزر» + نمایش وتو شده‌ها
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrainCircuit, ChevronLeft, ChevronRight, Grid3X3, Layers, Loader2, Sparkles, TriangleAlert, Wallet } from "lucide-react";
+import { BrainCircuit, ChevronLeft, ChevronRight, Grid3X3, Layers, Loader2, ShieldCheck, ShieldOff, Sparkles, Store, TriangleAlert, Users, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuantStore } from "@/lib/store";
-import { buildFlashcard, useFlashcards } from "@/lib/autopilot-derive";
+import { useFlashcards } from "@/lib/autopilot-derive";
 import { FlashCard, type DeepLlmState } from "./flash-card";
 import { faNum } from "@/lib/format";
 import { getCachedDebate, setCachedDebate } from "@/lib/llm-cache";
-import type { DebateResultDTO, PortfolioPairDTO } from "@/lib/types";
+import type { DebateResultDTO } from "@/lib/types";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-type FilterKey = "ALL" | "PROFIT15" | "RISK10" | "DOUBLE";
+type FilterKey = "APPROVED" | "ALL" | "PROFIT15" | "RISK10" | "DOUBLE" | "VETOED";
 
 const FILTERS: { key: FilterKey; label: string; icon: typeof Layers }[] = [
+  { key: "APPROVED", label: "✅ تاییدشده سوپروایزر", icon: ShieldCheck },
   { key: "ALL", label: "همه بازی‌ها", icon: Layers },
+  { key: "VETOED", label: "وتو شده", icon: ShieldOff },
   { key: "PROFIT15", label: "سود تضمینی بالای ۱۵٪", icon: Wallet },
   { key: "RISK10", label: "ریسک باخت همزمان زیر ۱۰٪", icon: TriangleAlert },
   { key: "DOUBLE", label: "فرصت‌های Double-Win", icon: Sparkles },
@@ -31,13 +34,6 @@ const FILTERS: { key: FilterKey; label: string; icon: typeof Layers }[] = [
 
 /** فاصله حداقل بین درخواست‌های LLM در اجرای توالی ۳ بازی برتر (سپر سمت کلاینت) */
 const LLM_GAP_MS = 15_000;
-
-interface OrthoState {
-  pairs: PortfolioPairDTO[];
-  idx: number;
-  loading: boolean;
-  loaded: boolean;
-}
 
 export function FlashcardDeck({
   compact = false,
@@ -55,20 +51,27 @@ export function FlashcardDeck({
   const matchesCount = useQuantStore((s) => s.matches.length);
   const autopilot = useQuantStore((s) => s.autopilot);
   const bumpLlmShield = useQuantStore((s) => s.bumpLlmShield);
+  const executionMode = useQuantStore((s) => s.config.executionMode);
+  const patchConfig = useQuantStore((s) => s.patchConfig);
 
   const [view, setView] = useState<"carousel" | "grid">(defaultView);
-  const [filter, setFilter] = useState<FilterKey>("ALL");
+  const [filter, setFilter] = useState<FilterKey>("APPROVED");
   const [index, setIndex] = useState(0);
   const activeMatchId = useQuantStore((s) => s.activeMatchId);
 
-  // ═══ v5.0 — سوییچر الگوهای متعامد ═══
-  const [ortho, setOrtho] = useState<Record<string, OrthoState>>({});
-  // ═══ v5.0 — وضعیت تحلیل عمیق LLM هر بازی ═══
+  // ═══ v8.0 — وضعیت تحلیل عمیق LLM هر بازی ═══
   const [deepLlm, setDeepLlm] = useState<Record<string, DeepLlmState>>({});
   const [bulkRunning, setBulkRunning] = useState(false);
 
+  const approvedCount = useMemo(() => cards.filter((c) => !(c.supervisor?.veto ?? false)).length, [cards]);
+  const vetoedCount = cards.length - approvedCount;
+
   const filtered = useMemo(() => {
     switch (filter) {
+      case "APPROVED":
+        return cards.filter((c) => !(c.supervisor?.veto ?? false));
+      case "VETOED":
+        return cards.filter((c) => c.supervisor?.veto ?? false);
       case "PROFIT15":
         return cards.filter((c) => c.pair.guaranteedMarginPct > 15);
       case "RISK10":
@@ -82,67 +85,17 @@ export function FlashcardDeck({
 
   const counts = useMemo(
     () => ({
+      APPROVED: approvedCount,
       ALL: cards.length,
+      VETOED: vetoedCount,
       PROFIT15: cards.filter((c) => c.pair.guaranteedMarginPct > 15).length,
       RISK10: cards.filter((c) => c.pair.jointStates.bothLose < 0.1).length,
       DOUBLE: cards.filter((c) => c.pair.structure.doubleWin).length,
     }),
-    [cards]
+    [cards, approvedCount, vetoedCount]
   );
 
-  /** نمای نهایی هر کارت: اگر کاربر الگو عوض کرده، زوج متعامد جایگزین می‌شود */
-  const viewOf = useCallback(
-    (base: (typeof cards)[number]) => {
-      const st = ortho[base.match.id];
-      if (!st || st.idx === 0 || !st.pairs[st.idx]) return base;
-      const pair = st.pairs[st.idx];
-      const ap = autopilot[base.match.id];
-      return buildFlashcard(base.match, pair, ap?.debate ?? null, ap?.lineup ?? null, ap?.portfolio ?? null);
-    },
-    [ortho, autopilot]
-  );
-
-  const fetchArchetypes = useCallback(async (matchId: string): Promise<PortfolioPairDTO[]> => {
-    const res = await fetch("/api/agent/orthogonal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ matchId }),
-    });
-    const data = (await res.json()) as { success: boolean; pairs?: PortfolioPairDTO[] };
-    return data.success && data.pairs ? data.pairs : [];
-  }, []);
-
-  const switchArchetype = useCallback(
-    async (matchId: string) => {
-      const cur = ortho[matchId];
-      if (cur?.loading) return;
-      if (cur?.loaded && cur.pairs.length > 0) {
-        setOrtho((m) => ({ ...m, [matchId]: { ...cur, idx: (cur.idx + 1) % cur.pairs.length } }));
-        return;
-      }
-      setOrtho((m) => ({ ...m, [matchId]: { pairs: [], idx: 0, loading: true, loaded: false } }));
-      try {
-        const pairs = await fetchArchetypes(matchId);
-        if (pairs.length === 0) {
-          toast.error("الگوی متعامد برای این بازی ساخته نشد");
-          setOrtho((m) => ({ ...m, [matchId]: { pairs: [], idx: 0, loading: false, loaded: true } }));
-          return;
-        }
-        // پیشنهاد رسمی (الگوی اول) از قبل روی کارت است — اولین کلیک مستقیم به الگوی دوم می‌رود
-        const startIdx = pairs.length > 1 ? 1 : 0;
-        setOrtho((m) => ({ ...m, [matchId]: { pairs, idx: startIdx, loading: false, loaded: true } }));
-        toast.success(`۵ الگوی متعامد از ۱۵ بازار ساخته شد — الگوی «${pairs[startIdx].archetype?.short ?? ""}» فعال شد`, {
-          description: "با دکمه «الگوی بعدی» بین ۵ روایت متضاد همان بازی سوییچ کنید",
-        });
-      } catch {
-        toast.error("خطا در ساخت الگوهای متعامد");
-        setOrtho((m) => ({ ...m, [matchId]: { pairs: [], idx: 0, loading: false, loaded: true } }));
-      }
-    },
-    [ortho, fetchArchetypes]
-  );
-
-  // ═══ v5.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه‌ای + صف سرور ۱۵ ثانیه‌ای) ═══
+  // ═══ v8.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه‌ای + صف سرور ۱۵ ثانیه‌ای) ═══
   const deepLlmFor = useCallback(
     async (matchId: string, lambdaHome: number, silent = false): Promise<boolean> => {
       if (deepLlm[matchId] === "RUNNING") return false;
@@ -204,7 +157,7 @@ export function FlashcardDeck({
   // ─── تحلیل عمیق ۳ بازی برتر +EV با فاصله ۱۵ ثانیه ───
   const runTop3DeepLlm = useCallback(async () => {
     if (bulkRunning) return;
-    const top3 = [...cards].sort((a, b) => b.pair.selectionA.evPct - a.pair.selectionA.evPct).slice(0, 3);
+    const top3 = [...cards].filter((c) => !(c.supervisor?.veto ?? false)).sort((a, b) => b.pair.selectionA.evPct - a.pair.selectionA.evPct).slice(0, 3);
     if (top3.length === 0) return;
     setBulkRunning(true);
     try {
@@ -231,7 +184,6 @@ export function FlashcardDeck({
   let effectiveIndex = safeIndex;
 
   // «باز کردن فلش‌کارت بازی» از رادار → کاروسل به کارت همان بازی می‌رود
-  // (الگوی رسمی «تنظیم وضعیت هنگام رندر» — بدون افکت)
   const [lastWanted, setLastWanted] = useState<string | null>(null);
   if (activeMatchId && activeMatchId !== lastWanted) {
     const wi = filtered.findIndex((c) => c.match.id === activeMatchId);
@@ -241,7 +193,7 @@ export function FlashcardDeck({
       effectiveIndex = wi;
     }
   }
-  const activeKey = filtered.length > 0 ? viewOf(filtered[effectiveIndex]).key : "";
+  const activeKey = filtered.length > 0 ? filtered[effectiveIndex].key : "";
 
   const go = useCallback(
     (dir: 1 | -1) => setIndex((i) => (filtered.length === 0 ? 0 : (i + dir + filtered.length) % filtered.length)),
@@ -268,7 +220,7 @@ export function FlashcardDeck({
       {/* هدر و فیلترها */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-bold sm:text-base">
-          <span aria-hidden>🎴</span>
+          <span aria-hidden>👑</span>
           {title}
           {cards.length > 0 && (
             <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300" dir="ltr">
@@ -277,8 +229,39 @@ export function FlashcardDeck({
           )}
         </h2>
         <div className="flex flex-wrap items-center gap-1.5">
+          {/* v8.0 — سوییچ استراتژی اجرایی ضد گوبینگ (Anti-Gubbing Compliance) */}
+          <div
+            className="flex items-center gap-0.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] p-0.5"
+            role="tablist"
+            aria-label="استراتژی اجرایی ثبت شرط (انطباق با قوانین سایت‌های شرط‌بندی)"
+            title="طبق قوانین ضد آربیتراژ سایت‌های شرط‌بندی، ثبت دو شرط متضاد یک بازی در یک اکانت می‌تواند حساس‌ساز باشد"
+          >
+            <Button
+              size="sm"
+              variant="ghost"
+              role="tab"
+              aria-selected={executionMode === "DUAL_BOOK"}
+              className={cn("h-7 gap-1 px-2 text-[10px] sm:text-[11px]", executionMode === "DUAL_BOOK" && "bg-emerald-500/15 text-emerald-300")}
+              onClick={() => patchConfig({ executionMode: "DUAL_BOOK" })}
+              title="هر تیپ در یک سایت مجزا ثبت می‌شود (تک‌بازی) — صفر ریسک محدودیت حساب"
+            >
+              <Users className="size-3.5" /> دو سایت مجزا
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              role="tab"
+              aria-selected={executionMode === "SINGLE_BOOK"}
+              className={cn("h-7 gap-1 px-2 text-[10px] sm:text-[11px]", executionMode === "SINGLE_BOOK" && "bg-cyan-500/15 text-cyan-300")}
+              onClick={() => patchConfig({ executionMode: "SINGLE_BOOK" })}
+              title="پایه امن بازی اول + متغیر دوگانه بازی دوم در دو برگه میکس مجزا — ۱۰۰٪ مجاز در همه سایت‌ها"
+            >
+              <Store className="size-3.5" /> سایت واحد (میکس ۲ بازی)
+            </Button>
+          </div>
+
           {/* v5.0 — تحلیل عمیق ۳ بازی برتر +EV (فقط تقاضای کاربر، با فاصله ۱۵ ثانیه) */}
-          {cards.length > 0 && (
+          {cards.length > 0 && approvedCount > 0 && (
             <Button
               size="sm"
               variant="outline"
@@ -316,7 +299,7 @@ export function FlashcardDeck({
         </div>
       </div>
 
-      {/* فیلترهای سریع */}
+      {/* فیلترهای سریع — v8.0: پیش‌فرض «فقط تاییدشده سوپروایزر» */}
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="فیلتر سریع فلش‌کارت‌ها">
         {FILTERS.map((f) => (
           <Button
@@ -325,7 +308,8 @@ export function FlashcardDeck({
             variant="outline"
             className={cn(
               "h-7 gap-1 rounded-full border-white/10 px-2.5 text-[10px] sm:text-[11px]",
-              filter === f.key ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" : "text-muted-foreground"
+              filter === f.key ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" : "text-muted-foreground",
+              f.key === "APPROVED" && filter !== f.key && "border-emerald-500/25 text-emerald-300/80"
             )}
             onClick={() => setFilter(f.key)}
             aria-pressed={filter === f.key}
@@ -336,6 +320,19 @@ export function FlashcardDeck({
           </Button>
         ))}
       </div>
+
+      {/* توضیح حالت اجرایی فعال */}
+      <p className="text-[10px] leading-4 text-muted-foreground" role="note">
+        {executionMode === "DUAL_BOOK" ? (
+          <>
+            📍 حالت فعال: <b className="text-emerald-300">ثبت در دو سایت مجزا (Dual-Bookmaker Split)</b> — تیپ A در سایت اول و تیپ B در سایت دوم/صرافی ثبت می‌شود تا هرگز دو طرف یک بازی در یک اکانت ثبت نشود.
+          </>
+        ) : (
+          <>
+            📍 حالت فعال: <b className="text-cyan-300">ثبت امن در یک سایت واحد (Single-Bookmaker Safe 2-Match Combo)</b> — سوپروایزر پایه امن بازی اول + متغیر دوگانه بازی دوم را در دو برگه میکس مجزا جفت می‌کند؛ طبق قوانین ۱۰۰٪ مجاز.
+          </>
+        )}
+      </p>
 
       {/* بدنه */}
       {filtered.length === 0 ? (
@@ -352,13 +349,21 @@ export function FlashcardDeck({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                خلبان خودکار در حال اسکن با موتور کمّی محلی (صفر توکن) و ساخت زوج‌تیپ‌های متعامد است…
+                خلبان خودکار در حال اسکن با موتور کمّی محلی (صفر توکن) و ممیزی ایجنت سوپروایزر است…
               </p>
               <div className="grid w-full max-w-md grid-cols-3 gap-2" aria-hidden>
                 {[0, 1, 2].map((i) => (
                   <Skeleton key={i} className="h-24 rounded-xl bg-white/5" />
                 ))}
               </div>
+            </>
+          ) : filter === "APPROVED" && cards.length > 0 ? (
+            <>
+              <ShieldOff className="size-6 text-rose-400" />
+              <p className="text-xs leading-5 text-muted-foreground">
+                🛡️ در اسکن جاری <b className="text-foreground">{faNum(vetoedCount, 0)}</b> بازی ممیزی شد و همه توسط ایجنت سوپروایزر وتو شدند
+                (ریسک نامتقارن یا سود ضعیف) — <b className="text-emerald-300">عدم پیشنهاد شرط</b>. فیلتر «وتو شده» را ببینید.
+              </p>
             </>
           ) : (
             <>
@@ -376,13 +381,10 @@ export function FlashcardDeck({
               {activeKey && (
                 <FlashCard
                   key={activeKey}
-                  view={viewOf(filtered[effectiveIndex])}
+                  view={filtered[effectiveIndex]}
                   inCart={cart.includes(activeKey)}
                   onToggleCart={() => toggleCart(activeKey)}
                   compact={compact}
-                  onSwitchArchetype={() => void switchArchetype(filtered[effectiveIndex].match.id)}
-                  archetypeLoading={ortho[filtered[effectiveIndex].match.id]?.loading ?? false}
-                  hasArchetypes
                   onDeepLlm={() => void deepLlmFor(filtered[effectiveIndex].match.id, filtered[effectiveIndex].lambdaHome)}
                   deepLlmState={deepLlm[filtered[effectiveIndex].match.id] ?? "IDLE"}
                 />
@@ -413,23 +415,17 @@ export function FlashcardDeck({
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((c) => {
-            const v = viewOf(c);
-            return (
-              <FlashCard
-                key={c.key}
-                view={v}
-                inCart={cart.includes(v.key)}
-                onToggleCart={() => toggleCart(v.key)}
-                compact={compact}
-                onSwitchArchetype={() => void switchArchetype(c.match.id)}
-                archetypeLoading={ortho[c.match.id]?.loading ?? false}
-                hasArchetypes
-                onDeepLlm={() => void deepLlmFor(c.match.id, c.lambdaHome)}
-                deepLlmState={deepLlm[c.match.id] ?? "IDLE"}
-              />
-            );
-          })}
+          {filtered.map((c) => (
+            <FlashCard
+              key={c.key}
+              view={c}
+              inCart={cart.includes(c.key)}
+              onToggleCart={() => toggleCart(c.key)}
+              compact={compact}
+              onDeepLlm={() => void deepLlmFor(c.match.id, c.lambdaHome)}
+              deepLlmState={deepLlm[c.match.id] ?? "IDLE"}
+            />
+          ))}
         </div>
       )}
     </section>
