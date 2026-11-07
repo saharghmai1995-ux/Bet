@@ -96,6 +96,21 @@ model Match {
   oddsSource      String  @default("ENGINE") // ENGINE | ESPN_DRAFTKINGS | ODDS_API
   oddsFetchedAt   DateTime?           // آخرین به‌روزرسانی ضرایب زنده
 
+  // ─── v6.0 — راستی‌آزمایی ۱۰۰٪ از جدول رسمی رده‌بندی ESPN (Standings API بدون کلید) ───
+  homeTeamId      String?   // شناسه رسمی ESPN تیم میزبان (برای Roster API واقعی)
+  awayTeamId      String?   // شناسه رسمی ESPN تیم میهمان
+  homeRank        Int?      // رتبه واقعی میزبان در جدول فصل جاری
+  homeGF          Int?      // گل زده واقعی فصل میزبان (pointsFor)
+  homeGA          Int?      // گل خورده واقعی فصل میزبان (pointsAgainst)
+  homeGP          Int?      // بازی انجام‌شده واقعی فصل میزبان (gamesPlayed)
+  awayRank        Int?      // رتبه واقعی میهمان
+  awayGF          Int?
+  awayGA          Int?
+  awayGP          Int?
+  leagueTeamAvg   Float?    // میانگین گل هر تیم در هر بازی لیگ (از جدول واقعی فصل)
+  statsSource     String?   // ESPN_STANDINGS | RECORD_FALLBACK
+  statsFetchedAt  DateTime? // زمان دقیق آخرین واکشی جدول رده‌بندی
+
   status    String         @default("UPCOMING") // UPCOMING | ANALYZED | LIVE | FINISHED | ARCHIVED
   referee   Referee?       @relation(fields: [refereeId], references: [id])
   players   Player[]

@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  BadgeCheck,
   CheckCircle2,
   ChevronDown,
+  ExternalLink,
   Loader2,
-  Megaphone,
+  RefreshCcw,
   Shield,
   Shirt,
   Star,
+  UserX,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,7 +28,7 @@ import { toast } from "sonner";
 import { faNum, faPct, signed } from "@/lib/format";
 import { TacticalPitch, type PitchNode } from "@/components/app/fx/tactical-pitch";
 import { useQuantStore } from "@/lib/store";
-import type { LineupShockDTO, LiveHedgeDTO } from "@/lib/types";
+import type { LineupPlayerDTO, LineupShockDTO, LiveHedgeDTO } from "@/lib/types";
 
 const POSITIONS: Record<string, string> = {
   GK: "دروازه‌بان",
@@ -38,14 +41,17 @@ const posLabel = (p: string) => POSITIONS[p] ?? p;
 
 function statusBadge(status: string): { label: string; className: string } {
   switch (status) {
+    case "STARTER":
     case "FIT":
-      return { label: "آماده", className: "border-emerald-500/40 text-emerald-400" };
-    case "INJURED":
-      return { label: "مصدوم", className: "border-rose-500/40 text-rose-400" };
-    case "SUSPENDED":
-      return { label: "محروم", className: "border-rose-500/40 text-rose-400" };
-    case "DOUBTFUL":
-      return { label: "مشکوک", className: "border-amber-500/40 text-amber-300" };
+      return { label: "ترکیب اصلی", className: "border-emerald-500/40 text-emerald-400" };
+    case "BENCH":
+      return { label: "ذخیره", className: "border-white/15 text-muted-foreground" };
+    case "SQUAD":
+      return { label: "فصل جاری", className: "border-sky-500/40 text-sky-400" };
+    case "OUT_OF_XI":
+      return { label: "خارج از ترکیب", className: "border-rose-500/40 text-rose-400" };
+    case "NO_STATS":
+      return { label: "بدون آمار", className: "border-amber-500/40 text-amber-300" };
     default:
       return { label: status, className: "" };
   }
@@ -53,7 +59,7 @@ function statusBadge(status: string): { label: string; className: string } {
 
 const profitColor = (v: number) => (v >= 0 ? "text-emerald-400" : "text-rose-400");
 
-/** نودهای زمین از بازیکنان (T-60) — غایبان با نود قرمز چشمک‌زن */
+/** نودهای زمین از بازیکنان واقعی ESPN (T-60) — ستاره‌های خارج از ترکیب با نود قرمز چشمک‌زن */
 function pitchNodes(topPlayers: LineupShockDTO["topPlayers"], side: "HOME" | "AWAY"): PitchNode[] {
   const HOME_FORMATION: PitchNode[] = [
     { x: 7, y: 50 }, { x: 22, y: 18 }, { x: 20, y: 39 }, { x: 20, y: 61 }, { x: 22, y: 82 },
@@ -71,12 +77,70 @@ function pitchNodes(topPlayers: LineupShockDTO["topPlayers"], side: "HOME" | "AW
     const p = players[i];
     if (!p) return slot;
     const status: PitchNode["status"] =
-      p.status === "INJURED" || p.status === "SUSPENDED" ? "MISSING" : p.status === "DOUBTFUL" ? "DOUBTFUL" : "FIT";
+      p.status === "OUT_OF_XI" || p.status === "INJURED" || p.status === "SUSPENDED"
+        ? "MISSING"
+        : p.status === "NO_STATS"
+          ? "DOUBTFUL"
+          : "FIT";
     return { ...slot, status, label: `${p.name} (${posLabel(p.position)}) — ${statusBadge(p.status).label}` };
   });
 }
 
-/* ─────────────── Card A: شوک ترکیب T-60 ─────────────── */
+/* ─────── Card A: شوک ترکیب T-60 — ۱۰۰٪ ESPN واقعی (v6.0 Zero-Mock) ─────── */
+
+function PlayerStat({ v, digits = 0 }: { v: number | null; digits?: number }) {
+  return (
+    <span className="font-num" dir="ltr">
+      {v === null || !Number.isFinite(v) ? "—" : digits > 0 ? v.toFixed(digits) : faNum(v, 0)}
+    </span>
+  );
+}
+
+function AbsPreviewPanel({ preview, onClose }: { preview: NonNullable<LineupShockDTO["absPreview"]>; onClose: () => void }) {
+  const dH = preview.lambdaHome - preview.baseline.lambdaHome;
+  const dA = preview.lambdaAway - preview.baseline.lambdaAway;
+  const dPHome = preview.pHome - preview.baseline.pHome;
+  const dPAway = preview.pAway - preview.baseline.pAway;
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+          <UserX className="size-3.5" />
+          اثر غیبت واقعی «{preview.name}» ({preview.side === "HOME" ? "میزبان" : "میهمان"})
+        </p>
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]" onClick={onClose} aria-label="بستن پیش‌نمایش غیبت">
+          بستن
+        </Button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        سهم VAEP واقعی این بازیکن از ترکیب: <b className="font-num" dir="ltr">{faPct(preview.vaepShare, 1)}</b> · دلتای اعمال‌شده روی λ:{" "}
+        <b className="font-num text-rose-300" dir="ltr">{faNum(preview.shockDelta * 100, 1)}%</b>
+      </p>
+      <div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+        {[
+          { label: "λ میزبان", before: preview.baseline.lambdaHome, after: preview.lambdaHome, d: dH, pct: false },
+          { label: "λ میهمان", before: preview.baseline.lambdaAway, after: preview.lambdaAway, d: dA, pct: false },
+          { label: "احتمال برد میزبان", before: preview.baseline.pHome * 100, after: preview.pHome * 100, d: dPHome * 100, pct: true },
+          { label: "احتمال برد میهمان", before: preview.baseline.pAway * 100, after: preview.pAway * 100, d: dPAway * 100, pct: true },
+        ].map((row) => (
+          <div key={row.label} className="space-y-0.5 rounded-md border border-white/10 bg-white/[0.02] p-2">
+            <p className="text-[10px] text-muted-foreground">{row.label}</p>
+            <p className="font-num font-bold" dir="ltr">
+              {row.before.toFixed(row.pct ? 1 : 2)}
+              <span className="mx-1 text-muted-foreground">→</span>
+              <span className={row.d < 0 ? "text-rose-300" : "text-emerald-300"}>{row.after.toFixed(row.pct ? 1 : 2)}</span>
+            </p>
+            <p className={`font-num text-[10px] ${row.d < 0 ? "text-rose-300" : "text-emerald-300"}`} dir="ltr">
+              {row.d > 0 ? "+" : ""}
+              {row.d.toFixed(row.pct ? 1 : 2)}
+              {row.pct ? "pp" : ""}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function TeamShockBlock({ block }: { block: LineupShockDTO["home"] }) {
   const deltaCls =
@@ -107,24 +171,17 @@ function TeamShockBlock({ block }: { block: LineupShockDTO["home"] }) {
           <p className="font-num font-bold" dir="ltr">{block.xiXt.toFixed(2)}</p>
         </div>
       </div>
-      <p className="text-[11px] text-muted-foreground">
-        تعداد غایبان: <b className="font-num" dir="ltr">{block.unavailableCount}</b>
-      </p>
       {block.missingKeyPlayers.length > 0 && (
         <ul className="space-y-1">
-          {block.missingKeyPlayers.map((p, i) => {
-            const st = statusBadge(p.status);
-            const bad = p.status === "INJURED" || p.status === "SUSPENDED";
-            return (
-              <li key={`${p.name}-${i}`} className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                <span className="font-medium">{p.name}</span>
-                <span className="text-muted-foreground">({posLabel(p.position)})</span>
-                <Badge variant="outline" className={`px-1 py-0 text-[9px] ${bad ? st.className : ""}`}>
-                  {st.label}
-                </Badge>
-              </li>
-            );
-          })}
+          {block.missingKeyPlayers.map((p, i) => (
+            <li key={`${p.name}-${i}`} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="font-medium">{p.name}</span>
+              <span className="text-muted-foreground">({posLabel(p.position)})</span>
+              <Badge variant="outline" className="border-rose-500/40 px-1 py-0 text-[9px] text-rose-400">
+                خارج از ترکیب اصلی
+              </Badge>
+            </li>
+          ))}
         </ul>
       )}
     </div>
@@ -140,64 +197,123 @@ function LineupShockCard() {
   const [matchId, setMatchId] = useState("");
   const [running, setRunning] = useState(false);
   const [shock, setShockLocal] = useState<LineupShockDTO | null>(null);
+  const [absent, setAbsent] = useState<{ name: string; side: "HOME" | "AWAY" } | null>(null);
 
   // بازی فعال از هدر → پیش‌فرض این کارت
   useEffect(() => {
-    if (activeMatchId) setMatchId(activeMatchId);
+    if (activeMatchId) {
+      setMatchId((cur) => {
+        if (cur !== activeMatchId) {
+          setShockLocal(null);
+          setAbsent(null);
+        }
+        return activeMatchId;
+      });
+    }
   }, [activeMatchId]);
 
-  const announce = useCallback(async () => {
-    if (!matchId || running) return;
-    setRunning(true);
-    try {
-      const res = await fetch("/api/lineup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId }),
-      });
-      const data = (await res.json()) as LineupShockDTO & { error?: string };
-      if (data.success) {
-        setShockLocal(data);
-        // زنجیره واکنشی تب ۴ → تب ۶: دلتای VAEP/xT در استور منتشر می‌شود
-        setShock(matchId, data.home.shockDelta, data.away.shockDelta);
-        toast.success("ترکیب رسمی اعلام شد — دلتای VAEP به موتور کمّی (تب ۶) منتقل شد", {
-          description: "λ و Elo در تب ۶ بازمحاسبه می‌شوند",
+  /** واکشی ترکیب/آمار واقعی از ESPN — Zero-Mock */
+  const load = useCallback(
+    async (mid: string, opts?: { absentName?: string; absentSide?: "HOME" | "AWAY"; silent?: boolean }) => {
+      if (!mid) return;
+      setRunning(true);
+      try {
+        const res = await fetch("/api/lineup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ matchId: mid, depth: "FULL", absentName: opts?.absentName, absentSide: opts?.absentSide }),
         });
-      } else {
-        toast.error(data.error ?? "خطا در اعلام ترکیب");
+        const data = (await res.json()) as LineupShockDTO & { error?: string };
+        if (data.success) {
+          setShockLocal(data);
+          if (data.mode === "OFFICIAL") {
+            // زنجیره واکنشی تب ۴ → تب ۶: دلتای VAEP واقعی در استور منتشر می‌شود
+            setShock(mid, data.home.shockDelta, data.away.shockDelta);
+          }
+          if (!opts?.silent) {
+            toast.success(data.mode === "OFFICIAL" ? "ترکیب رسمی واقعی ESPN دریافت شد" : "آمار واقعی فصل بازیکنان ESPN دریافت شد", {
+              description: "شاخص VAEP از گل/پاس/شوت واقعی فصل جاری محاسبه شد — صفر دیتای شبیه‌سازی‌شده",
+            });
+          }
+        } else {
+          setShockLocal(null);
+          if (!opts?.silent) toast.warning(data.error ?? "دیتای واقعی ESPN در دسترس نیست");
+        }
+      } catch {
+        if (!opts?.silent) toast.error("ارتباط با سرور برقرار نشد");
+      } finally {
+        setRunning(false);
       }
-    } catch {
-      toast.error("ارتباط با سرور برقرار نشد");
-    } finally {
-      setRunning(false);
-    }
-  }, [matchId, running, setShock]);
+    },
+    [setShock]
+  );
 
-  const teamName = (side: "HOME" | "AWAY") =>
-    side === "HOME" ? shock?.home.team ?? "میزبان" : shock?.away.team ?? "میهمان";
+  // واکشی خودکار با تغییر بازی
+  useEffect(() => {
+    if (matchId) void load(matchId, { silent: true });
+  }, [matchId, load]);
+
+  const previewAbsence = useCallback(
+    (p: LineupPlayerDTO, side: "HOME" | "AWAY") => {
+      if (!matchId || running) return;
+      if (absent?.name === p.name) {
+        setAbsent(null);
+        void load(matchId, { silent: true });
+        return;
+      }
+      if (p.vaep === null) {
+        toast.info(`«${p.name}» آمار فصل کافی در ESPN ندارد — پیش‌نمایش غیبت بدون داده واقعی ساخته نمی‌شود`);
+        return;
+      }
+      setAbsent({ name: p.name, side });
+      void load(matchId, { absentName: p.name, absentSide: side, silent: true });
+    },
+    [absent, matchId, running, load]
+  );
 
   const activeMatch = matches.find((m) => m.id === matchId) ?? null;
+  const allRows = useMemo(() => {
+    if (!shock?.players) return [] as { p: LineupPlayerDTO; side: "HOME" | "AWAY" }[];
+    return [
+      ...shock.players.home.map((p) => ({ p, side: "HOME" as const })),
+      ...shock.players.away.map((p) => ({ p, side: "AWAY" as const })),
+    ];
+  }, [shock]);
 
   return (
     <Card className="glass">
       <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Shirt className="size-4 text-amber-300" />
-          شوک ترکیب T-60 — ارزش‌گذاری VAEP/xT بازیکنان
-        </CardTitle>
-        <CardDescription className="text-xs leading-relaxed">
-          اعلام رسمی ترکیب ۶۰ دقیقه قبل از بازی؛ بزرگ‌ترین ناکارآمدی بازار همین‌جاست. دلتای قدرت مستقیماً روی λ و
-          الو در تب ۶ اعمال می‌شود.
-        </CardDescription>
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Shirt className="size-4 text-amber-300" />
+              شوک ترکیب T-60 — بازیکنان واقعی ESPN
+            </CardTitle>
+            <CardDescription className="text-xs leading-relaxed">
+              v6.0 Zero-Mock: ترکیب رسمی اعلام‌شده مستقیماً از Summary API؛ در غیر این صورت فهرست واقعی فصل جاری از ESPN Roster
+              با شاخص VAEP محاسبه‌شده از گل/پاس/شوت واقعی.
+            </CardDescription>
+          </div>
+          {shock?.mode && (
+            <Badge
+              variant="outline"
+              className={`shrink-0 text-[10px] ${
+                shock.mode === "OFFICIAL" ? "border-violet-500/40 text-violet-300" : "border-sky-500/40 text-sky-300"
+              }`}
+            >
+              {shock.mode === "OFFICIAL" ? "ترکیب رسمی اعلام‌شده" : "آمار فصل — پیش از اعلام ترکیب"}
+            </Badge>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
           <Select
             value={matchId}
             onValueChange={(v) => {
-              setMatchId(v);
               setActiveMatchId(v);
               setShockLocal(null);
+              setAbsent(null);
             }}
             disabled={running}
           >
@@ -213,14 +329,38 @@ function LineupShockCard() {
             </SelectContent>
           </Select>
           <Button
-            onClick={announce}
+            onClick={() => void load(matchId)}
             disabled={running || !matchId}
             className="gap-2 bg-amber-600 text-white hover:bg-amber-500"
           >
-            {running ? <Loader2 className="size-4 animate-spin" /> : <Megaphone className="size-4" />}
-            {running ? "در حال بازمحاسبه..." : "اعلام رسمی ترکیب (شبیه‌سازی)"}
+            {running ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+            {running ? "در حال واکشی ESPN..." : "واکشی بازیکنان واقعی"}
           </Button>
         </div>
+
+        {shock && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+            <span className="flex items-center gap-1 text-emerald-300">
+              <BadgeCheck className="size-3" />
+              منبع: ESPN Summary/Roster + Statistics — بدون هیچ دیتای فرضی
+            </span>
+            {shock.espnEventUrl && (
+              <a
+                href={shock.espnEventUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 text-cyan-300 underline-offset-2 hover:underline"
+              >
+                صفحه رسمی مسابقه در ESPN <ExternalLink className="size-3" />
+              </a>
+            )}
+            {shock.fetchedAt && (
+              <span className="font-num" dir="ltr">
+                last fetch: {new Date(shock.fetchedAt).toLocaleTimeString("fa-IR")}
+              </span>
+            )}
+          </div>
+        )}
 
         {shock?.isShock && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
@@ -235,10 +375,20 @@ function LineupShockCard() {
           </div>
         )}
 
+        {shock?.absPreview && (
+          <AbsPreviewPanel
+            preview={shock.absPreview}
+            onClose={() => {
+              setAbsent(null);
+              if (matchId) void load(matchId, { silent: true });
+            }}
+          />
+        )}
+
         {activeMatch && (
           <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
             <p className="mb-2 text-[11px] text-muted-foreground">
-              زمین تاکتیکی سه‌بعدی — نودهای تپنده حاضر، نودهای قرمز غایبان کلیدی
+              زمین تاکتیکی — نودها از بازیکنان واقعی ESPN؛ نودهای قرمز = ستاره کلیدی خارج از ترکیب اصلی
             </p>
             <TacticalPitch
               homeTeam={activeMatch.homeTeam}
@@ -260,45 +410,76 @@ function LineupShockCard() {
               <TeamShockBlock block={shock.home} />
               <TeamShockBlock block={shock.away} />
             </div>
-            <div className="max-h-96 overflow-y-auto rounded-md border border-white/10">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-white/8 hover:bg-transparent">
-                    <TableHead className="text-xs">بازیکن</TableHead>
-                    <TableHead className="text-xs">تیم</TableHead>
-                    <TableHead className="text-xs">پست</TableHead>
-                    <TableHead className="text-xs">xT</TableHead>
-                    <TableHead className="text-xs">VAEP</TableHead>
-                    <TableHead className="text-xs">وضعیت</TableHead>
-                    <TableHead className="text-xs">کلیدی</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {shock.topPlayers.map((p, i) => {
-                    const st = statusBadge(p.status);
-                    return (
-                      <TableRow key={`${p.name}-${i}`} className="border-white/6">
-                        <TableCell className="text-xs font-medium">{p.name}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{teamName(p.side)}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">{posLabel(p.position)}</TableCell>
-                        <TableCell className="font-num text-xs" dir="ltr">{p.xT.toFixed(2)}</TableCell>
-                        <TableCell className="font-num text-xs" dir="ltr">{p.vaep.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={`text-[10px] ${st.className}`}>{st.label}</Badge>
-                        </TableCell>
-                        <TableCell>
-                          {p.isKey ? (
-                            <Star className="size-3.5 fill-amber-400 text-amber-400" aria-label="بازیکن کلیدی" />
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+            <div className="space-y-1.5">
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <UserX className="size-3.5" />
+                روی کلید «اثر غیبت» هر بازیکن واقعی کلیک کنید تا اثر غیبت آن ستاره روی امید گل (λ) و احتمالات دیده شود.
+              </p>
+              <div className="max-h-96 overflow-y-auto rounded-md border border-white/10">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-white/8 hover:bg-transparent">
+                      <TableHead className="text-xs">بازیکن واقعی</TableHead>
+                      <TableHead className="text-xs">پست</TableHead>
+                      <TableHead className="text-xs">سن</TableHead>
+                      <TableHead className="text-xs">بازی</TableHead>
+                      <TableHead className="text-xs">گل</TableHead>
+                      <TableHead className="text-xs">پاس</TableHead>
+                      <TableHead className="text-xs">SoT</TableHead>
+                      <TableHead className="text-xs">VAEP</TableHead>
+                      <TableHead className="text-xs">وضعیت</TableHead>
+                      <TableHead className="text-xs">اثر غیبت</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {allRows.map(({ p, side }) => {
+                      const st = statusBadge(p.status);
+                      const isAbsent = absent?.name === p.name;
+                      return (
+                        <TableRow key={`${side}-${p.name}`} className={`border-white/6 ${isAbsent ? "bg-amber-500/10" : ""}`}>
+                          <TableCell className="text-xs font-medium">
+                            <span className="flex items-center gap-1.5">
+                              {p.isKey && <Star className="size-3 shrink-0 fill-amber-400 text-amber-400" aria-label="ستاره کلیدی فصل" />}
+                              <span className="truncate">{p.name}</span>
+                              <span className="shrink-0 text-[9px] text-muted-foreground">{side === "HOME" ? "میزبان" : "میهمان"}</span>
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{posLabel(p.position)}</TableCell>
+                          <TableCell className="text-xs"><PlayerStat v={p.age} /></TableCell>
+                          <TableCell className="text-xs"><PlayerStat v={p.appearances} /></TableCell>
+                          <TableCell className="text-xs"><PlayerStat v={p.goals} /></TableCell>
+                          <TableCell className="text-xs"><PlayerStat v={p.assists} /></TableCell>
+                          <TableCell className="text-xs"><PlayerStat v={p.shotsOnTarget} /></TableCell>
+                          <TableCell className="text-xs"><PlayerStat v={p.vaep} digits={2} /></TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className={`text-[10px] ${st.className}`}>{st.label}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className={`h-7 gap-1 px-2 text-[10px] ${isAbsent ? "border-amber-500/50 bg-amber-500/15 text-amber-300" : "text-muted-foreground"}`}
+                              onClick={() => previewAbsence(p, side)}
+                              disabled={running}
+                              aria-label={`پیش‌نمایش اثر غیبت ${p.name} روی لامبدا`}
+                            >
+                              <UserX className="size-3" />
+                              {isAbsent ? "فعال" : "اثر غیبت"}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
             </div>
+          </div>
+        )}
+
+        {!shock && !running && (
+          <div className="rounded-lg border border-dashed border-white/10 p-4 text-center text-[11px] text-muted-foreground">
+            بازی را انتخاب کنید — فهرست واقعی بازیکنان و آمار فصل مستقیماً از ESPN واکشی می‌شود. هیچ ترکیب شبیه‌سازی‌شده‌ای در سیستم وجود ندارد.
           </div>
         )}
       </CardContent>

@@ -46,15 +46,20 @@ export async function GET(req: NextRequest) {
           oddsHome: match.oddsHome,
           oddsDraw: match.oddsDraw,
           oddsAway: match.oddsAway,
+          oddsSource: match.oddsSource,
         }).catch(() => ({ rows: [] as OddsComparisonRowDTO[], espnProbabilities: null }));
         comparison = cmp.rows;
+        const fairNote =
+          match.statsSource === "ESPN_STANDINGS"
+            ? `از α/β واقعی جدول رسمی فصل — رتبه ${match.homeRank ?? "؟"} با ${match.homeGF ?? "؟"} گل زده/خانه در ${match.homeGP ?? "؟"} بازی`
+            : "از ماتریس نمره — جدول رسمی برای این لیگ در دسترس نبود";
         comparison.push({
           source: "MODEL_FAIR",
-          sourceLabel: "مدل دیکسون-کولز + شین (Fair)",
+          sourceLabel: "ضریب عادلانه دیکسون-کولز فصل جاری",
           home: modelFairOdds.home,
           draw: modelFairOdds.draw,
           away: modelFairOdds.away,
-          note: "خط عادلانه بدون حاشیه از ماتریس نمره",
+          note: fairNote,
         });
       }
     }

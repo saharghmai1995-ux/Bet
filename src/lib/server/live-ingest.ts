@@ -26,6 +26,7 @@ import {
   type LiveWeather,
   type OddsApiEvent,
 } from "./live-sources";
+import { getLeagueStandings, findStandingsEntry, type LeagueStandings } from "./espn-standings";
 import { runDixonColes, fairOdds } from "@/lib/engine/poisson";
 import type { LiveFeedDTO, LiveFeedSourceDTO } from "@/lib/types";
 
@@ -108,6 +109,8 @@ interface DerivedStrength {
   lambdaAway: number;
   homeAttack: number;
   awayAttack: number;
+  homeDefense: number;
+  awayDefense: number;
   homeElo: number;
   awayElo: number;
   homePpda: number;
@@ -115,19 +118,86 @@ interface DerivedStrength {
   homeFieldTilt: number;
   awayFieldTilt: number;
   weatherAdjusted: boolean;
+  // ─── v6.0 — راستی‌آزمایی از جدول رسمی رده‌بندی فصل جاری ───
+  statsSource: "ESPN_STANDINGS" | "RECORD_FALLBACK";
+  homeRank: number | null;
+  homeGF: number | null;
+  homeGA: number | null;
+  homeGP: number | null;
+  awayRank: number | null;
+  awayGF: number | null;
+  awayGA: number | null;
+  awayGP: number | null;
+  leagueTeamAvg: number | null;
 }
 
 /**
- * محاسبه امید گل (λ) از فرم + رکورد فصل واقعی دو تیم و اعمال تعدیل جوی
- * λ_base = avgGoals × سهم میزبانی/میهمانی × قدرت نسبی (فرم ۵۵٪ + فصل ۴۵٪)
+ * v6.0 — محاسبه امید گل (λ) از جدول رسمی رده‌بندی فصل جاری ESPN (Standings API بدون کلید)
+ * مسیر اولویت‌دار (قابل راستی‌آزمایی ۱۰۰٪):
+ *   α_i = GF_i / (GP_i × LeagueTeamAvg)   ← قدرت تهاجمی واقعی از گل زده فصل
+ *   β_i = GA_i / (GP_i × LeagueTeamAvg)   ← ضعف دفاعی واقعی از گل خورده فصل
+ *   λ_Home = α_Home × β_Away × LeagueTeamAvg × 1.12 (فرمول استاندارد دیکسون-کولز)
+ *   λ_Away = α_Away × β_Home × LeagueTeamAvg
+ * مسیر جایگزین شفاف (فقط وقتی جدول در دسترس نیست): رکورد واقعی W-D-L + فرم ۵ بازی.
  * تعدیل جوی: بارش > ۲mm یا باد > ۳۰km/h → λ × ۰.۹۲ (−۸٪)
  */
-function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null): DerivedStrength {
-  const homeStr = 0.55 * formFactor(ev.homeForm) + 0.45 * seasonFactor(ev.homeRecord);
-  const awayStr = 0.55 * formFactor(ev.awayForm) + 0.45 * seasonFactor(ev.awayRecord);
-
+function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null, st: LeagueStandings | null): DerivedStrength {
   const adverse = weather?.adverse ?? false;
   const wAdj = adverse ? 0.92 : 1.0;
+
+  const homeEntry = findStandingsEntry(st, ev.homeTeamId, ev.homeTeam);
+  const awayEntry = findStandingsEntry(st, ev.awayTeamId, ev.awayTeam);
+  const lta = st && st.leagueTeamAvg > 0.5 ? st.leagueTeamAvg : null;
+
+  if (lta && homeEntry && awayEntry && homeEntry.gp >= 3 && awayEntry.gp >= 3) {
+    // ═══ v6.0 — مسیر واقعی: α/β از جدول رسمی فصل ═══
+    const alphaH = homeEntry.gf / (homeEntry.gp * lta);
+    const betaH = homeEntry.ga / (homeEntry.gp * lta);
+    const alphaA = awayEntry.gf / (awayEntry.gp * lta);
+    const betaA = awayEntry.ga / (awayEntry.gp * lta);
+
+    let lambdaHome = alphaH * betaA * lta * 1.12 * wAdj;
+    let lambdaAway = alphaA * betaH * lta * wAdj;
+    lambdaHome = clamp(lambdaHome, 0.3, 3.8);
+    lambdaAway = clamp(lambdaAway, 0.25, 3.6);
+
+    const homeElo = eloFromRecord(ev.homeRecord);
+    const awayElo = eloFromRecord(ev.awayRecord);
+
+    const homePower = clamp(alphaH, 0.5, 2.0);
+    const awayPower = clamp(alphaA, 0.5, 2.0);
+
+    return {
+      lambdaHome: r2(lambdaHome),
+      lambdaAway: r2(lambdaAway),
+      // قدرت‌های واقعی دیکسون-کولز — λ = α × β × leagueTeamAvg × homeAdv
+      homeAttack: r2(clamp(alphaH, 0.35, 2.3)),
+      awayAttack: r2(clamp(alphaA, 0.3, 2.2)),
+      homeDefense: r2(clamp(betaH, 0.45, 1.9)),
+      awayDefense: r2(clamp(betaA, 0.45, 1.9)),
+      homeElo,
+      awayElo,
+      homePpda: r2(clamp(12 - (homePower - 1) * 7, 8.5, 15)),
+      awayPpda: r2(clamp(12.4 - (awayPower - 1) * 7, 8.5, 15.5)),
+      homeFieldTilt: Math.round(clamp(50 + (homeElo - 1500) / 12, 42, 63)),
+      awayFieldTilt: Math.round(clamp(50 + (awayElo - 1500) / 12, 40, 62)),
+      weatherAdjusted: adverse,
+      statsSource: "ESPN_STANDINGS",
+      homeRank: homeEntry.rank || null,
+      homeGF: homeEntry.gf,
+      homeGA: homeEntry.ga,
+      homeGP: homeEntry.gp,
+      awayRank: awayEntry.rank || null,
+      awayGF: awayEntry.gf,
+      awayGA: awayEntry.ga,
+      awayGP: awayEntry.gp,
+      leagueTeamAvg: r2(lta),
+    };
+  }
+
+  // ═══ مسیر شفاف جایگزین — فقط رکورد/فرم واقعی ESPN (جدول رده‌بندی در دسترس نیست) ═══
+  const homeStr = 0.55 * formFactor(ev.homeForm) + 0.45 * seasonFactor(ev.homeRecord);
+  const awayStr = 0.55 * formFactor(ev.awayForm) + 0.45 * seasonFactor(ev.awayRecord);
 
   let lambdaHome = ev.avgGoals * 0.55 * homeStr * wAdj;
   let lambdaAway = ev.avgGoals * 0.45 * awayStr * wAdj;
@@ -137,7 +207,7 @@ function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null): Derive
   lambdaAway = clamp(lambdaAway, 0.25, 3.6);
 
   // استخراج ضرایب حمله/دفاع سازگار با موتور دیکسون-کولز:
-  // λh = homeAttack × awayDefense × 1.35 × 1.12 → دفاع‌ها = ۱، حمله = λ / ثابت
+  // λh = homeAttack × awayDefense × leagueAvg × 1.12 → دفاع‌ها = ۱، حمله = λ / ثابت
   const homeAttack = clamp(lambdaHome / (1.35 * 1.12), 0.35, 2.3);
   const awayAttack = clamp(lambdaAway / 1.35, 0.3, 2.2);
 
@@ -149,7 +219,31 @@ function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null): Derive
   const homePpda = r2(clamp(12 - (homeStr - 1) * 7, 8.5, 15));
   const awayPpda = r2(clamp(12.4 - (awayStr - 1) * 7, 8.5, 15.5));
 
-  return { lambdaHome: r2(lambdaHome), lambdaAway: r2(lambdaAway), homeAttack: r2(homeAttack), awayAttack: r2(awayAttack), homeElo, awayElo, homePpda, awayPpda, homeFieldTilt, awayFieldTilt, weatherAdjusted: adverse };
+  return {
+    lambdaHome: r2(lambdaHome),
+    lambdaAway: r2(lambdaAway),
+    homeAttack: r2(homeAttack),
+    awayAttack: r2(awayAttack),
+    homeDefense: 1.0,
+    awayDefense: 1.0,
+    homeElo,
+    awayElo,
+    homePpda,
+    awayPpda,
+    homeFieldTilt,
+    awayFieldTilt,
+    weatherAdjusted: adverse,
+    statsSource: "RECORD_FALLBACK",
+    homeRank: null,
+    homeGF: null,
+    homeGA: null,
+    homeGP: null,
+    awayRank: null,
+    awayGF: null,
+    awayGA: null,
+    awayGP: null,
+    leagueTeamAvg: null,
+  };
 }
 
 function weatherString(w: LiveWeather | null): string {
@@ -163,9 +257,9 @@ function modelProbs(d: DerivedStrength) {
   return runDixonColes({
     homeAttack: d.homeAttack,
     awayAttack: d.awayAttack,
-    homeDefense: 1.0,
-    awayDefense: 1.0,
-    leagueAvg: 1.35,
+    homeDefense: d.homeDefense,
+    awayDefense: d.awayDefense,
+    leagueAvg: d.leagueTeamAvg ?? 1.35,
     homeAdvantage: 1.12,
     rho: -0.08,
     eloDiff: d.homeElo - d.awayElo,
@@ -445,6 +539,27 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
   const weatherTargets = keepEvents.filter((e) => Date.parse(e.kickoff) - now < 48 * 3600_000);
   const weatherMap = await poolWeather(weatherTargets.map((e) => e.venueCity));
 
+  // ─── ۳.۵) جدول رسمی رده‌بندی فصل (v6.0 — یک درخواست به‌ازای هر لیگ فعال، کش ۶۰ دقیقه‌ای) ───
+  const activeSlugs = [...new Set(keepEvents.map((e) => e.leagueSlug))];
+  const standingsMap = new Map<string, LeagueStandings | null>();
+  await Promise.all(
+    activeSlugs.map(async (slug) => {
+      try {
+        standingsMap.set(slug, await getLeagueStandings(slug));
+      } catch {
+        standingsMap.set(slug, null);
+      }
+    })
+  );
+  const standingsHit = [...standingsMap.values()].filter(Boolean).length;
+  sources.push({
+    key: "standings",
+    label: "ESPN Standings (جدول رسمی فصل)",
+    ok: standingsHit > 0,
+    detail: `${standingsHit}/${activeSlugs.length} لیگ با آمار واقعی گل زده/خورده و رتبه جدول`,
+    latencyMs: 0,
+  });
+
   let liveUpcoming = 0;
   let liveInPlay = 0;
   let weatherAdjustedCount = 0;
@@ -453,7 +568,8 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
   for (const ev of keepEvents) {
     const kick = Date.parse(ev.kickoff);
     const weather = weatherMap.get(ev.venueCity ?? "") ?? null;
-    const d = deriveStrength(ev, weather);
+    const st = standingsMap.get(ev.leagueSlug) ?? null;
+    const d = deriveStrength(ev, weather, st);
     if (d.weatherAdjusted) weatherAdjustedCount += 1;
     const probs = modelProbs(d);
     const oddsEv = matchOddsEvent(ev, oddsEvents);
@@ -544,6 +660,20 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
       oddsFetchedAt: odds.source === "ENGINE" ? null : existing?.oddsFetchedAt && keepLiveOdds ? existing.oddsFetchedAt : new Date(),
       homeGoals: isLive ? ev.homeScore : null,
       awayGoals: isLive ? ev.awayScore : null,
+      // ─── v6.0 — شناسه‌های رسمی ESPN + سند راستی‌آزمایی جدول فصل ───
+      homeTeamId: ev.homeTeamId,
+      awayTeamId: ev.awayTeamId,
+      homeRank: d.homeRank,
+      homeGF: d.homeGF,
+      homeGA: d.homeGA,
+      homeGP: d.homeGP,
+      awayRank: d.awayRank,
+      awayGF: d.awayGF,
+      awayGA: d.awayGA,
+      awayGP: d.awayGP,
+      leagueTeamAvg: d.leagueTeamAvg,
+      statsSource: d.statsSource,
+      statsFetchedAt: st ? new Date(st.fetchedAt) : null,
       // وضعیت ANALYZED قبلی حفظ می‌شود (فقط گذار LIVE/UPCOMING از منبع واقعی)
       status: isLive ? "LIVE" : existing?.status === "ANALYZED" ? "ANALYZED" : "UPCOMING",
     };
@@ -554,7 +684,7 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
       update: base,
     });
 
-    // بازنویسی ردیف‌های بوک‌میکر (فقط وقتی دیتای واقعی داریم؛ با حفظی‌ها دست نمی‌زنیم)
+    // بازنویسی ردیف‌های بوک‌میکر — v6.0: فقط بوک‌میکرهای واقعی (The Odds API / ESPN)
     if (odds.books.length > 0) {
       await db.oddsRecord.deleteMany({ where: { matchId: row.id } });
       for (const b of odds.books) {
@@ -573,22 +703,10 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
           },
         });
       }
-    } else if (!keepLiveOdds && (await db.oddsRecord.count({ where: { matchId: row.id } })) === 0) {
-      // بدون دیتای زنده → ردیف نماینده از خط نهایی
-      await db.oddsRecord.create({
-        data: {
-          matchId: row.id,
-          bookmaker: "SOFT_A",
-          bookmakerLabel: odds.source === "ESPN_DRAFTKINGS" ? "خط ESPN" : "مدل داخلی",
-          oddsHome: odds.oddsHome,
-          oddsDraw: odds.oddsDraw,
-          oddsAway: odds.oddsAway,
-          oddsOver25: odds.oddsOver25,
-          oddsUnder25: odds.oddsUnder25,
-          oddsCornersOver95: fairOdds(0.45, 1.08),
-          oddsCornersUnder95: fairOdds(0.55, 1.08),
-        },
-      });
+    } else if (!keepLiveOdds) {
+      // v6.0 قانون طلایی: بدون بوک‌میکر واقعی، هیچ ردیف ضریب ساختگی ساخته نمی‌شود —
+      // خط فعال سیستم = «ضریب عادلانه مدل کمّی (پیش از بازگشایی خط بوک‌میکر)» با برچسب شفاف
+      await db.oddsRecord.deleteMany({ where: { matchId: row.id } });
     }
   }
 
@@ -618,6 +736,14 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     ok: weatherAdjustedCount > 0 || weatherMap.size > 0,
     detail: `${weatherMap.size} ورزشگاه · تعدیل جوی روی ${weatherAdjustedCount} بازی`,
     latencyMs: 0,
+  });
+
+  // ─── v6.0 — پاک‌سازی ردیف‌های ESPN میراث v5 (بدون سند راستی‌آزمایی جدول فصل) ───
+  // هر ردیفی که در سینک جاری بازسازی نشده و statsSource ندارد، داده کهنهٔ پیش از v6 است
+  // و طبق قانون طلایی Zero-Mock از دید کاربر خارج می‌شود.
+  const legacyLeftovers = await db.match.updateMany({
+    where: { dataSource: "ESPN", status: { in: ["UPCOMING", "ANALYZED"] }, statsSource: null },
+    data: { status: "ARCHIVED" },
   });
 
   // ─── ۴) کالیبراسیون با نتایج واقعی دیروز و امروز ───
@@ -677,7 +803,7 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     },
     weatherAdjusted: weatherAdjustedCount,
     calibrated: calibratedCount,
-    archived: stale.count,
+    archived: stale.count + legacyLeftovers.count,
     elapsedMs: Date.now() - t0,
   };
 

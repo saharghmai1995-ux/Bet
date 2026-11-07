@@ -84,6 +84,21 @@ export interface MatchDTO {
   lineupShockAway?: number | null;
   // ─── v4.0 — تلهمتری زنده ───
   dataSource?: string; // SEED | ESPN | SPORTSDB
+  // ─── v6.0 — سند راستی‌آزمایی داده (Data Verification Inspector) ───
+  externalId?: string | null; // espn-<slug>-<eventId>
+  homeTeamId?: string | null;
+  awayTeamId?: string | null;
+  homeRank?: number | null; // رتبه واقعی جدول فصل
+  homeGF?: number | null; // گل زده واقعی فصل میزبان
+  homeGA?: number | null;
+  homeGP?: number | null;
+  awayRank?: number | null;
+  awayGF?: number | null;
+  awayGA?: number | null;
+  awayGP?: number | null;
+  leagueTeamAvg?: number | null; // میانگین گل هر تیم/بازی از جدول واقعی
+  statsSource?: string | null; // ESPN_STANDINGS | RECORD_FALLBACK
+  statsFetchedAt?: string | null; // آخرین واکشی جدول رده‌بندی
   homeLogo?: string | null;
   awayLogo?: string | null;
   venueName?: string | null;
@@ -493,6 +508,49 @@ export interface LineupShockDTO {
     status: string;
     isKey: boolean;
   }[];
+  // ─── v6.0 — دیتای واقعی ESPN (Zero-Mock) ───
+  /** OFFICIAL = ترکیب رسمی اعلام‌شده از summary · SEASON = آمار فصل واقعی (پیش از اعلام) */
+  mode?: "OFFICIAL" | "SEASON" | "UNAVAILABLE";
+  fetchedAt?: string;
+  /** اندپوینت‌های واقعی استفاده‌شده — برای باکس راستی‌آزمایی */
+  sources?: string[];
+  espnEventUrl?: string | null;
+  espnEventId?: string | null;
+  players?: { home: LineupPlayerDTO[]; away: LineupPlayerDTO[] };
+  /** v6.0 — پیش‌نمایش غیبت بازیکن واقعی (کلیک کاربر روی کلید وضعیت) */
+  absPreview?: LineupAbsPreviewDTO | null;
+}
+
+/** v6.0 — بازیکن واقعی از Roster/Summary API با آمار فصل جاری */
+export interface LineupPlayerDTO {
+  name: string; // displayName واقعی ESPN
+  position: string; // GK | DEF | MID | FW (از position.abbreviation)
+  age: number | null;
+  appearances: number | null; // بازی فصل جاری
+  goals: number | null; // گل واقعی فصل
+  assists: number | null; // پاس گل واقعی فصل
+  shotsOnTarget: number | null;
+  /** شاخص VAEP واقعی: (G×۰.۳۵ + A×۰.۲۵ + SoT×۰.۰۸) / appearances */
+  vaep: number | null;
+  /** شاخص تهدید (xT تقریبی): (G×۰.۴۵ + A×۰.۳۰ + SoT×۰.۱۰) / appearances */
+  xT: number | null;
+  starter: boolean | null; // فقط در حالت OFFICIAL
+  status: "STARTER" | "BENCH" | "SQUAD" | "NO_STATS";
+  isKey: boolean; // ۴ شاخص برتر تیم بر اساس VAEP واقعی
+}
+
+/** v6.0 — اثر غیبت یک بازیکن واقعی روی λ و احتمالات */
+export interface LineupAbsPreviewDTO {
+  name: string;
+  side: "HOME" | "AWAY";
+  vaepShare: number; // سهم بازیکن از VAEP ترکیب
+  shockDelta: number; // دلتای اعمال‌شده روی λ
+  lambdaHome: number;
+  lambdaAway: number;
+  pHome: number;
+  pDraw: number;
+  pAway: number;
+  baseline: { lambdaHome: number; lambdaAway: number; pHome: number; pDraw: number; pAway: number };
 }
 
 /** سیگنال پوشش زنده (In-Play Hedge Trigger) */

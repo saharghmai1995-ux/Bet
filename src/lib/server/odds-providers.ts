@@ -417,8 +417,8 @@ export async function probeOddsSources(opts: { oddsApiKey?: string; oddsApiIoKey
 // ═════════════════════ مقایسه ضرایب یک بازی بین منابع ═════════════════════
 
 /**
- * جدول مقایسه‌ای تب ۲: ESPN Core (بوک‌میکرها) ↔ Polymarket (Zero-Vig) ↔
- * احتمالات Analytics ESPN ↔ خط پایه فعلی سیستم
+ * جدول مقایسه‌ای تب ۲ — v6.0: فقط منابع واقعی با برچسب شفاف منبع داده:
+ * ESPN Core (بوک‌میکرها) ↔ ESPN Analytics ↔ Polymarket (Zero-Vig) ↔ خط فعال سیستم
  */
 export async function fetchMatchOddsComparison(m: {
   externalId?: string | null;
@@ -427,6 +427,8 @@ export async function fetchMatchOddsComparison(m: {
   oddsHome: number;
   oddsDraw: number;
   oddsAway: number;
+  /** v6.0 — منبع خط فعال سیستم برای برچسب شفاف */
+  oddsSource?: string | null;
 }): Promise<{ rows: OddsComparisonRowDTO[]; espnProbabilities: { home: number; draw: number; away: number } | null }> {
   const rows: OddsComparisonRowDTO[] = [];
   let espnProbabilities: { home: number; draw: number; away: number } | null = null;
@@ -493,13 +495,24 @@ export async function fetchMatchOddsComparison(m: {
     // منبع اختیاری است
   }
 
+  // v6.0 — خط فعال سیستم با برچسب شفاف منبع (هیچ بوک‌میکر ساختگی نمایش داده نمی‌شود)
+  const src = m.oddsSource ?? "ENGINE";
+  const baselineLabel =
+    src === "ODDS_API"
+      ? "خط فعال سیستم — بهترین قیمت واقعی The Odds API"
+      : src === "ESPN_DRAFTKINGS"
+        ? "خط فعال سیستم — ESPN/DraftKings"
+        : "ضریب عادلانه مدل کمّی (پیش از بازگشایی خط بوک‌میکر)";
   rows.push({
     source: "SYSTEM_BASELINE",
-    sourceLabel: "خط پایه فعلی سیستم",
+    sourceLabel: baselineLabel,
     home: m.oddsHome,
     draw: m.oddsDraw,
     away: m.oddsAway,
-    note: "ESPN Scoreboard / The Odds API / موتور",
+    note:
+      src === "ENGINE"
+        ? "تا بازگشایی خط بوک‌میکر، فقط خروجی مدل دیکسون-کولز جدول فصل نمایش داده می‌شود"
+        : "قیمت واقعی ثبت‌شده در آخرین همگام‌سازی زنده",
   });
 
   return { rows, espnProbabilities };

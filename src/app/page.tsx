@@ -162,7 +162,7 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 فوتبال‌کوانت
                 <Badge className="gap-1 border-violet-500/40 bg-violet-500/15 px-1.5 py-0 text-[9px] text-violet-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v5.0 Orthogonal Shield
+                  <Sparkles className="size-2.5" /> v6.0 Zero-Mock Verified
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
@@ -351,7 +351,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۵.۰ — فید زنده ESPN/Polymarket/The Odds API/Odds-API.io ← اسکن اتوماتیک صفر-توکن ← T-60 ← دیکسون-کولز + شین ← موتور متعامد ۱۵ بازاره ← مناظره گاو/خرس (LLM تقاضامحور با کش) ← کلِی همزمان ← پوشش زنده
+            فوتبال‌کوانت ۶.۰ — ESPN Scoreboard + Standings + Roster واقعی ← The Odds API/Polymarket ← اسکن صفر-توکن ← T-60 با بازیکنان واقعی ← دیکسون-کولز از جدول رسمی فصل ← موتور متعامد ۱۵ بازاره ← مناظره گاو/خرس ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

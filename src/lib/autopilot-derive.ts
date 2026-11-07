@@ -113,7 +113,7 @@ export function buildTelegramText(
   strategyLabel: string
 ): string {
   const lines: string[] = [];
-  lines.push("⚽ فوتبال‌کوانت v5.0 — سبد هوشمند تیپ‌های مکمل متعامد");
+  lines.push("⚽ فوتبال‌کوانت v6.0 — سبد هوشمند تیپ‌های مکمل متعامد");
   lines.push(`💰 کل بودجه روزانه: ${budget} واحد | استراتژی: ${strategyLabel}`);
   lines.push("─────────────────────");
   for (const it of items) {

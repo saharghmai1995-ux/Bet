@@ -82,10 +82,11 @@ export function useAutopilot() {
       await sleep(250 + (hashStr(m.id) % 350));
       setStage(m.id, "ingest", "DONE");
 
-      // ─── ۲) T-60: اعلام ترکیب و بازمحاسبه VAEP/xT ───
+      // ─── ۲) T-60: ترکیب/آمار واقعی ESPN — v6.0: فراخوانی سبک در اسکن پس‌زمینه
+      // (LIGHT = حداکثر یک درخواست summary؛ واکشی کامل بازیکنان فقط در تب T-60 با تقاضای کاربر)
       setStage(m.id, "t60", "RUNNING");
       try {
-        const lineup = await postJson<LineupShockDTO>("/api/lineup", { matchId: m.id });
+        const lineup = await postJson<LineupShockDTO>("/api/lineup", { matchId: m.id, depth: "LIGHT" });
         if (lineup.success) {
           patchAutopilot(m.id, { lineup });
           store.setShock(m.id, lineup.home.shockDelta, lineup.away.shockDelta);

@@ -6,7 +6,7 @@
 import { runDixonColes, type MarketProbabilities } from "./poisson";
 import { effectiveNpxg, refereeAdjustment, fatigueAdjustment, type RefereeProfile } from "./contextual";
 import { shinDevig, shinDevigPair } from "./devig";
-import type { Match, Player, Referee, OddsRecord } from "@prisma/client";
+import type { Match, Referee, OddsRecord } from "@prisma/client";
 
 export interface MatchContextNotes {
   gamestateNote: string | null;
@@ -79,7 +79,8 @@ export function computeMatchEngine(match: MatchWithRefs): MatchEngine {
     awayAttack: awayAttackShock * fatigue.awayLambdaMultiplier,
     homeDefense: match.homeDefense,
     awayDefense: match.awayDefense,
-    leagueAvg: 1.35,
+    // v6.0: میانگین واقعی لیگ از جدول رسمی رده‌بندی ESPN (fallback: ۱.۳۵)
+    leagueAvg: match.leagueTeamAvg ?? 1.35,
     homeAdvantage: 1.12,
     rho: -0.08,
     eloDiff: match.homeElo - match.awayElo,
@@ -113,13 +114,8 @@ export function computeMatchEngine(match: MatchWithRefs): MatchEngine {
   };
 }
 
-/** حذف حاشیه شین روی خط هر بوک‌میکر (1X2) */
+/** حذف حاشیه شین روی خط هر بوک‌میکر واقعی (1X2) — v6.0: فقط بوک‌میکرهای واقعی فید */
 export function devigRows(odds: OddsRecord[]) {
-  const labels: Record<string, string> = {
-    PINNACLE: "پیناکل (Sharp)",
-    SOFT_A: "بت‌مستر (Soft)",
-    SOFT_B: "پرسیان‌بت (Soft)",
-  };
   const order = ["PINNACLE", "SOFT_A", "SOFT_B"];
   return order
     .map((book) => {
@@ -128,8 +124,8 @@ export function devigRows(odds: OddsRecord[]) {
       const res = shinDevig([rec.oddsHome, rec.oddsDraw, rec.oddsAway]);
       return {
         bookmaker: book,
-        // v4.0: نام واقعی بوک‌میکر از فید زنده (The Odds API / ESPN) در اولویت
-        bookmakerLabel: rec.bookmakerLabel ?? labels[book] ?? book,
+        // v6.0: فقط نام واقعی از فید زنده (The Odds API / ESPN Core) — هیچ نام ساختگی نداریم
+        bookmakerLabel: rec.bookmakerLabel ?? `بوک‌میکر واقعی #${book === "PINNACLE" ? 1 : book === "SOFT_A" ? 2 : 3}`,
         marginPct: res.margin,
         shinProbs: { home: res.probs[0], draw: res.probs[1], away: res.probs[2] },
         shinZ: res.z,
@@ -148,36 +144,3 @@ export function sharpOu(odds: OddsRecord[]): { over: number; under: number } | n
   return { over: res.over, under: res.under };
 }
 
-/** محاسبه شوک ترکیب از بازیکنان (T-60) */
-export function computeLineupShock(players: Player[]): {
-  xiVaep: number;
-  xiXt: number;
-  fullStrengthVaep: number;
-  shockDelta: number;
-  missingKeyPlayers: { name: string; position: string; xT: number; vaep: number; status: string }[];
-  unavailableCount: number;
-} {
-  const available = players.filter((p) => p.status === "FIT");
-  const doubtful = players.filter((p) => p.status === "DOUBTFUL");
-  const missing = players.filter((p) => p.status === "INJURED" || p.status === "SUSPENDED");
-
-  const byVaep = [...players].sort((a, b) => b.vaep - a.vaep);
-  const fullStrengthVaep = byVaep.slice(0, 11).reduce((s, p) => s + p.vaep, 0);
-
-  const xiPool = [...available, ...doubtful.map((p) => ({ ...p, vaep: p.vaep * 0.5 }))];
-  const xiVaep = xiPool.sort((a, b) => b.vaep - a.vaep).slice(0, 11).reduce((s, p) => s + p.vaep, 0);
-  const xiXt = xiPool.sort((a, b) => b.xT - a.xT).slice(0, 11).reduce((s, p) => s + p.xT, 0);
-
-  const shockDelta = fullStrengthVaep > 0 ? (xiVaep - fullStrengthVaep) / fullStrengthVaep : 0;
-
-  return {
-    xiVaep,
-    xiXt,
-    fullStrengthVaep,
-    shockDelta,
-    missingKeyPlayers: missing
-      .filter((p) => p.isKey || p.xT > 0.35)
-      .map((p) => ({ name: p.name, position: p.position, xT: p.xT, vaep: p.vaep, status: p.status })),
-    unavailableCount: missing.length + doubtful.length,
-  };
-}

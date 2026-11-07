@@ -52,7 +52,7 @@ function ToastItem({ id }: { id: string }) {
     <div
       role="alert"
       className={cn(
-        "pointer-events-auto w-[min(88vw,318px)] overflow-hidden rounded-xl border shadow-xl backdrop-blur-xl animate-in slide-in-from-top-3 fade-in",
+        "pointer-events-auto w-[min(84vw,272px)] overflow-hidden rounded-xl border shadow-xl backdrop-blur-xl animate-in slide-in-from-top-3 fade-in",
         isHedge ? "border-emerald-400/40 bg-[rgba(7,20,16,0.92)] shadow-emerald-900/40" : "border-amber-400/30 bg-[rgba(20,16,7,0.92)]"
       )}
     >
@@ -64,9 +64,9 @@ function ToastItem({ id }: { id: string }) {
         />
       </div>
 
-      <div className="p-2.5">
+      <div className="p-2">
         <div className="flex items-start justify-between gap-1.5">
-          <p className="flex items-center gap-1 text-[11px] font-bold">
+          <p className="flex items-center gap-1 text-[10px] font-bold">
             <span className="relative flex size-1.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-500/60" />
               <span className="relative inline-flex size-1.5 rounded-full bg-rose-500" />
@@ -83,34 +83,34 @@ function ToastItem({ id }: { id: string }) {
           </div>
         </div>
 
-        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+        <p className="mt-0.5 truncate text-[9px] text-muted-foreground">
           {toast.matchLabel} · سناریو: {toast.scenarioLabel}
         </p>
 
         {isHedge && hedge ? (
-          <div className="mt-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-2 text-[10px]">
+          <div className="mt-1 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-1.5 text-[9px]">
             <p className="font-semibold text-emerald-300">فرصت پوشش زنده:</p>
-            <p className="mt-0.5 leading-4 text-foreground/90">
+            <p className="mt-0.5 leading-3.5 text-foreground/90">
               الان روی <b>{hedge.targetLabel}</b> ×<b className="font-num" dir="ltr">{hedge.targetOdds.toFixed(2)}</b> مبلغ{" "}
               <b className="font-num text-emerald-300" dir="ltr">{faNum(hedge.stake, 1)}</b> واحد — سود تضمینی:{" "}
               <b dir="ltr" className="text-emerald-300">+{faNum(hedge.profitIfHedge, 1)}</b>
             </p>
-            <p className="mt-0.5 truncate text-[9px] text-muted-foreground">
+            <p className="mt-0.5 truncate text-[8px] text-muted-foreground">
               (پیش‌بازی: {toast.preBet.label} ×{faNum(toast.preBet.stake, 1)} · سود آن سناریو: +{faNum(hedge.profitIfPre, 1)})
             </p>
           </div>
         ) : (
-          <p className="mt-1.5 line-clamp-2 rounded-lg border border-white/10 bg-white/[0.04] p-2 text-[10px] leading-4 text-foreground/85">
+          <p className="mt-1 line-clamp-2 rounded-lg border border-white/10 bg-white/[0.04] p-1.5 text-[9px] leading-3.5 text-foreground/85">
             {toast.message}
           </p>
         )}
 
-        <div className="mt-1.5 flex items-center gap-1.5">
+        <div className="mt-1 flex items-center gap-1.5">
           {isHedge ? (
             <Button
               size="sm"
               className={cn(
-                "h-7 flex-1 gap-1 bg-emerald-600 text-[10px] hover:bg-emerald-500",
+                "h-6 flex-1 gap-1 bg-emerald-600 text-[9px] hover:bg-emerald-500",
                 toast.actioned && "bg-emerald-800/60"
               )}
               disabled={toast.actioned}

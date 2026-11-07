@@ -34,6 +34,9 @@ export interface LiveMatchEvent {
   leagueSlug: string;
   leagueName: string;
   avgGoals: number;
+  /** v6.0 — شناسه‌های رسمی ESPN دو تیم (برای Roster API واقعی) */
+  homeTeamId: string | null;
+  awayTeamId: string | null;
   homeTeam: string;
   awayTeam: string;
   homeLogo: string | null;
@@ -196,6 +199,8 @@ function parseEspnEvent(ev: any, league: LeagueMeta): LiveMatchEvent | null {
     leagueSlug: league.slug,
     leagueName: league.name,
     avgGoals: league.avgGoals,
+    homeTeamId: home.team?.id != null ? String(home.team.id) : null,
+    awayTeamId: away.team?.id != null ? String(away.team.id) : null,
     homeTeam: home.team.displayName,
     awayTeam: away.team.displayName,
     homeLogo: home.team?.logo ?? null,
