@@ -256,8 +256,8 @@ export async function sendSettlementNotification(slip: IssuedSlip): Promise<bool
   const score = `${slip.homeGoals}−${slip.awayGoals}`;
 
   const photo = r.win
-    ? await generateTrophyImage({ homeTeam: slip.homeTeam, awayTeam: slip.awayTeam, score, resultLabel: r.label })
-    : await generateLockerRoomImage({ homeTeam: slip.homeTeam, awayTeam: slip.awayTeam, score, resultLabel: r.label });
+    ? await generateTrophyImage({ homeTeam: slip.homeTeam, awayTeam: slip.awayTeam, score })
+    : await generateLockerRoomImage({ homeTeam: slip.homeTeam, awayTeam: slip.awayTeam, score });
 
   let ok = false;
   if (photo) {
