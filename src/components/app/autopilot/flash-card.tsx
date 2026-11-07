@@ -151,7 +151,14 @@ export function FlashCard({
         style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
       >
         {/* ═══════════ روی کارت ═══════════ */}
-        <div aria-hidden={flipped} className="absolute inset-0 flex flex-col gap-3 rounded-2xl bg-[rgba(10,14,24,0.92)] p-4 [backface-visibility:hidden]">
+        {/* fix v8.1: روی چهره غیرفعال pointer-events-none تا دکمه‌های پشتِ کارت، کلیک را نميربايند */}
+        {/* fix v8.1: محتوای بلند فقط داخل ناحیه اسکرول می‌شود؛ نوار اکشن همیشه پایین کارت پین می‌ماند */}
+        <div
+          aria-hidden={flipped}
+          className={`absolute inset-0 flex flex-col gap-2 overflow-hidden rounded-2xl bg-[rgba(10,14,24,0.92)] p-4 [backface-visibility:hidden] ${flipped ? "pointer-events-none" : "pointer-events-auto"}`}
+        >
+          {/* ناحیه اسکرول‌شونده محتوا — هرگز به بیرون کارت سرریز نمی‌شود */}
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain">
           {/* هدر — v8.0: نام کامل تیم‌ها بدون برش (flex-wrap + leading-snug) */}
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
@@ -310,8 +317,10 @@ export function FlashCard({
             </div>
           </div>
 
-          {/* دکمه‌های عملیاتی */}
-          <div className="mt-auto grid grid-cols-[1fr_1fr_auto] gap-1.5" onClick={(e) => e.stopPropagation()}>
+          </div>
+
+          {/* دکمه‌های عملیاتی — پین‌شده پایین کارت (همیشه قابل کلیک) */}
+          <div className="shrink-0 grid grid-cols-[1fr_1fr_auto] gap-1.5" onClick={(e) => e.stopPropagation()}>
             <Button
               size="sm"
               className="h-8 gap-1 bg-gradient-to-l from-amber-500/80 to-amber-400/80 text-[11px] text-black hover:from-amber-500 hover:to-amber-400"
@@ -336,7 +345,7 @@ export function FlashCard({
           </div>
 
           {pair.structure.doubleWin && (
-            <p className="flex items-center justify-center gap-1 text-[10px] font-semibold text-amber-300">
+            <p className="flex shrink-0 items-center justify-center gap-1 text-[10px] font-semibold text-amber-300">
               <Sparkles className="size-3" /> فرصت Double-Win — هر دو تیپ می‌توانند همزمان ببرند
             </p>
           )}
@@ -345,7 +354,7 @@ export function FlashCard({
         {/* ═══════════ پشت کارت ═══════════ */}
         <div
           aria-hidden={!flipped}
-          className="absolute inset-0 flex flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-[rgba(8,12,22,0.96)] p-4 [backface-visibility:hidden] [transform:rotateY(180deg)]"
+          className={`absolute inset-0 flex flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-[rgba(8,12,22,0.96)] p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] ${flipped ? "pointer-events-auto" : "pointer-events-none"}`}
           onClick={(e) => e.stopPropagation()}
         >
           <p className="flex items-center gap-1.5 text-xs font-bold">

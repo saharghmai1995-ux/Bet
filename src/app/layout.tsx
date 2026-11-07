@@ -3,9 +3,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "فوتبال‌کوانت ۶.۰ | نسخه Zero-Mock — ۱۰۰٪ داده راستی‌آزمایی‌شده ESPN",
+  title: "فوتبال‌کوانت ۸.۰ Supervisor Quant | Zero-Mock — ۱۰۰٪ داده راستی‌آزمایی‌شده ESPN",
   description:
-    "دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، اسکن خودکار، مناظره گاو/خرس با اخبار واقعی، زوج‌تیپ‌های مکمل با ناحیه طلایی دو-برد، فلش‌کارت‌های سه‌بعدی، کلِی همزمان و پوشش زنده",
+    "ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی، دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },

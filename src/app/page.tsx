@@ -378,7 +378,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۷.۰ — ESPN FT Grader خودکار (تسویه تیپ A/B با نتیجه واقعی) + کانال تلگرام VIP (کارت/تیزر/نتیجه با تصویر و هش SHA-256) ← دیکسون-کولز ← موتور متعامد ۱۵ بازاره ← کلِی همزمان ← پوشش زنده
+            فوتبال‌کوانت ۸.۰ Supervisor Quant — ESPN FT Grader خودکار (تسویه تیپ A/B با نتیجه واقعی) + کانال تلگرام VIP @aineobet (کارت/تیزر/نتیجه با تصویر و هش SHA-256) + ایجنت سوپروایزر و تک‌تیپ طلایی مونت‌کارلو ← دیکسون-کولز ← موتور متعامد ۱۵ بازاره ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />
