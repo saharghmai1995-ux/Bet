@@ -611,3 +611,116 @@ export interface CalibrationDTO {
   }[];
   lessons: string[];
 }
+
+// ═══════════════════════════════════════════════════════
+// v7.0 — موتور تسویه خودکار پس از پایان بازی (Automated Post-Match Grader)
+// ═══════════════════════════════════════════════════════
+
+/** یک شرط (Leg) از تیپ — با شناسه ESPN بازی برای تسویه میکس دو بازی */
+export interface SettlementLegDTO {
+  key: string; // HOME | DRAW | AWAY | DC_1X | DC_X2 | O25 | U25 | O15 | U35 | BTTS_Y | ...
+  matchExternalId?: string | null; // espn-<slug>-<id> — پیش‌فرض همان بازی کارت
+  matchLabel?: string | null;
+}
+
+export type SlipStatus = "PENDING" | "LIVE" | "WON_A" | "WON_B" | "DOUBLE_WIN" | "MIDDLE_TRAP" | "MANUAL_REVIEW" | "VOID";
+
+/** ردیف کارنامه — کارت صادرشده با تیپ A/B داچینگ و وضعیت تسویه */
+export interface IssuedSlipDTO {
+  id: string;
+  hash: string; // SHA-256 سند راستی‌آزمایی
+  externalId: string | null;
+  league: string;
+  homeTeam: string;
+  awayTeam: string;
+  kickoff: string;
+  labelA: string;
+  labelB: string;
+  legsA: SettlementLegDTO[];
+  legsB: SettlementLegDTO[];
+  oddsA: number;
+  oddsB: number;
+  stakeA: number;
+  stakeB: number;
+  guaranteedProfit: number;
+  marginPct: number;
+  archetype: string | null;
+  espnUrl: string | null;
+  status: SlipStatus;
+  homeGoals: number | null;
+  awayGoals: number | null;
+  profitA: number | null;
+  profitB: number | null;
+  netProfit: number | null;
+  settledAt: string | null;
+  settleNote: string | null;
+  telegramCard: boolean;
+  telegramTeaser: boolean;
+  telegramResult: boolean;
+  createdAt: string;
+}
+
+/** آمار تجمیعی کارنامه */
+export interface SettlementStatsDTO {
+  total: number;
+  pending: number;
+  live: number;
+  wonA: number;
+  wonB: number;
+  doubleWin: number;
+  middleTrap: number;
+  manual: number;
+  void: number;
+  settled: number;
+  netProfit: number;
+  /** سود خالص نسبت به مجموع استیک‌های تسویه‌شده (٪) */
+  netProfitPct: number;
+  staked: number;
+}
+
+/** خروجی همگام‌سازی و تسویه خودکار با سرور ESPN */
+export interface SettlementSyncResultDTO {
+  success: boolean;
+  checkedEspn: number; // تعداد رخدادهای ESPN بررسی‌شده (امروز + دیروز)
+  ftFound: number; // تعداد بازی‌های FT یافت‌شده
+  settled: { id: string; matchLabel: string; status: SlipStatus; netProfit: number }[];
+  live: number;
+  notified: number; // پیام‌های تلگرام ارسال‌شده
+  elapsedMs: number;
+  error?: string;
+}
+
+/** خروجی کامل کارنامه + صندوق تلگرام */
+export interface LedgerDTO {
+  success: boolean;
+  slips: IssuedSlipDTO[];
+  stats: SettlementStatsDTO;
+  outbox: { id: string; kind: string; ok: boolean; detail: string | null; slipHash: string | null; createdAt: string }[];
+  telegram: { configured: boolean; channelSet: boolean };
+}
+
+/** آیتم صدور کارت از سبد فلش‌کارت‌ها (بدنه POST /api/settlement/issue) */
+export interface IssueSlipItemDTO {
+  match: {
+    id: string;
+    externalId?: string | null;
+    league: string;
+    homeTeam: string;
+    awayTeam: string;
+    kickoff: string;
+    espnUrl?: string | null;
+  };
+  labelA: string;
+  labelB: string;
+  legsA: SettlementLegDTO[];
+  legsB: SettlementLegDTO[];
+  oddsA: number;
+  oddsB: number;
+  stakeA?: number; // اگر نیاید — داچینگ سود برابر روی مجموع ۱۰۰ واحد
+  stakeB?: number;
+  guaranteedProfit: number;
+  marginPct: number;
+  archetype?: string | null;
+  lambdaHome?: number | null;
+  lambdaAway?: number | null;
+}

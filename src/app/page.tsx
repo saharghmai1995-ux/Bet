@@ -14,6 +14,7 @@ import {
   Newspaper,
   Radio,
   Settings,
+  ClipboardCheck,
   Sparkles,
   Swords,
   Target,
@@ -28,6 +29,7 @@ import { EngineTab } from "@/components/app/engine-tab";
 import { DebateTab } from "@/components/app/debate-tab";
 import { RiskTab } from "@/components/app/risk-tab";
 import { LiveTab } from "@/components/app/live-tab";
+import { SettlementTab } from "@/components/app/settlement-tab";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
 import { useQuantStore } from "@/lib/store";
@@ -49,6 +51,7 @@ const PRO_TABS = [
   { value: "debate", label: "مناظره ایجنت‌ها", icon: Swords },
   { value: "risk", label: "پرتفوی مکمل", icon: Layers },
   { value: "live", label: "زنده و T-60", icon: Radio },
+  { value: "settlement", label: "کارنامه و تسویه", icon: ClipboardCheck },
   { value: "news", label: "رادار اخبار زنده", icon: Newspaper },
   { value: "calibration", label: "کالیبراسیون", icon: Gauge },
   { value: "engine", label: "موتور احتمالات", icon: Calculator },
@@ -262,6 +265,7 @@ export default function Home() {
             <FlashcardDeck />
             <NewsTickerStrip />
             <PipelineRadar onOpenCard={openFlashcardsFor} />
+            <SettlementTab />
           </div>
         ) : (
           /* ═══ حالت ۲: آزمایشگاه مهندسی کوانت (Pro Quant Terminal) ═══ */
@@ -327,6 +331,10 @@ export default function Home() {
               <LiveTab onGoToTab={goToTab} />
             </TabsContent>
 
+            <TabsContent value="settlement">
+              <SettlementTab />
+            </TabsContent>
+
             <TabsContent value="news">
               <NewsRadar />
             </TabsContent>
@@ -351,7 +359,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۶.۰ — ESPN Scoreboard + Standings + Roster واقعی ← The Odds API/Polymarket ← اسکن صفر-توکن ← T-60 با بازیکنان واقعی ← دیکسون-کولز از جدول رسمی فصل ← موتور متعامد ۱۵ بازاره ← مناظره گاو/خرس ← کلِی همزمان ← پوشش زنده
+            فوتبال‌کوانت ۷.۰ — ESPN FT Grader خودکار (تسویه تیپ A/B با نتیجه واقعی) + کانال تلگرام VIP (کارت/تیزر/نتیجه با تصویر و هش SHA-256) ← دیکسون-کولز ← موتور متعامد ۱۵ بازاره ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

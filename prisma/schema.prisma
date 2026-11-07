@@ -242,3 +242,69 @@ model BacktestRun {
   config     String // JSON config
   createdAt  DateTime @default(now())
 }
+
+// ─── v7.0 — دفتر کارنامه: کارت‌های صادرشده (تیپ A + تیپ B داچینگ) ───
+// پس از FT شدن بازی در ESPN Scoreboard، تسویه ۱۰۰٪ خودکار انجام می‌شود:
+//   WON_A (برد تیپ A) · WON_B (برد تیپ B) · DOUBLE_WIN (جکپات دو برد)
+//   MIDDLE_TRAP (تله میانی — باخت صادقانه) · MANUAL_REVIEW (بازار خارج اسکوربورد)
+model IssuedSlip {
+  id         String  @id @default(cuid())
+  hash       String  @unique // SHA-256 سند راستی‌آزمایی کارت
+  externalId String? // شناسه رخداد ESPN (espn-<slug>-<id>) برای تطبیق تسویه
+  matchId    String? // شناسه داخلی Match
+  league     String
+  homeTeam   String
+  awayTeam   String
+  kickoff    DateTime
+
+  labelA String // شرح تیپ A
+  labelB String // شرح تیپ B
+  legsA  String // JSON: [{key, matchExternalId?, matchLabel}] شرط‌های تیپ A
+  legsB  String // JSON: شرط‌های تیپ B
+  oddsA  Float  // ضریب نهایی تیپ A
+  oddsB  Float  // ضریب نهایی تیپ B
+  stakeA Float  // مبلغ داچینگ تیپ A (مجموع استیک = ۱۰۰ واحد)
+  stakeB Float  // مبلغ داچینگ تیپ B
+  cellsA String? // JSON: خانه‌های پوشش تیپ A روی ماتریس ۶×۶
+  cellsB String?
+  guaranteedProfit Float // سود تضمینی داچینگ (در پوشش)
+  marginPct        Float
+  archetype        String? // نام کوتاه الگوی متعامد
+  espnUrl          String? // لینک راستی‌آزمایی رسمی ESPN
+
+  // ─── تسویه خودکار پس از FT ───
+  status     String  @default("PENDING") // PENDING | LIVE | WON_A | WON_B | DOUBLE_WIN | MIDDLE_TRAP | MANUAL_REVIEW | VOID
+  homeGoals  Int?
+  awayGoals  Int?
+  profitA    Float?  // سود/زیان تیپ A پس از تسویه
+  profitB    Float?
+  netProfit  Float?  // سود خالص کل داچینگ
+  settledAt  DateTime?
+  settleNote String?
+
+  // ─── وضعیت انتشار تلگرام ───
+  telegramCard   Boolean @default(false) // کارت کامل منتشر شد
+  telegramTeaser Boolean @default(false) // تیزر (تیپ B سانسور) منتشر شد
+  telegramResult Boolean @default(false) // نتیجه پس از FT منتشر شد
+
+  createdAt DateTime @default(now())
+  outbox    TelegramOutbox[]
+}
+
+// ─── v7.0 — آرشیو پیام‌های ارسالی کانال تلگرام VIP ───
+model TelegramOutbox {
+  id     String  @id @default(cuid())
+  slip   IssuedSlip? @relation(fields: [slipId], references: [id])
+  slipId String?
+  kind   String  // CARD | TEASER | RESULT | CONFIG_TEST
+  ok     Boolean
+  detail String? // شناسه پیام تلگرام یا متن خطا
+  createdAt DateTime @default(now())
+}
+
+// ─── v7.0 — تنظیمات سراسری سمت سرور (توکن بات تلگرام و ...) ───
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

@@ -768,6 +768,16 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     console.warn("real-result calibration failed:", err);
   }
 
+  // ─── ۴.۵) v7.0 — تسویه خودکار کارت‌های کارنامه با نتایج FT واقعی ESPN ───
+  // به محض تغییر وضعیت بازی در ESPN به FT، تیپ A/B به‌صورت ۱۰۰٪ خودکار تسویه
+  // و اعلام تلگرام (تصویر جام/رختکن) انجام می‌شود — بدون کلیک کاربر.
+  try {
+    const { autoSettleInBackground } = await import("./liveDataService");
+    await autoSettleInBackground();
+  } catch (err) {
+    console.warn("auto-settle background failed:", err);
+  }
+
   // ─── ۵) آرشیو: بازی‌های گذشته زنده + دیتای mock وقتی فید زنده پوشش می‌دهد ───
   const cutoff = new Date(now - 3 * 3600_000);
   const stale = await db.match.updateMany({

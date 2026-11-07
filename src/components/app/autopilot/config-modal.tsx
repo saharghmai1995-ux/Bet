@@ -14,6 +14,7 @@ import {
   KeyRound,
   Link2,
   RadioTower,
+  Send,
   ShieldCheck,
   Sparkles,
   Timer,
@@ -260,6 +261,48 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
                 onValueChange={(v) => patchConfig({ scanIntervalSec: v[0] })}
                 aria-label="بازه اسکن خودکار به ثانیه"
               />
+            </div>
+          </div>
+
+          {/* ─── v7.0 — کانال تلگرام VIP ─── */}
+          <div className="space-y-3 rounded-xl border border-cyan-500/25 bg-cyan-500/[0.05] p-4">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+              <Send className="size-3.5" /> کانال تلگرام VIP (انتشار کارت، تیزر و نتایج)
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="tg-token-modal" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <KeyRound className="size-3" /> توکن بات تلگرام
+              </Label>
+              <Input
+                id="tg-token-modal"
+                dir="ltr"
+                placeholder="123456:ABC-DEF... (از BotFather)"
+                value={config.telegramBotToken}
+                onChange={(e) => patchConfig({ telegramBotToken: e.target.value })}
+                className="h-9 border-white/10 bg-black/30 text-xs"
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="tg-channel-modal" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <KeyRound className="size-3" /> شناسه کانال VIP
+              </Label>
+              <Input
+                id="tg-channel-modal"
+                dir="ltr"
+                placeholder="@my_vip_channel یا -1001234567890"
+                value={config.telegramChannelId}
+                onChange={(e) => patchConfig({ telegramChannelId: e.target.value })}
+                className="h-9 border-white/10 bg-black/30 text-xs"
+                autoComplete="off"
+              />
+              <p className="flex items-start gap-1 text-[10px] leading-4 text-muted-foreground">
+                <span aria-hidden>📤</span>
+                <span>
+                  ذخیره و پیام آزمون از تب «کارنامه و تسویه» انجام می‌شود — تیزر VIP تیپ B را سانسور (🔒) می‌کند و
+                  نتایج FT با تصویر جام پیروزی/رختکن بهم‌ریخته به‌صورت خودکار منتشر می‌شوند.
+                </span>
+              </p>
             </div>
           </div>
 

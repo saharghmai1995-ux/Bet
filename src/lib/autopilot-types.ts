@@ -63,6 +63,9 @@ export interface AutopilotConfig {
   autoDebate: boolean; // مناظره LLM در اسکن خودکار (یا فقط موتور کمّی)
   /** v5.0 — سپر ضد Rate-Limit: اسکن پس‌زمینه ۱۰۰٪ با موتور کمّی محلی (صفر توکن) */
   zeroTokenScan: boolean;
+  /** v7.0 — تلگرام VIP: توکن بات و شناسه کانال (نسخه سروری در Setting ذخیره می‌شود) */
+  telegramBotToken: string;
+  telegramChannelId: string;
 }
 
 export const DEFAULT_CONFIG: AutopilotConfig = {
@@ -76,6 +79,8 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   liveSimulation: true,
   autoDebate: true,
   zeroTokenScan: true,
+  telegramBotToken: "",
+  telegramChannelId: "",
 };
 
 /** نمای آماده فلش‌کارت — از تلاقی مناظره + پرتفوی + T-60 ساخته می‌شود */
