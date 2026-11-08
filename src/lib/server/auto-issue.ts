@@ -196,6 +196,19 @@ export async function autoSyncPastAndPresentMatches(options?: {
 
         const oddsRows = await db.oddsRecord.findMany({ where: { matchId: match.id } });
         const priceRow = oddsRows.find((o) => o.bookmaker === "PINNACLE") ?? oddsRows[0];
+        /** v10.0.1 — خط شارپ مرجع فقط وقتی واقعاً PINNACLE است به کارت منتقل می‌شود */
+        const sharpRow = oddsRows.find((o) => o.bookmaker === "PINNACLE") ?? null;
+        const sharpPrices = sharpRow
+          ? {
+              HOME: sharpRow.oddsHome,
+              DRAW: sharpRow.oddsDraw,
+              AWAY: sharpRow.oddsAway,
+              DC_1X: 1 / (1 / sharpRow.oddsHome + 1 / sharpRow.oddsDraw),
+              DC_X2: 1 / (1 / sharpRow.oddsAway + 1 / sharpRow.oddsDraw),
+              O25: sharpRow.oddsOver25,
+              U25: sharpRow.oddsUnder25,
+            }
+          : undefined;
         const ctx: OrthoContext = {
           lambdaHome: engine.dc.lambdaHome,
           lambdaAway: engine.dc.lambdaAway,
@@ -256,6 +269,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           archetypeCode: crown.archetype?.code ?? null,
           lambdaHome: engine.dc.lambdaHome,
           lambdaAway: engine.dc.lambdaAway,
+          /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
+          pinnaclePrices: sharpPrices,
           supervisorApproved: true,
         };
 

@@ -523,10 +523,26 @@ export async function issueSlip(
   const lA = item.lambdaAway ?? 1.25;
   const probA = legProbability(lH, lA, item.legsA ?? []);
   const probB = legProbability(lH, lA, item.legsB ?? []);
-  const edgeA = computeEdge(probA, item.oddsA);
-  const edgeB = computeEdge(probB, item.oddsB);
-  const edgeSourceA = edgeA !== null ? "MARKET_FAIR" : null;
-  const edgeSourceB = edgeB !== null ? "MARKET_FAIR" : null;
+
+  // ─── v10.0.1 — خط شارپ واقعی پیناکل برای انتخاب مستقیم (پاسخ «چرا عددی ندارد؟») ───
+  // ارزش نسبت به خط مرجع:
+  //   · PINNACLE موجود → (ضریب ثبت ÷ خط پیناکل − ۱) × ۱۰۰ — مزیت قیمت نسبت به خط شارپ
+  //   · در غیر این صورت → (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰ — EV نسبت به خط منصفانه موتور
+  const pinPrices = item.pinnaclePrices ?? {};
+  const pinPriceOf = (legs: SettlementLegDTO[]): number | null => {
+    const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+    if (keys.length !== 1) return null; // تیپ ترکیبی چندبازاره — خط مستقیم پیناکل ندارد
+    const p = pinPrices[keys[0]];
+    return typeof p === "number" && p > 1.01 ? p : null;
+  };
+  const pinA = pinPriceOf(item.legsA ?? []);
+  const pinB = pinPriceOf(item.legsB ?? []);
+  const priceAdvantage = (odds: number, pin: number): number => Math.round((odds / pin - 1) * 1000) / 10;
+
+  const edgeA = pinA !== null ? priceAdvantage(item.oddsA, pinA) : computeEdge(probA, item.oddsA);
+  const edgeB = pinB !== null ? priceAdvantage(item.oddsB, pinB) : computeEdge(probB, item.oddsB);
+  const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+  const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
   const tipKindA: TipKind | null = edgeA !== null ? deriveTipKind((item.legsA ?? []).map((l) => l.key), item.oddsA) : null;
   const tipKindB: TipKind | null = edgeB !== null ? deriveTipKind((item.legsB ?? []).map((l) => l.key), item.oddsB) : null;
   const koMs = new Date(item.match.kickoff).getTime();
@@ -563,6 +579,8 @@ export async function issueSlip(
       autoIssued: opts?.autoIssued === true,
       modelProbA: probA,
       modelProbB: probB,
+      pinnacleOddsA: pinA,
+      pinnacleOddsB: pinB,
       edgeA,
       edgeB,
       edgeSourceA,

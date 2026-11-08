@@ -817,6 +817,12 @@ export interface IssueSlipItemDTO {
   archetypeCode?: string | null;
   lambdaHome?: number | null;
   lambdaAway?: number | null;
+  /**
+   * v10.0 — خط شارپ مرجع (Pinnacle) برای هر انتخاب مستقیم:
+   * کلید = کلید بازار (HOME/DRAW/AWAY/DC_1X/DC_X2/O25/U25) — فقط وقتی ردیف قیمت
+   * واقعاً PINNACLE باشد پاس می‌شود؛ در غیر این صورت مرجع، خط منصفانه موتور است.
+   */
+  pinnaclePrices?: Partial<Record<string, number>>;
   /** v9.0 — بازی وتوشده سوپروایزر هرگز صدور/ارسال نمی‌شود */
   supervisorApproved?: boolean;
 }

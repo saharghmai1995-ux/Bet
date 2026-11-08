@@ -145,11 +145,20 @@ export function buildCardMessage(slip: IssuedSlip): string {
   lines.push("");
   // ─── v10.0 — ارزش عددی نسبت به خط مرجع (همیشه عدد دارد) ───
   if (slip.edgeA !== null || slip.edgeB !== null) {
-    const src = slip.edgeSourceA === "PINNACLE" ? "خط شارپ پیناکل" : "خط منصفانه بازار";
+    const isPin = slip.edgeSourceA === "PINNACLE" || slip.edgeSourceB === "PINNACLE";
+    const src = isPin ? "خط شارپ پیناکل" : "خط منصفانه بازار";
     const fa = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
     const a = slip.edgeA !== null ? fa(slip.edgeA) : "—";
     const b = slip.edgeB !== null ? fa(slip.edgeB) : "—";
     lines.push(`📈 ارزش عددی نسبت به ${src}: تیپ A <b>${a}</b> · تیپ B <b>${b}</b>`);
+    if (isPin) {
+      const cmp = (odds: number, pin: number | null): string | null =>
+        pin && pin > 1.01 ? `${odds.toFixed(2)} در برابر خط ${pin.toFixed(2)}` : null;
+      const pa = slip.edgeSourceA === "PINNACLE" ? cmp(slip.oddsA, slip.pinnacleOddsA) : null;
+      const pb = slip.edgeSourceB === "PINNACLE" ? cmp(slip.oddsB, slip.pinnacleOddsB) : null;
+      const parts = [pa ? `تیپ A: ${pa}` : null, pb ? `تیپ B: ${pb}` : null].filter((x): x is string => Boolean(x));
+      if (parts.length > 0) lines.push(`📌 مقایسه قیمت با خط پیناکل: ${parts.join(" · ")}`);
+    }
   }
   // ─── v10.0 — بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ───
   if (slip.timingWindowA || slip.timingWindowB) {
