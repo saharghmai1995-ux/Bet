@@ -1,18 +1,32 @@
 import { NextResponse } from "next/server";
 import { settleFinishedSlips } from "@/lib/server/liveDataService";
+import { autoSyncPastAndPresentMatches } from "@/lib/server/auto-issue";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 /**
  * POST /api/settlement/sync
- * دکمه «⚡ همگام‌سازی و تسویه خودکار نتایج پایان‌یافته با سرور ESPN»:
- * اسکوربورد ESPN (امروز + دیروز، شامل Scheduled/In-Progress/Final) بررسی و
- * همه کارت‌های انتظار با نتیجه واقعی FT تسویه می‌شوند + اعلام تلگرام.
+ * دکمه «⚡ همگام‌سازی و تسویه خودکار نتایج پایان‌یافته با سرور ESPN» — v9.0:
+ *   ۱) autoSyncPastAndPresentMatches: واکشی تاریخ‌دار ۳ روز گذشته + امروز از
+ *      ESPN Scoreboard → صدور خودکار کارت‌های تاییدشده سوپروایزر (بازی‌های
+ *      وتوشده مطلقاً صدور نمی‌شوند) → تسویه فوری FT ها
+ *   ۲) settleFinishedSlips: تسویه همه کارت‌های انتظار با نتیجه واقعی + اعلام تلگرام
  */
 export async function POST() {
   try {
+    const auto = await autoSyncPastAndPresentMatches({ force: true, notify: true });
     const result = await settleFinishedSlips({ notify: true });
-    return NextResponse.json(result);
+    return NextResponse.json({
+      ...result,
+      autoRegistered: {
+        scanned: auto.scanned,
+        past: auto.registeredPast,
+        today: auto.registeredToday,
+        vetoed: auto.vetoed,
+        skippedExisting: auto.skippedExisting,
+      },
+    });
   } catch (error) {
     console.error("POST /api/settlement/sync error:", error);
     return NextResponse.json(

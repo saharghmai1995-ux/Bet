@@ -3,9 +3,10 @@
 // مشترک بین ایجنت مناظره و ایجنت پرتفوی
 // ─────────────────────────────────────────────
 
-import { runDixonColes, type MarketProbabilities } from "./poisson";
+import { runDixonColes, buildScoreMatrix, aggregateMatrix, type MarketProbabilities } from "./poisson";
 import { effectiveNpxg, refereeAdjustment, fatigueAdjustment, type RefereeProfile } from "./contextual";
 import { shinDevig, shinDevigPair } from "./devig";
+import { hybridLambda } from "./reverse-poisson";
 import type { Match, Referee, OddsRecord } from "@prisma/client";
 
 export interface MatchContextNotes {
@@ -15,12 +16,36 @@ export interface MatchContextNotes {
   lineupShockNote: string | null;
 }
 
+/** v9.0 — شفافیت کامل λ: بازار / آمار فصل / ترکیبی نهایی */
+export interface LambdaBreakdown {
+  marketHome: number | null;
+  marketAway: number | null;
+  statsHome: number;
+  statsAway: number;
+  finalHome: number;
+  finalAway: number;
+  marketWeight: number;
+  calibrationHome: number;
+  calibrationAway: number;
+  fitError: number | null;
+  /** true = λ ترکیبی بازار+آمار روی ماتریس اعمال شد */
+  applied: boolean;
+}
+
+export interface MatchEngineOptions {
+  /** ضریب درس کالیبراسیون لیگ (از بردار قانون فعال v9.0) — پیش‌فرض ۱ */
+  calibrationHome?: number;
+  calibrationAway?: number;
+}
+
 export interface MatchEngine {
   dc: MarketProbabilities;
   lambdaCorners: number;
   lambdaCards: number;
   penProb: number;
   notes: MatchContextNotes;
+  /** v9.0 — تفکیک سه‌گانه λ (بازار / آمار / نهایی) برای نمایش شفاف روی فلش‌کارت */
+  lambdaBreakdown: LambdaBreakdown;
 }
 
 type MatchWithRefs = Match & { referee: Referee | null };
@@ -32,7 +57,7 @@ type MatchWithRefs = Match & { referee: Referee | null };
  * ۳) خستگی سفر/تقویم → تعدیل λ دو تیم
  * ۴) پروفایل داور → λ کارت و احتمال پنالتی
  */
-export function computeMatchEngine(match: MatchWithRefs): MatchEngine {
+export function computeMatchEngine(match: MatchWithRefs, opts?: MatchEngineOptions): MatchEngine {
   // ۱) وضعیت بازی
   const homeEff = effectiveNpxg(
     match.homeNpxgLevel !== null ? { level: match.homeNpxgLevel, leading: match.homeNpxgLeading ?? 0, trailing: match.homeNpxgTrailing ?? 0 } : null,
@@ -91,6 +116,40 @@ export function computeMatchEngine(match: MatchWithRefs): MatchEngine {
     daysAgo: 60,
   });
 
+  // ═══ v9.0 — فرمول ترکیبی طلایی λ ═══
+  // λ_Final = (0.65 × λ_Market + 0.35 × λ_Stats) × C_Calibration
+  // λ_Market از حل معکوس پواسون روی ضرایب واقعی بوک‌میکر (ذخیره‌شده در ingest)
+  // و λ_Stats از مدل آماری جدول/فرم (خروجی dc بالا) می‌آید.
+  let finalDc = dc;
+  const marketH = match.lambdaMarketHome ?? null;
+  const marketA = match.lambdaMarketAway ?? null;
+  const hasMarket = marketH !== null && marketA !== null && match.lambdaSource === "MARKET_HYBRID" && match.oddsSource !== "ENGINE";
+  const hybrid = hybridLambda({
+    statsHome: dc.lambdaHome,
+    statsAway: dc.lambdaAway,
+    market: hasMarket ? { lambdaHome: marketH as number, lambdaAway: marketA as number, fitError: match.lambdaFitError ?? null } : null,
+    calibrationHome: opts?.calibrationHome,
+    calibrationAway: opts?.calibrationAway,
+  });
+  if (hybrid.hasMarket && (hybrid.finalHome !== dc.lambdaHome || hybrid.finalAway !== dc.lambdaAway)) {
+    // بازسازی ماتریس نمره روی λ ترکیبی نهایی — کل زنجیره (MC/پرتفوی/مناظره) از این ماتریس تغذیه می‌شود
+    const matrix = buildScoreMatrix(hybrid.finalHome, hybrid.finalAway, -0.08);
+    finalDc = { ...dc, ...aggregateMatrix(matrix), pUnder25: 1 - aggregateMatrix(matrix).pOver25, lambdaHome: hybrid.finalHome, lambdaAway: hybrid.finalAway, matrix };
+  }
+  const lambdaBreakdown: LambdaBreakdown = {
+    marketHome: hybrid.hasMarket ? hybrid.marketHome : null,
+    marketAway: hybrid.hasMarket ? hybrid.marketAway : null,
+    statsHome: hybrid.statsHome,
+    statsAway: hybrid.statsAway,
+    finalHome: hybrid.finalHome,
+    finalAway: hybrid.finalAway,
+    marketWeight: 0.65,
+    calibrationHome: hybrid.calibrationHome,
+    calibrationAway: hybrid.calibrationAway,
+    fitError: hybrid.fitError,
+    applied: hybrid.hasMarket,
+  };
+
   // امید کرنر از میانگین‌های دو تیم
   const homeCorners = match.homeCornersFor !== null && match.awayCornersAgainst !== null
     ? (match.homeCornersFor + match.awayCornersAgainst) / 2 : 5.2;
@@ -98,7 +157,7 @@ export function computeMatchEngine(match: MatchWithRefs): MatchEngine {
     ? (match.awayCornersFor + match.homeCornersAgainst) / 2 : 4.4;
 
   return {
-    dc,
+    dc: finalDc,
     lambdaCorners: homeCorners + awayCorners,
     lambdaCards: ref.lambdaCards,
     penProb: ref.penProb,
@@ -111,6 +170,7 @@ export function computeMatchEngine(match: MatchWithRefs): MatchEngine {
           ? `ترکیب رسمی اعلام شد — دلتای قدرت VAEP: میزبان ${(shockH * 100).toFixed(0)}٪ / میهمان ${(shockA * 100).toFixed(0)}٪ و در λ لحاظ شد`
           : null,
     },
+    lambdaBreakdown,
   };
 }
 

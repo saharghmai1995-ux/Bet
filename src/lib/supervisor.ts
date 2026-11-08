@@ -22,6 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PortfolioPairDTO } from "./types";
+import type { ActiveLeagueRule } from "./engine/calibration";
 
 /** v8.0 — حالت اجرایی ثبت شرط (سوییچ انطباق با قوانین سایت‌های شرط‌بندی) */
 export type ExecutionMode = "DUAL_BOOK" | "SINGLE_BOOK";
@@ -40,18 +41,24 @@ export interface SupervisorScore {
   guaranteedProfitPct: number;
   doubleWinProbPct: number;
   jointLossRiskPct: number;
+  /** v9.0 — پاداش/جریمه عددی درس کالیبراسیون روی این الگو (۰ = بدون قانون) */
+  calibrationBoost: number;
   veto: boolean;
   vetoReason: string | null;
 }
 
 /** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — دقیقاً طبق فرمول سند ارتقا */
-export function scorePair(p: PortfolioPairDTO): SupervisorScore {
+export function scorePair(p: PortfolioPairDTO, rule?: ActiveLeagueRule | null): SupervisorScore {
   const guaranteedProfitPct = p.guaranteedMarginPct; // ٪ سود تضمینی داچینگ
   const doubleWinProbPct = p.jointStates.bothWin * 100; // ٪ برد طلایی همزمان
   const jointLossRiskPct = p.jointStates.bothLose * 100; // ٪ باخت همزمان
 
+  // v9.0 — بردار قانون فعال کالیبراسیون: پاداش/جریمه عددی الگو (A1..A5)
+  const code = p.archetype?.code ?? null;
+  const boost = code && rule ? (rule.archetypeBoosts[code] ?? 0) : 0;
+
   const raw =
-    guaranteedProfitPct * 1.4 + doubleWinProbPct * 1.8 - jointLossRiskPct * 2.5;
+    guaranteedProfitPct * 1.4 + doubleWinProbPct * 1.8 - jointLossRiskPct * 2.5 + boost;
 
   // نرمال‌سازی نمایش: بازه خام واقعی [−۱۲۰ .. +۴۰] → [۰ .. ۱۰۰]
   const score100 = Math.max(0, Math.min(100, Math.round(((raw + 120) / 160) * 100)));
@@ -75,6 +82,7 @@ export function scorePair(p: PortfolioPairDTO): SupervisorScore {
     guaranteedProfitPct: Math.round(guaranteedProfitPct * 10) / 10,
     doubleWinProbPct: Math.round(doubleWinProbPct * 10) / 10,
     jointLossRiskPct: Math.round(jointLossRiskPct * 10) / 10,
+    calibrationBoost: Math.round(boost * 10) / 10,
     veto,
     vetoReason,
   };
@@ -117,8 +125,14 @@ function shortOf(p: PortfolioPairDTO): string {
  * pickCrownPair — انتخاب «تک‌تیپ طلایی مونت‌کارلو» از میان کاندیدهای یک بازی.
  * استخر کاندید بر اساس حالت اجرایی (ضد گوبینگ) فیلتر می‌شود؛ اگر استخر
  * حالت فعال خالی بود، برای قطع‌کردن تجربه کاربر کل کاندیدها بازرسی می‌شوند.
+ * v9.0 — بردار قانون فعال کالیبراسیون (درس‌های سیستمی لیگ) مستقیماً روی
+ * UtilityScore الگوها اعمال می‌شود: rule.archetypeBoosts[code].
  */
-export function pickCrownPair(pairs: PortfolioPairDTO[], executionMode: ExecutionMode): SupervisorDecision | null {
+export function pickCrownPair(
+  pairs: PortfolioPairDTO[],
+  executionMode: ExecutionMode,
+  rule?: ActiveLeagueRule | null
+): SupervisorDecision | null {
   if (!pairs || pairs.length === 0) return null;
 
   const modePool = pairs.filter((p) =>
@@ -126,7 +140,7 @@ export function pickCrownPair(pairs: PortfolioPairDTO[], executionMode: Executio
   );
   const pool = modePool.length > 0 ? modePool : pairs;
 
-  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair) }));
+  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair, rule) }));
 
   // برنده = بالاترین امتیاز خام میان «غیر وتو شده»؛ اگر همه وتو شدند →
   // کم‌ریسک‌ترین (بالاترین امتیاز) به‌عنوان کارت وتو شده نمایش داده می‌شود
@@ -144,7 +158,7 @@ export function pickCrownPair(pairs: PortfolioPairDTO[], executionMode: Executio
       reason:
         s.score.vetoReason ??
         (s.score.raw < winner.score.raw
-          ? `امتیاز پایین‌تر از برنده (${s.score.raw} در برابر ${winner.score.raw})`
+          ? `امتیاز پایین‌تر از برنده (${s.score.raw} در برابر ${winner.score.raw})${s.score.calibrationBoost ? ` · درس کالیبراسیون: ${s.score.calibrationBoost > 0 ? "+" : ""}${s.score.calibrationBoost}` : ""}`
           : "کاندید برتر نبود"),
     }))
     .sort((a, b) => b.raw - a.raw);

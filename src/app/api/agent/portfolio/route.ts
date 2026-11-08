@@ -6,6 +6,8 @@ import { runMonteCarlo, jointStates, MC_SELECTIONS, type SelectionKey, type Mont
 import { simultaneousKelly } from "@/lib/engine/kelly";
 import { checkMiddleTrap, type SelectionKind, type TrapLeg } from "@/lib/engine/dutching";
 import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair } from "@/lib/engine/orthogonal";
+import { getActiveRuleFor } from "@/lib/server/calibration-rules";
+import type { LambdaBreakdown } from "@/lib/engine/matchEngine";
 import type { PortfolioPairDTO, PortfolioResultDTO, PortfolioSelectionDTO } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +66,7 @@ function seedFromId(id: string): number {
 }
 
 /** مونت‌کارلو + جدول انتخاب‌های یک بازی (کش per-request — بدون رقابت بین درخواست‌های موازی) */
-function analyzeMatch(mcInput: { matchId: string; homeTeam: string; awayTeam: string; matchLabel: string }, odds: OddsRec[], cache: Map<string, unknown>): { mc: MonteCarloResult; selections: PortfolioSelectionDTO[]; lambdas: { home: number; away: number } } {
+function analyzeMatch(mcInput: { matchId: string; homeTeam: string; awayTeam: string; matchLabel: string }, odds: OddsRec[], cache: Map<string, unknown>): { mc: MonteCarloResult; selections: PortfolioSelectionDTO[]; lambdas: { home: number; away: number }; breakdown: LambdaBreakdown } {
   const match = cache.get(mcInput.matchId);
   if (!match) throw new Error("match not cached");
   const engine = computeMatchEngine(match as never);
@@ -98,7 +100,7 @@ function analyzeMatch(mcInput: { matchId: string; homeTeam: string; awayTeam: st
     };
   });
 
-  return { mc, selections, lambdas: { home: engine.dc.lambdaHome, away: engine.dc.lambdaAway } };
+  return { mc, selections, lambdas: { home: engine.dc.lambdaHome, away: engine.dc.lambdaAway }, breakdown: engine.lambdaBreakdown };
 }
 
 const selectionLabels: Record<SelectionKey, string> = {
@@ -157,6 +159,9 @@ export async function POST(req: NextRequest) {
     const secondOdds = second ? await db.oddsRecord.findMany({ where: { matchId: second.id } }) : [];
 
     const label = (m: { homeTeam: string; awayTeam: string }) => `${m.homeTeam} - ${m.awayTeam}`;
+
+    // ─── v9.0 — بردار قانون فعال کالیبراسیون لیگ این بازی (درس سیستمی → عدد) ───
+    const activeRule = await getActiveRuleFor(primary.league);
 
     const prim = analyzeMatch({ matchId: primary.id, homeTeam: primary.homeTeam, awayTeam: primary.awayTeam, matchLabel: label(primary) }, primaryOdds, mcInputCache);
     const sec = second
@@ -499,7 +504,16 @@ export async function POST(req: NextRequest) {
         matchLabel: label(primary),
         lambdaHome: prim.lambdas.home,
         lambdaAway: prim.lambdas.away,
+        // ─── v9.0 — شفافیت کامل λ (بازار / آمار فصل / ترکیبی نهایی) ───
+        lambdaMarketHome: prim.breakdown.marketHome,
+        lambdaMarketAway: prim.breakdown.marketAway,
+        lambdaStatsHome: prim.breakdown.statsHome,
+        lambdaStatsAway: prim.breakdown.statsAway,
+        lambdaFitError: prim.breakdown.fitError,
+        lambdaCalibrationHome: prim.breakdown.calibrationHome,
+        lambdaCalibrationAway: prim.breakdown.calibrationAway,
       },
+      calibrationRule: activeRule?.rules ?? [],
       monteCarlo: {
         sims: prim.mc.sims,
         pHome: prim.mc.pHome,

@@ -104,6 +104,14 @@ export interface FlashcardView {
   /** لامبداهای نهایی موتور برای مینی‌مپ پوشش ۶×۶ */
   lambdaHome: number;
   lambdaAway: number;
+  /** v9.0 — شفافیت کامل λ: الگوی Odds بازار / آمار فصل / ترکیبی نهایی */
+  lambdaMarketHome: number | null;
+  lambdaMarketAway: number | null;
+  lambdaStatsHome: number;
+  lambdaStatsAway: number;
+  lambdaFitError: number | null;
+  /** v9.0 — متن قوانین فعال کالیبراسیون لیگ این کارت (🧠 درس اعمال‌شده) */
+  calibrationRule: string[];
   /** v5.0 — تیپ جاری یک الگوی متعامد است؟ (برای نشانگر) */
   isArchetype?: boolean;
   /** v8.0 — تصمیم ایجنت سوپروایزر ارشد (تک‌تیپ طلایی مونت‌کارلو) */

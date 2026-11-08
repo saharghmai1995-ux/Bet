@@ -35,7 +35,7 @@ function isContentFilterError(err: unknown): boolean {
   return /1301|contentfilter|敏感|unsafe|inappropriate|policy/i.test(msg);
 }
 
-async function generateOnce(prompt: string, size: string): Promise<Buffer> {
+async function generateOnce(prompt: string, size: "1344x768"): Promise<Buffer> {
   const { default: ZAI } = await import("z-ai-web-dev-sdk");
   const zai = await ZAI.create();
   const res = await zai.images.generations.create({ prompt, size });
@@ -48,7 +48,7 @@ async function generateOnce(prompt: string, size: string): Promise<Buffer> {
  * زنجیره پرامپت: هر پرامپت تا ۲ بار (خطاهای شبکه/429) تلاش می‌شود؛
  * خطای فیلتر محتوا → پرامپت فعلی رها و پرامپت پاک‌تر بعدی آزموده می‌شود.
  */
-async function generateWithRetry(prompts: string[], size: string, triesPerPrompt = 2): Promise<Buffer | null> {
+async function generateWithRetry(prompts: string[], size: "1344x768", triesPerPrompt = 2): Promise<Buffer | null> {
   let lastErr: unknown = null;
   for (const prompt of prompts) {
     for (let i = 0; i < triesPerPrompt; i++) {
@@ -76,7 +76,7 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-async function cachedImage(kind: string, seed: string, prompts: string[], size = "1344x768"): Promise<Buffer | null> {
+async function cachedImage(kind: string, seed: string, prompts: string[], size: "1344x768" = "1344x768"): Promise<Buffer | null> {
   const p = cachePath(kind, seed);
   if (fs.existsSync(p)) {
     try {

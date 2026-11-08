@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Calculator, ChevronDown, Goal, Info, Link2, Send, Zap } from "lucide-react";
+import { ArrowLeft, Calculator, ChevronDown, Goal, Info, Link2, Send, Sigma, Zap } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -127,6 +128,25 @@ export function EngineTab({ onGoToTab }: Props) {
   const [slips, setSlips] = useState<{ a: Set<string>; b: Set<string> }>({ a: new Set(), b: new Set() });
   const [manualOverride, setManualOverride] = useState(false);
   const [overrideOpen, setOverrideOpen] = useState(false);
+  // ─── v9.0 — موتور مهندسی معکوس ضرایب بوک‌میکر ───
+  const [solverOpen, setSolverOpen] = useState(false);
+  const [solverOdds, setSolverOdds] = useState({ oddsHome: 2.1, oddsDraw: 3.4, oddsAway: 3.3, oddsOver25: 1.9, oddsUnder25: 1.95 });
+  const [solving, setSolving] = useState(false);
+  interface SolverResponse {
+    success: boolean;
+    market?: {
+      lambdaHome: number;
+      lambdaAway: number;
+      fitError: number;
+      shinProbs: { home: number; draw: number; away: number; over25: number | null };
+      matrixProbs: { home: number; draw: number; away: number; over25: number };
+      hasTotals: boolean;
+      gridPoints: number;
+    };
+    hybrid?: { finalHome: number; finalAway: number; marketWeight: number };
+    error?: string;
+  }
+  const [solverResult, setSolverResult] = useState<SolverResponse | null>(null);
 
   // زنجیره واکنشی: تغییر بازی فعال یا اعلام شوک T-60 → بازنشانی پارامترها با دلتای VAEP
   const matchKey = `${activeMatchId}-${shock?.announcedAt ?? 0}`;
@@ -134,6 +154,15 @@ export function EngineTab({ onGoToTab }: Props) {
     if (!activeMatch) return;
     setParams(paramsFromMatch(activeMatch, shock ? { home: shock.home, away: shock.away } : null));
     setSlips({ a: new Set(), b: new Set() });
+    // v9.0 — پیش‌پر کردن ضرایب واقعی بازی فعال در حل‌کننده معکوس
+    setSolverOdds((prev) => ({
+      ...prev,
+      oddsHome: (activeMatch as unknown as { oddsHome?: number }).oddsHome || prev.oddsHome,
+      oddsDraw: (activeMatch as unknown as { oddsDraw?: number }).oddsDraw || prev.oddsDraw,
+      oddsAway: (activeMatch as unknown as { oddsAway?: number }).oddsAway || prev.oddsAway,
+      oddsOver25: (activeMatch as unknown as { oddsOver25?: number }).oddsOver25 || prev.oddsOver25,
+      oddsUnder25: (activeMatch as unknown as { oddsUnder25?: number }).oddsUnder25 || prev.oddsUnder25,
+    }));
   }, [matchKey]);
 
   const result = useMemo(() => {
@@ -226,6 +255,36 @@ export function EngineTab({ onGoToTab }: Props) {
     });
     onGoToTab("risk");
   };
+
+  // ─── v9.0 — اجرای حل معکوس پواسون روی ضرایب بازار ───
+  const runSolver = useCallback(async () => {
+    setSolving(true);
+    try {
+      const res = await fetch("/api/engine/reverse-poisson", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...solverOdds,
+          statsHome: result.lambdaHome,
+          statsAway: result.lambdaAway,
+        }),
+      });
+      const data = (await res.json()) as SolverResponse;
+      if (!data.success || !data.market) {
+        toast.error(data.error ?? "حل معکوس ناموفق بود");
+        setSolverResult(data);
+        return;
+      }
+      setSolverResult(data);
+      toast.success("λ بازار استخراج شد — الگوی مخفی قیمت‌گذاری بوک‌میکر کشف شد", {
+        description: `λ مارکت: ${data.market.lambdaHome}-${data.market.lambdaAway} · خطای برازش: ${data.market.fitError.toExponential(1)}`,
+      });
+    } catch {
+      toast.error("خطای شبکه در حل معکوس پواسون");
+    } finally {
+      setSolving(false);
+    }
+  }, [solverOdds, result.lambdaHome, result.lambdaAway]);
 
   const market = [
     { name: "برد میزبان", p: result.pHome, fair: 1 / result.pHome },
@@ -330,6 +389,96 @@ export function EngineTab({ onGoToTab }: Props) {
                     </div>
                   ))}
                 </div>
+              </CollapsibleContent>
+            </Collapsible>
+
+            {/* ═══ v9.0 — موتور مهندسی معکوس ضرایب بوک‌میکر (Reverse-Poisson λ Solver) ═══ */}
+            <Collapsible
+              open={solverOpen}
+              onOpenChange={setSolverOpen}
+              className="rounded-xl border border-sky-500/25 bg-sky-500/[0.04]"
+            >
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 text-sm font-semibold text-sky-300"
+                    aria-expanded={solverOpen}
+                  >
+                    <ChevronDown className={`size-4 transition-transform ${solverOpen ? "rotate-180" : ""}`} />
+                    <Sigma className="size-4" />
+                    موتور مهندسی معکوس ضرایب بوک‌میکر (λ_Market Solver)
+                  </button>
+                </CollapsibleTrigger>
+                <Badge variant="outline" className="border-sky-400/40 px-1.5 py-0 text-[9px] text-sky-200">v9.0</Badge>
+              </div>
+              <CollapsibleContent className="border-t border-sky-500/20 px-4 py-3 data-[state=closed]:hidden">
+                <p className="text-[11px] leading-5 text-muted-foreground">
+                  ضرایب مرجع بازار (خط شارپ) دقیق‌ترین تخمین احتمالاتی را در دل خود دارند. با{" "}
+                  <b className="text-sky-300">حل معکوس پواسون/دیکسون-کولز</b> روی ضرایب واقعی، الگوی مخفی قیمت‌گذاری بوک‌میکر استخراج می‌شود:
+                  جستجوی شبکه‌ای <b dir="ltr">0.30 → 3.50</b> با گام <b dir="ltr">0.05</b> با کمترین خطای مربعات روی احتمالات شین.
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                  {(
+                    [
+                      { key: "oddsHome", label: "ضریب میزبان" },
+                      { key: "oddsDraw", label: "ضریب مساوی" },
+                      { key: "oddsAway", label: "ضریب میهمان" },
+                      { key: "oddsOver25", label: "بالای ۲.۵" },
+                      { key: "oddsUnder25", label: "زیر ۲.۵" },
+                    ] as const
+                  ).map((f) => (
+                    <div key={f.key} className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">{f.label}</Label>
+                      <Input
+                        inputMode="decimal"
+                        className="h-8 font-num text-xs"
+                        dir="ltr"
+                        value={solverOdds[f.key]}
+                        onChange={(e) => setSolverOdds((p) => ({ ...p, [f.key]: parseFloat(e.target.value) || 0 }))}
+                        aria-label={f.label}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1 bg-sky-600/80 text-[11px] hover:bg-sky-600"
+                    onClick={() => void runSolver()}
+                    disabled={solving}
+                  >
+                    <Sigma className="size-3.5" /> {solving ? "در حال حل معکوس…" : "حل معکوس λ بازار"}
+                  </Button>
+                  <span className="text-[10px] text-muted-foreground">
+                    λ آمار فصل (مدل): <b className="font-num text-emerald-300" dir="ltr">{result.lambdaHome.toFixed(2)}-{result.lambdaAway.toFixed(2)}</b>
+                  </span>
+                </div>
+                {solverResult?.market && (
+                  <div className="mt-3 space-y-1.5 rounded-xl border border-sky-500/25 bg-black/30 p-2.5 text-[11px] leading-5">
+                    <p>
+                      🎯 <b className="text-sky-300">λ بازار (الگوی قیمت‌گذاری بوک‌میکر):</b>{" "}
+                      <b className="font-num" dir="ltr">{solverResult.market.lambdaHome} - {solverResult.market.lambdaAway}</b>
+                      {" "}· خطای برازش: <b className="font-num" dir="ltr">{solverResult.market.fitError.toExponential(2)}</b> ·{" "}
+                      <b className="font-num" dir="ltr">{solverResult.market.gridPoints.toLocaleString("fa-IR")}</b> نقطه گرید
+                    </p>
+                    <p className="text-muted-foreground">
+                      احتمالات خالص شین: میزبان <b className="font-num" dir="ltr">{(solverResult.market.shinProbs.home * 100).toFixed(1)}%</b> · مساوی{" "}
+                      <b className="font-num" dir="ltr">{(solverResult.market.shinProbs.draw * 100).toFixed(1)}%</b> · میهمان{" "}
+                      <b className="font-num" dir="ltr">{(solverResult.market.shinProbs.away * 100).toFixed(1)}%</b>
+                      {solverResult.market.shinProbs.over25 !== null && (
+                        <> · بالای ۲.۵: <b className="font-num" dir="ltr">{(solverResult.market.shinProbs.over25 * 100).toFixed(1)}%</b></>
+                      )}
+                    </p>
+                    {solverResult.hybrid && (
+                      <p className="text-emerald-300">
+                        ⚡ فرمول ترکیبی طلایی (۶۵٪ بازار + ۳۵٪ آمار فصل) → λ نهایی:{" "}
+                        <b className="font-num" dir="ltr">{solverResult.hybrid.finalHome} - {solverResult.hybrid.finalAway}</b>
+                        {" "}— همین λ ترکیبی در موتور پرتفوی و فلش‌کارت‌ها اعمال می‌شود.
+                      </p>
+                    )}
+                  </div>
+                )}
               </CollapsibleContent>
             </Collapsible>
           </CardContent>

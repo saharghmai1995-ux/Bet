@@ -176,7 +176,7 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 فوتبال‌کوانت
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v8.0 Supervisor Quant
+                  <Sparkles className="size-2.5" /> v9.0 Supervisor Quant
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
@@ -378,7 +378,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۸.۰ Supervisor Quant — ESPN FT Grader خودکار (تسویه تیپ A/B با نتیجه واقعی) + کانال تلگرام VIP @aineobet (کارت/تیزر/نتیجه با تصویر و هش SHA-256) + ایجنت سوپروایزر و تک‌تیپ طلایی مونت‌کارلو ← دیکسون-کولز ← موتور متعامد ۱۵ بازاره ← کلِی همزمان ← پوشش زنده
+            فوتبال‌کوانت ۹.۰ Supervisor Quant — Reverse-Poisson λ Solver (مهندسی معکوس ضرایب بوک‌میکر: ۶۵٪ بازار + ۳۵٪ آمار × درس کالیبراسیون) + تسویه خودکار ۳ روز ESPN (Zero-Click) + کانال تلگرام VIP @aineobet (فقط کارت‌های تایید سوپروایزر + گزارش وین‌ریت) + حلقه فعال درس‌های کالیبراسیون ← ایجنت سوپروایزر ← دیکسون-کولز ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

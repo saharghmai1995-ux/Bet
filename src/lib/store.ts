@@ -12,7 +12,7 @@
 
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type { DebateResultDTO, LiveFeedDTO, MatchDTO } from "./types";
+import type { ActiveRuleDTO, DebateResultDTO, LiveFeedDTO, MatchDTO } from "./types";
 import type { AutopilotConfig, AutopilotMatchState, LiveEventToast } from "./autopilot-types";
 import { DEFAULT_CONFIG } from "./autopilot-types";
 
@@ -130,6 +130,12 @@ interface AppState {
   /** باز/بسته بودن مودال ارتقا به VIP — حالت گذرا (persist نمی‌شود) */
   usdtModalOpen: boolean;
   setUsdtModalOpen: (v: boolean) => void;
+
+  // ═══════════ v9.0 — بردار قانون فعال کالیبراسیون (درس سیستمی → عدد) ═══════════
+
+  /** قوانین فعال هر لیگ — از GET /api/calibration/rules (کش کلاینت) */
+  activeRules: ActiveRuleDTO[];
+  setActiveRules: (rules: ActiveRuleDTO[]) => void;
 }
 
 export const useQuantStore = create<AppState>()(
@@ -245,6 +251,10 @@ export const useQuantStore = create<AppState>()(
       // ═══════════ v8.0 ═══════════
       usdtModalOpen: false,
       setUsdtModalOpen: (v) => set({ usdtModalOpen: v }),
+
+      // ═══════════ v9.0 ═══════════
+      activeRules: [],
+      setActiveRules: (rules) => set({ activeRules: rules }),
     }),
     {
       name: "football-quant-v5",

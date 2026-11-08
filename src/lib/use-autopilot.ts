@@ -343,6 +343,22 @@ export function useAutopilot() {
     if (bootRef.current) return;
     bootRef.current = true;
 
+    // v9.0 — بردار قانون فعال کالیبراسیون (درس سیستمی → عدد) — کش کلاینت با تازه‌سازی دوره‌ای
+    const loadRules = async () => {
+      try {
+        const res = await fetch("/api/calibration/rules", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { success: boolean; rules?: { league: string; sample: number; goalBiasPct: number | null; lambdaMultiplier: number; archetypeBoosts: Record<string, number>; archetypeHitRate: Record<string, { wins: number; total: number; profit: number }>; rules: string[]; applied: boolean }[] };
+        if (data.success && Array.isArray(data.rules)) {
+          useQuantStore.getState().setActiveRules(data.rules);
+        }
+      } catch {
+        // خطای شبکه — قانون قبلی معتبر می‌ماند
+      }
+    };
+    void loadRules();
+    const rulesTimer = setInterval(() => void loadRules(), 5 * 60_000);
+
     // اسکن کامل به محض آماده‌شدن فید بازی‌ها
     const unsub = useQuantStore.subscribe((state) => {
       if (!bootRef.current) return;
@@ -350,7 +366,10 @@ export function useAutopilot() {
         void runScan("FULL");
       }
     });
-    return unsub;
+    return () => {
+      unsub();
+      clearInterval(rulesTimer);
+    };
   }, [runScan]);
 
   // تیک یک‌ثانیه‌ای: شمارش معکوس اسکن

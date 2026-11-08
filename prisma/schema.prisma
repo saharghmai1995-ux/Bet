@@ -111,6 +111,12 @@ model Match {
   statsSource     String?   // ESPN_STANDINGS | RECORD_FALLBACK
   statsFetchedAt  DateTime? // زمان دقیق آخرین واکشی جدول رده‌بندی
 
+  // ─── v9.0 — موتور مهندسی معکوس ضرایب بوک‌میکر (Reverse-Poisson Market-Implied λ) ───
+  lambdaMarketHome Float?  // λ میزبان استخراج‌شده از حل معکوس پواسون روی ضرایب بازار
+  lambdaMarketAway Float?  // λ میهمان استخراج‌شده از بازار
+  lambdaFitError   Float?  // خطای Least Squares برازش ماتریس بازار (کیفیت حل)
+  lambdaSource     String? // MARKET_HYBRID (۶۵٪ بازار + ۳۵٪ آمار × کالیبراسیون) | STATS_ONLY
+
   status    String         @default("UPCOMING") // UPCOMING | ANALYZED | LIVE | FINISHED | ARCHIVED
   referee   Referee?       @relation(fields: [refereeId], references: [id])
   players   Player[]
@@ -270,7 +276,14 @@ model IssuedSlip {
   guaranteedProfit Float // سود تضمینی داچینگ (در پوشش)
   marginPct        Float
   archetype        String? // نام کوتاه الگوی متعامد
+  archetypeCode    String? // v9.0 — کد الگو (A1..A5) برای حلقه کالیبراسیون
   espnUrl          String? // لینک راستی‌آزمایی رسمی ESPN
+
+  // ─── v9.0 — حلقه فعال کالیبراسیون + خط لوله خودکار سرور ───
+  lambdaHome Float? // λ ترکیبی نهایی مدل در لحظه صدور (مبنای انحراف گلزنی لیگ)
+  lambdaAway Float?
+  supervisorApproved Boolean @default(true) // فقط کارت‌های تایید سوپروایزر به تلگرام می‌روند
+  autoIssued         Boolean @default(false) // ثبت خودکار سرور (Zero-Click Multi-Day Pipeline)
 
   // ─── تسویه خودکار پس از FT ───
   status     String  @default("PENDING") // PENDING | LIVE | WON_A | WON_B | DOUBLE_WIN | MIDDLE_TRAP | MANUAL_REVIEW | VOID
@@ -296,7 +309,7 @@ model TelegramOutbox {
   id     String  @id @default(cuid())
   slip   IssuedSlip? @relation(fields: [slipId], references: [id])
   slipId String?
-  kind   String  // CARD | TEASER | RESULT | CONFIG_TEST
+  kind   String  // CARD | TEASER | RESULT | CONFIG_TEST | WINRATE
   ok     Boolean
   detail String? // شناسه پیام تلگرام یا متن خطا
   createdAt DateTime @default(now())

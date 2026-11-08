@@ -33,8 +33,8 @@ import type {
 
 /** مجموع استیک داچینگ هر کارت — مبنای فرمول سود «stakeA × oddsA − ۱۰۰» */
 export const DUTCH_TOTAL = 100;
-/** پنجره جستجوی نتیجه: دیروز + امروز (اسکوربورد ESPN) */
-const RESULT_WINDOW_DAYS = 1;
+/** پنجره جستجوی نتیجه: ۳ روز گذشته + امروز (اسکوربورد ESPN تاریخ‌دار — سند v9.0) */
+const RESULT_WINDOW_DAYS = 3;
 /** اگر تا ۳۶ ساعت پس از کیک‌آف نتیجه‌ای نیامد → VOID (به تعویق افتاده/لغو) */
 const VOID_AFTER_HOURS = 36;
 
@@ -194,6 +194,9 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
   let liveCount = 0;
   let notified = 0;
   let ftFound = 0;
+  /** v9.0 — سقف اعلام تصویری هر پاس (تولید تصویر ~۲۰ ثانیه هر پیام — حفظ تأخیر سینک) */
+  const NOTIFY_CAP = 4;
+  let notifyBudget = NOTIFY_CAP;
 
   const [{ byId, byName, count }, pendingSlips] = await Promise.all([
     loadEspnScoreWindow(),
@@ -279,7 +282,7 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
         }
       }
 
-      if (status === "PENDING" || status === "LIVE") continue;
+      if ((status as string) === "PENDING" || (status as string) === "LIVE") continue;
 
       const hg = info.hg;
       const ag = info.ag;
@@ -310,11 +313,12 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
       });
 
       // ─── اعلام نتیجه در کانال تلگرام VIP (تصویر جام / رختکن بهم‌ریخته) ───
-      if (notify && status !== "VOID" && status !== "MANUAL_REVIEW" && !slip.telegramResult) {
+      if (notify && notifyBudget > 0 && status !== "VOID" && status !== "MANUAL_REVIEW" && !slip.telegramResult) {
         try {
           const { sendSettlementNotification } = await import("./telegram-service");
           const updated = await db.issuedSlip.findUnique({ where: { id: slip.id } });
           if (updated) {
+            notifyBudget -= 1;
             const ok = await sendSettlementNotification(updated);
             if (ok) notified += 1;
           }
@@ -334,6 +338,16 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
           settleNote: "نتیجه در اسکوربورد ESPN (امروز+دیروز) یافت نشد — بازی به تعویق افتاده یا خارج پنجره (VOID)",
         },
       });
+    }
+  }
+
+  // ─── ۴.۶) v9.0 — گزارش وین‌ریت کل کانال پس از تسویه تازه (پیام نوع دوم) ───
+  if (notify && settled.length > 0) {
+    try {
+      const { sendWinRateReport } = await import("./telegram-service");
+      await sendWinRateReport();
+    } catch (err) {
+      console.warn("win-rate report failed:", err);
     }
   }
 
@@ -437,8 +451,13 @@ function coveredCells(lambdaHome: number, lambdaAway: number, legs: SettlementLe
 /**
  * صدور کارت به کارنامه — Idempotent با هش SHA-256.
  * اگر کارت با همین هش قبلاً صادر شده باشد، همان ردیف بازگردانده می‌شود.
+ * v9.0: نگهداری λ ترکیبی نهایی + کد الگو (حلقه کالیبراسیون) + نشان تایید سوپروایزر
+ * و پرچم ثبت خودکار سرور (autoIssued) برای خط لوله Zero-Click.
  */
-export async function issueSlip(item: IssueSlipItemDTO): Promise<{ created: boolean; slip: IssuedSlipDTO }> {
+export async function issueSlip(
+  item: IssueSlipItemDTO,
+  opts?: { autoIssued?: boolean }
+): Promise<{ created: boolean; slip: IssuedSlipDTO }> {
   const externalId = item.match.externalId ?? null;
   const stakes =
     item.stakeA && item.stakeB && item.stakeA + item.stakeB > 0
@@ -483,7 +502,12 @@ export async function issueSlip(item: IssueSlipItemDTO): Promise<{ created: bool
       guaranteedProfit: item.guaranteedProfit,
       marginPct: item.marginPct,
       archetype: item.archetype ?? null,
+      archetypeCode: item.archetypeCode ?? null,
+      lambdaHome: item.lambdaHome ?? null,
+      lambdaAway: item.lambdaAway ?? null,
       espnUrl: item.match.espnUrl ?? espnUrlOf(externalId),
+      supervisorApproved: item.supervisorApproved !== false,
+      autoIssued: opts?.autoIssued === true,
       status: "PENDING",
     },
   });
@@ -514,6 +538,11 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
     guaranteedProfit: s.guaranteedProfit,
     marginPct: s.marginPct,
     archetype: s.archetype,
+    archetypeCode: s.archetypeCode,
+    lambdaHome: s.lambdaHome,
+    lambdaAway: s.lambdaAway,
+    supervisorApproved: s.supervisorApproved,
+    autoIssued: s.autoIssued,
     espnUrl: s.espnUrl,
     status: s.status as SlipStatus,
     homeGoals: s.homeGoals,

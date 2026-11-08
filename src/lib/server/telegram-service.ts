@@ -21,6 +21,8 @@ import type { IssuedSlip } from "@prisma/client";
 
 const KEY_TOKEN = "telegram_bot_token";
 const KEY_CHANNEL = "telegram_channel_id";
+/** v9.0 — کلید سوییچ ارسال خودکار کارت‌های تایید سوپروایزر (پیش‌فرض: روشن) */
+const KEY_AUTODISPATCH = "telegram_autodispatch";
 
 /** v8.0 — کانال پیش‌فرض رسمی کانال VIP کارفرما (در صورت خالی بودن تنظیمات) */
 export const DEFAULT_VIP_CHANNEL = "@aineobet";
@@ -53,6 +55,17 @@ async function channelId(): Promise<string | null> {
 export async function telegramStatus(): Promise<{ configured: boolean; channelSet: boolean }> {
   const [token, channel] = await Promise.all([botToken(), channelId()]);
   return { configured: Boolean(token), channelSet: Boolean(channel) };
+}
+
+// ═══════════ v9.0 — سوییچ ارسال خودکار (پیش‌فرض روشن) ═══════════
+
+export async function getAutoDispatch(): Promise<boolean> {
+  const v = await getSetting(KEY_AUTODISPATCH);
+  return v === null ? true : v === "on";
+}
+
+export async function setAutoDispatch(on: boolean): Promise<void> {
+  await setSetting(KEY_AUTODISPATCH, on ? "on" : "off");
 }
 
 // ═════════════════════ فرستنده پایه Bot API ═════════════════════
@@ -208,9 +221,14 @@ export type PublishMode = "CARD" | "TEASER";
 /**
  * انتشار کارت/تیزر به کانال VIP:
  * تصویر فوتبالی دو تیم + پیام HTML. تیپ B در حالت TEASER سانسور می‌شود.
+ * v9.0 — فیلتر سختگیرانه سوپروایزر: بازی وتوشده مطلقاً به تلگرام ارسال نمی‌شود.
  */
 export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode): Promise<{ ok: boolean; detail: string; preview: string }> {
   const preview = mode === "CARD" ? buildCardMessage(slip) : buildTeaserMessage(slip);
+  if (!slip.supervisorApproved) {
+    await logOutbox(slip.id, mode, false, "VETOED_BY_SUPERVISOR");
+    return { ok: false, detail: "VETOED_BY_SUPERVISOR", preview };
+  }
   const status = await telegramStatus();
   if (!status.configured || !status.channelSet) {
     await logOutbox(slip.id, mode, false, "TELEGRAM_NOT_CONFIGURED");
@@ -239,7 +257,7 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
       data: mode === "CARD" ? { telegramCard: true } : { telegramTeaser: true },
     });
   }
-  return result;
+  return { ...result, preview };
 }
 
 /**
@@ -283,4 +301,211 @@ export async function sendConfigTestMessage(): Promise<{ ok: boolean; detail: st
   const res = await tgCall("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
   await logOutbox(null, "CONFIG_TEST", res.ok, res.detail);
   return res;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v9.0 — خط لوله ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر
+// (Supervisor-Only Auto-Dispatch Queue) + گزارش وین‌ریت کانال
+// ═══════════════════════════════════════════════════════════════
+
+/** آمار وین‌ریت کانال — مستقیم از دیتابیس (بدون وابستگی چرخه‌ای) */
+async function channelWinRateStats() {
+  const settled = await db.issuedSlip.findMany({
+    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    select: { status: true, netProfit: true, stakeA: true, stakeB: true },
+  });
+  const st = { settled: settled.length, wonA: 0, wonB: 0, doubleWin: 0, middleTrap: 0, netProfit: 0, staked: 0 };
+  for (const s of settled) {
+    if (s.status === "WON_A") st.wonA += 1;
+    else if (s.status === "WON_B") st.wonB += 1;
+    else if (s.status === "DOUBLE_WIN") st.doubleWin += 1;
+    else if (s.status === "MIDDLE_TRAP") st.middleTrap += 1;
+    st.netProfit += s.netProfit ?? 0;
+    st.staked += s.stakeA + s.stakeB;
+  }
+  const winRatePct = st.settled > 0 ? Math.round(((st.settled - st.middleTrap) / st.settled) * 1000) / 10 : 0;
+  const netPct = st.staked > 0 ? Math.round((st.netProfit / st.staked) * 1000) / 10 : 0;
+  return { ...st, winRatePct, netPct, netProfit: Math.round(st.netProfit * 100) / 100 };
+}
+
+/** پیام نوع دوم — گزارش تسویه + به‌روزرسانی وین‌ریت کل کانال */
+export function buildWinRateReportMessage(st: {
+  settled: number;
+  wonA: number;
+  wonB: number;
+  doubleWin: number;
+  middleTrap: number;
+  winRatePct: number;
+  netProfit: number;
+  netPct: number;
+}): string {
+  const pct = (n: number) => (st.settled > 0 ? `${Math.round((n / st.settled) * 1000) / 10}٪` : "۰٪");
+  const lines: string[] = [];
+  lines.push(`📊 <b>گزارش وین‌ریت کانال — تسویه ۱۰۰٪ خودکار ESPN</b>`);
+  lines.push(`🎯 وین‌ریت زوج‌تیپ‌های تاییدشده: <b>${st.winRatePct}٪</b> (${st.settled} کارت تسویه‌شده)`);
+  lines.push(`🟢 برد تیپ A: <b>${st.wonA}</b> (${pct(st.wonA)}) · برد تیپ B: <b>${st.wonB}</b> (${pct(st.wonB)})`);
+  lines.push(`🏆 برد طلایی همزمان (Double-Win Jackpot): <b>${st.doubleWin}</b> (${pct(st.doubleWin)})`);
+  lines.push(`🔴 تله میانی (ثبت صادقانه): <b>${st.middleTrap}</b> (${pct(st.middleTrap)})`);
+  lines.push(`💰 سود خالص تجمعی کانال: <b>${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)}</b> واحد (${st.netPct >= 0 ? "+" : ""}${st.netPct}٪)`);
+  lines.push(`🔐 همه نتایج با اسکوربورد رسمی ESPN و هش SHA-256 راستی‌آزمایی می‌شوند.`);
+  return lines.join("\n");
+}
+
+/** آیتم صف انتشار — برای ارسال واقعی و شبیه‌ساز زنده فید کانال */
+export interface DispatchQueueItem {
+  kind: "CARD" | "RESULT" | "WINRATE";
+  slipId: string | null;
+  slipHash: string | null;
+  matchLabel: string;
+  message: string;
+  status?: string;
+}
+
+/** صف انتشار بدون ارسال — پیش‌نمایش زنده فید کانال (Live Telegram Channel Simulator) */
+export async function previewDispatchQueue(): Promise<{ queue: DispatchQueueItem[]; autoDispatch: boolean; configured: boolean }> {
+  const [pendingCards, pendingResults, autoDispatch, tg] = await Promise.all([
+    db.issuedSlip.findMany({
+      where: { status: { in: ["PENDING", "LIVE"] }, telegramCard: false, supervisorApproved: true },
+      orderBy: { kickoff: "asc" },
+      take: 8,
+    }),
+    db.issuedSlip.findMany({
+      where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true },
+      orderBy: { settledAt: "asc" },
+      take: 8,
+    }),
+    getAutoDispatch(),
+    telegramStatus(),
+  ]);
+
+  const queue: DispatchQueueItem[] = [];
+  for (const s of pendingCards) {
+    queue.push({
+      kind: "CARD",
+      slipId: s.id,
+      slipHash: s.hash,
+      matchLabel: `${s.homeTeam} × ${s.awayTeam}`,
+      message: buildCardMessage(s),
+      status: s.status,
+    });
+  }
+  for (const s of pendingResults) {
+    queue.push({
+      kind: "RESULT",
+      slipId: s.id,
+      slipHash: s.hash,
+      matchLabel: `${s.homeTeam} ${s.homeGoals ?? "?"}−${s.awayGoals ?? "?"} ${s.awayTeam}`,
+      message: buildResultMessage(s),
+      status: s.status,
+    });
+  }
+  const st = await channelWinRateStats();
+  if (pendingResults.length > 0) {
+    queue.push({ kind: "WINRATE", slipId: null, slipHash: null, matchLabel: "گزارش وین‌ریت کانال", message: buildWinRateReportMessage(st) });
+  }
+  return { queue, autoDispatch, configured: tg.configured };
+}
+
+/**
+ * صف ارسال خودکار دو مرحله‌ای (Auto-Dispatch Queue):
+ *   · پیام نوع اول (پیش از بازی): فقط کارت‌های تاییدشده سوپروایزر (وتوشده‌ها اسکیپ)
+ *   · پیام نوع دوم (پس از FT): برگه نتیجه + به‌روزرسانی وین‌ریت کل کانال
+ * Dedupe سمت سرور با پرچم‌های telegramCard/telegramResult — ارسال تکراری صفر.
+ * v9.0 — سقف هر پاس قابل تنظیم است: پس‌زمینه ۳/۳ (حفظ تأخیر سینک) و دکمه فوری ۸/۸.
+ */
+export async function autoDispatchApprovedSlips(options?: {
+  maxCards?: number;
+  maxResults?: number;
+}): Promise<{
+  ok: boolean;
+  sentCards: number;
+  sentResults: number;
+  winRateSent: boolean;
+  skippedVetoed: number;
+  detail: string;
+}> {
+  const maxCards = Math.max(1, Math.min(12, options?.maxCards ?? 3));
+  const maxResults = Math.max(1, Math.min(12, options?.maxResults ?? 3));
+  const [tg, autoOn] = await Promise.all([telegramStatus(), getAutoDispatch()]);
+  const skippedVetoed = await db.issuedSlip.count({ where: { supervisorApproved: false, telegramCard: false } });
+
+  if (!tg.configured || !tg.channelSet) {
+    return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed, detail: "TELEGRAM_NOT_CONFIGURED" };
+  }
+  if (!autoOn) {
+    return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed, detail: "AUTO_DISPATCH_OFF" };
+  }
+
+  let sentCards = 0;
+  let sentResults = 0;
+
+  // ─── مرحله ۱: پست پیش از بازی — فقط کارت‌های 👑 تاییدشده سوپروایزر ───
+  const cards = await db.issuedSlip.findMany({
+    where: { status: { in: ["PENDING", "LIVE"] }, telegramCard: false, supervisorApproved: true },
+    orderBy: { kickoff: "asc" },
+    take: maxCards,
+  });
+  for (const s of cards) {
+    try {
+      const res = await publishSlipToTelegram(s, "CARD");
+      if (res.ok) sentCards += 1;
+    } catch (err) {
+      console.warn("auto dispatch card failed:", err);
+    }
+  }
+
+  // ─── مرحله ۲: پست تسویه‌حساب پس از بازی — برگه نتیجه FT ───
+  const results = await db.issuedSlip.findMany({
+    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true },
+    orderBy: { settledAt: "asc" },
+    take: maxResults,
+  });
+  for (const s of results) {
+    try {
+      const ok = await sendSettlementNotification(s);
+      if (ok) sentResults += 1;
+    } catch (err) {
+      console.warn("auto dispatch result failed:", err);
+    }
+  }
+
+  // ─── به‌روزرسانی وین‌ریت کل کانال — فقط وقتی نتیجه تازه‌ای مخابره شد ───
+  let winRateSent = false;
+  if (sentResults > 0) {
+    winRateSent = await sendWinRateReport();
+  }
+
+  return {
+    ok: sentCards + sentResults > 0,
+    sentCards,
+    sentResults,
+    winRateSent,
+    skippedVetoed,
+    detail: sentCards + sentResults > 0 ? "dispatched" : "QUEUE_EMPTY",
+  };
+}
+
+/** throttle گزارش وین‌ریت — حداکثر هر ۱۰ دقیقه یک‌بار */
+let lastWinRateAt = 0;
+
+/**
+ * پیام نوع دوم (بخش وین‌ریت): به‌روزرسانی وین‌ریت کل کانال پس از تسویه.
+ * از موتور تسویه (settleFinishedSlips) و صف خودکار فراخوانی می‌شود — throttle ۱۰ دقیقه.
+ */
+export async function sendWinRateReport(force = false): Promise<boolean> {
+  if (!force && Date.now() - lastWinRateAt < 10 * 60_000) return false;
+  const status = await telegramStatus();
+  if (!status.configured || !status.channelSet) return false;
+  const st = await channelWinRateStats();
+  const res = await tgCall("sendMessage", {
+    chat_id: await channelId(),
+    text: buildWinRateReportMessage(st),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
+  if (res.ok) {
+    lastWinRateAt = Date.now();
+    await logOutbox(null, "WINRATE", true, "sent");
+  }
+  return res.ok;
 }

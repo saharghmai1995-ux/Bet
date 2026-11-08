@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  BrainCircuit,
   Gauge,
   GraduationCap,
   Lightbulb,
   RefreshCw,
   ScrollText,
+  Zap,
 } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { faNum, faPct } from "@/lib/format";
-import type { CalibrationDTO } from "@/lib/types";
+import type { ActiveRuleDTO, CalibrationDTO } from "@/lib/types";
 
 function ChartTooltip({
   active,
@@ -71,6 +73,8 @@ export function CalibrationTab() {
   const [data, setData] = useState<CalibrationDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  // ─── v9.0 — بردار قانون فعال کالیبراسیون (درس سیستمی → عدد) ───
+  const [rules, setRules] = useState<ActiveRuleDTO[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,6 +94,15 @@ export function CalibrationTab() {
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
+      });
+    fetch("/api/calibration/rules", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((json: { success: boolean; rules?: ActiveRuleDTO[] }) => {
+        if (cancelled) return;
+        if (json?.success && Array.isArray(json.rules)) setRules(json.rules);
+      })
+      .catch(() => {
+        // قوانین اختیاری‌اند — خطا بی‌صدا
       });
     return () => {
       cancelled = true;
@@ -158,6 +171,72 @@ export function CalibrationTab() {
         </CardHeader>
       </Card>
 
+          {/* ═══ v9.0 — بردار قانون فعال کالیبراسیون (حلقه زنده به مغز سوپروایزر) ═══ */}
+          <Card className="border-violet-500/30">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex flex-wrap items-center gap-2">
+                <BrainCircuit className="size-4 text-violet-400" />
+                بردار قانون فعال کالیبراسیون (Active Rule Vector)
+                <Badge variant="outline" className="gap-1 border-violet-400/40 text-[10px] text-violet-300">
+                  <Zap className="size-3" /> اعمال‌شده در فرمول سوپروایزر
+                </Badge>
+              </CardTitle>
+              <CardDescription className="text-xs leading-relaxed">
+                درس‌های سیستمی دیگر فقط متن نیستند — هر درس یک ضریب عددی دارد که مستقیماً امید گل (λ) موتور و امتیاز
+                UtilityScore الگوها در ایجنت سوپروایزر را تغییر می‌دهد. فلش‌کارت‌های همان لیگ این قوانین را با سطر
+                «🧠 درس کالیبراسیون اعمال‌شده» نمایش می‌دهند.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {rules.length === 0 ? (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  هنوز قانون فعالی برای هیچ لیگی فعال نشده — پس از تسویه خودکار حداقل ۳ بازی در هر لیگ، بردار قانون همان لیگ فعال می‌شود.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  {rules.map((r) => (
+                    <div key={r.league} className="space-y-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="flex items-center gap-1.5 text-xs font-bold text-violet-200">
+                          <Zap className="size-3.5 text-violet-400" /> {r.league}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge variant="outline" className="text-[9px] text-muted-foreground">مبنای قانون: {faNum(r.sample, 0)} کارت تسویه‌شده</Badge>
+                          {r.goalBiasPct !== null && (
+                            <Badge
+                              variant="outline"
+                              className={`text-[9px] ${r.goalBiasPct < 0 ? "border-sky-400/40 text-sky-300" : "border-amber-400/40 text-amber-300"}`}
+                            >
+                              انحراف گلزنی: {r.goalBiasPct > 0 ? "+" : ""}{faNum(r.goalBiasPct, 1)}٪
+                            </Badge>
+                          )}
+                          {Math.abs(r.lambdaMultiplier - 1) > 0.001 && (
+                            <Badge variant="outline" className={`text-[9px] ${r.lambdaMultiplier < 1 ? "border-sky-400/40 text-sky-300" : "border-emerald-400/40 text-emerald-300"}`}>
+                              λ × {faNum(r.lambdaMultiplier, 2)}
+                            </Badge>
+                          )}
+                          {Object.entries(r.archetypeBoosts).map(([code, b]) => (
+                            <Badge key={code} variant="outline" className={`text-[9px] ${b > 0 ? "border-emerald-400/40 text-emerald-300" : "border-rose-400/40 text-rose-300"}`}>
+                              {code}: {b > 0 ? "+" : ""}{faNum(b, 0)} امتیاز
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                      <ul className="space-y-1 text-[11px] leading-5 text-muted-foreground">
+                        {r.rules.map((rule, i) => (
+                          <li key={i} className="flex items-start gap-1.5">
+                            <Lightbulb className="mt-0.5 size-3 shrink-0 text-violet-400" />
+                            <span>{rule}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        
       {data.overall.count === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
@@ -381,7 +460,7 @@ export function CalibrationTab() {
               </ul>
             </CardContent>
           </Card>
-        </>
+</>
       )}
     </div>
   );

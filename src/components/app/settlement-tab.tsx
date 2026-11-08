@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
+  Bot,
   Check,
   ClipboardList,
   Copy,
@@ -21,7 +22,9 @@ import {
   EyeOff,
   Loader2,
   Lock,
+  MonitorSmartphone,
   RefreshCw,
+  Rocket,
   Send,
   SendHorizonal,
   Settings2,
@@ -33,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useQuantStore } from "@/lib/store";
@@ -79,6 +83,51 @@ export function SettlementTab() {
   // v8.0 — کانال پیش‌فرض رسمی @aineobet (در صورت خالی بودن تنظیمات کاربر)
   const [tgChannel, setTgChannel] = useState(config.telegramChannelId || "@aineobet");
   const [preview, setPreview] = useState<string | null>(null);
+  // ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر + شبیه‌ساز فید کانال ═══
+  const [autoDispatch, setAutoDispatch] = useState(true);
+  const [dispatching, setDispatching] = useState(false);
+  const [feed, setFeed] = useState<{ kind: string; matchLabel: string; message: string; status?: string }[]>([]);
+  const [feedOpen, setFeedOpen] = useState(false);
+
+  const loadFeed = useCallback(async () => {
+    try {
+      const res = await fetch("/api/telegram/autodispatch", { cache: "no-store" });
+      const data = (await res.json()) as {
+        success: boolean;
+        queue?: { kind: string; matchLabel: string; message: string; status?: string }[];
+        autoDispatch?: boolean;
+        configured?: boolean;
+      };
+      if (data.success && Array.isArray(data.queue)) {
+        setFeed(data.queue);
+        if (typeof data.autoDispatch === "boolean") setAutoDispatch(data.autoDispatch);
+      }
+    } catch {
+      // خطای شبکه — فید قبلی معتبر می‌ماند
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadFeed();
+  }, [loadFeed]);
+
+  const toggleAutoDispatch = useCallback(
+    async (on: boolean) => {
+      setAutoDispatch(on);
+      try {
+        await fetch("/api/telegram/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ autoDispatch: on }),
+        });
+        toast.success(on ? "🤖 ارسال خودکار کارت‌های تایید سوپروایزر روشن شد" : "ارسال خودکار خاموش شد — فقط ارسال دستی فعال است");
+      } catch {
+        toast.error("خطا در ذخیره سوییچ ارسال خودکار");
+        setAutoDispatch(!on);
+      }
+    },
+    []
+  );
 
   const loadLedger = useCallback(async () => {
     try {
@@ -95,6 +144,46 @@ export function SettlementTab() {
   useEffect(() => {
     void loadLedger();
   }, [loadLedger]);
+
+  // ─── 🚀 ارسال فوری تمام کارت‌های تاییدشده سوپروایزر و گزارش نتایج تسویه‌شده (v9.0) ───
+  const dispatchNow = useCallback(async () => {
+    setDispatching(true);
+    try {
+      const res = await fetch("/api/telegram/autodispatch", { method: "POST" });
+      const data = (await res.json()) as { success: boolean; sentCards?: number; sentResults?: number; winRateSent?: boolean; skippedVetoed?: number; detail?: string; error?: string };
+      if (!data.success) {
+        toast.error(data.error ?? "ارسال ناموفق بود");
+        return;
+      }
+      if (data.detail === "TELEGRAM_NOT_CONFIGURED") {
+        toast.warning("اتصال تلگرام تنظیم نشده — پیش‌نمایش زنده فید کانال را ببینید", {
+          description: "با وارد کردن توکن، همه پیام‌های صف بلافاصله مخابره می‌شوند",
+        });
+        setFeedOpen(true);
+        await loadFeed();
+        return;
+      }
+      if (data.detail === "AUTO_DISPATCH_OFF") {
+        toast.info("سوییچ ارسال خودکار خاموش است — آن را روشن کنید یا از دکمه‌های دستی استفاده کنید");
+        return;
+      }
+      if (data.detail === "QUEUE_EMPTY") {
+        toast.info("صف انتشار خالی است — همه کارت‌های تایید و نتایج قبلاً مخابره شده‌اند", {
+          description: `بازی‌های وتوشده رد‌شده: ${faNum(data.skippedVetoed ?? 0, 0)}`,
+        });
+        return;
+      }
+      toast.success(`🚀 ${faNum(data.sentCards ?? 0, 0)} کارت تایید سوپروایزر + ${faNum(data.sentResults ?? 0, 0)} برگه نتیجه FT مخابره شد`, {
+        description: data.winRateSent ? "📊 گزارش وین‌ریت کانال هم ارسال شد" : undefined,
+      });
+      await loadFeed();
+      await loadLedger();
+    } catch {
+      toast.error("خطای شبکه در ارسال خودکار");
+    } finally {
+      setDispatching(false);
+    }
+  }, [loadFeed, loadLedger]);
 
   // ─── ساخت بدنه صدور از آیتم‌های سبد (تطبیق میکس دو بازی با externalId ESPN) ───
   const buildIssueItem = useCallback(
@@ -337,10 +426,11 @@ export function SettlementTab() {
           ⚡ همگام‌سازی و تسویه خودکار نتایج پایان‌یافته با سرور ESPN
         </Button>
         <p className="text-[10px] leading-4 text-muted-foreground">
-          اسکوربورد رسمی ESPN (امروز + دیروز — Scheduled / In-Progress / Final) بررسی می‌شود؛ به محض FT، نتیجه واقعی
+          اسکوربورد رسمی ESPN (۳ روز گذشته + امروز — Scheduled / In-Progress / Final) بررسی می‌شود؛ به محض FT، نتیجه واقعی
           <b className="font-num" dir="ltr"> homeScore/awayScore </b> خوانده و تیپ A و تیپ B با فرمول
           <b className="font-num" dir="ltr"> stake×odds−۱۰۰ </b>
-          تسویه می‌شوند. نتیجه‌ها با تصویر جام پیروزی / رختکن بهم‌ریخته به کانال VIP اعلام می‌گردند.
+          تسویه می‌شوند. v9.0: بازی‌های پایان‌یافته ۳ روز اخیر به‌صورت خودکار ثبت و تسویه می‌شوند (Zero-Click) و نتیجه‌ها با تصویر جام پیروزی /
+          رختکن بهم‌ریخته به کانال VIP اعلام می‌گردند.
         </p>
       </div>
 
@@ -390,6 +480,81 @@ export function SettlementTab() {
           <Button size="sm" variant="outline" className="h-8 gap-1 border-white/15 text-[11px] text-foreground/80" onClick={() => void saveTelegram(true)} disabled={savingTg}>
             <SendHorizonal className="size-3" /> ارسال پیام آزمون به کانال
           </Button>
+        </div>
+
+        {/* ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر ═══ */}
+        <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Bot className="size-4 text-emerald-400" />
+              <p className="text-[11px] font-semibold text-emerald-300">
+                🤖 ارسال خودکار کارت‌های تاییدشده سوپروایزر و نتایج FT به تلگرام
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-muted-foreground">{autoDispatch ? "روشن (پیش‌فرض)" : "خاموش"}</span>
+              <Switch checked={autoDispatch} onCheckedChange={(v) => void toggleAutoDispatch(v)} aria-label="سوییچ ارسال خودکار تلگرام" />
+            </div>
+          </div>
+          <p className="text-[10px] leading-4 text-muted-foreground">
+            بازی‌های وتوشده سوپروایزر <b className="text-rose-300">مطلقاً</b> ارسال نمی‌شوند — فقط کارت‌های دارای مهر 👑 «تاییدشده سوپروایزر (Monte-Carlo Winner)».
+            پست پیش از بازی (کارت کامل + λ بازار + هش SHA-256) و پست تسویه پس از FT (نتیجه ESPN + سود خالص + به‌روزرسانی وین‌ریت کل کانال) خودکار مخابره می‌شوند
+            (Dedupe سمت سرور — صفر پیام تکراری).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              className="h-8 gap-1 bg-emerald-600 text-[11px] hover:bg-emerald-500"
+              onClick={() => void dispatchNow()}
+              disabled={dispatching}
+            >
+              {dispatching ? <Loader2 className="size-3 animate-spin" /> : <Rocket className="size-3" />}
+              🚀 ارسال فوری تمام کارت‌های تاییدشده سوپروایزر و گزارش نتایج تسویه‌شده
+            </Button>
+            <Button size="sm" variant="outline" className="h-8 gap-1 border-white/15 text-[11px] text-foreground/80" onClick={() => { setFeedOpen((v) => !v); void loadFeed(); }}>
+              <MonitorSmartphone className="size-3" />
+              {feedOpen ? "بستن شبیه‌ساز فید کانال" : "پیش‌نمایش زنده فید کانال (شبیه‌ساز)"}
+            </Button>
+          </div>
+
+          {/* ─── شبیه‌ساز زنده فید کانال (Live Telegram Channel Simulator Feed) ─── */}
+          {feedOpen && (
+            <div className="space-y-2 rounded-xl border border-white/10 bg-black/30 p-3">
+              <p className="flex items-center gap-1.5 text-[11px] font-semibold text-cyan-300">
+                <MonitorSmartphone className="size-3.5" />
+                پیش‌نمایش زنده فید کانال VIP — صف فعلی ({faNum(feed.length, 0)} پیام آماده مخابره)
+                {!ledger?.telegram.configured && (
+                  <Badge variant="outline" className="border-amber-500/40 text-[9px] text-amber-300">بات تنظیم نشده — با ذخیره توکن، همین پیام‌ها مخابره می‌شوند</Badge>
+                )}
+              </p>
+              {feed.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-white/10 p-3 text-center text-[10px] text-muted-foreground">
+                  صف خالی است — کارت‌های تایید سوپروایزر پس از صدور خودکار و نتایج پس از FT اینجا ظاهر می‌شوند.
+                </p>
+              ) : (
+                <ScrollArea className="max-h-72">
+                  <div className="space-y-2 pr-1">
+                    {feed.map((msg, i) => (
+                      <div key={`${msg.kind}-${i}`} className="rounded-lg border border-white/10 bg-[rgba(8,12,22,0.9)] p-2.5">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] ${msg.kind === "CARD" ? "border-cyan-500/40 text-cyan-300" : msg.kind === "RESULT" ? "border-emerald-500/40 text-emerald-300" : "border-amber-500/40 text-amber-300"}`}
+                          >
+                            {msg.kind === "CARD" ? "📤 پست پیش از بازی (کارت تایید سوپروایزر)" : msg.kind === "RESULT" ? "🏁 پست تسویه پس از FT" : "📊 گزارش وین‌ریت کانال"}
+                          </Badge>
+                          <span className="truncate text-[10px] text-muted-foreground">{msg.matchLabel}</span>
+                        </div>
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-[10px] leading-4 text-foreground/80" dir="rtl" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+                          {msg.message}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </div>
+          )}
         </div>
 
         {/* سبد → انتشار / صدور */}

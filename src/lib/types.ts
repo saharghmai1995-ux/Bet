@@ -405,7 +405,17 @@ export interface PortfolioResultDTO {
     matchLabel: string;
     lambdaHome: number;
     lambdaAway: number;
+    /** v9.0 — شفافیت کامل λ: الگوی Odds بازار / آمار فصل / ترکیبی نهایی */
+    lambdaMarketHome: number | null;
+    lambdaMarketAway: number | null;
+    lambdaStatsHome: number;
+    lambdaStatsAway: number;
+    lambdaFitError: number | null;
+    lambdaCalibrationHome: number;
+    lambdaCalibrationAway: number;
   };
+  /** v9.0 — متن قوانین فعال کالیبراسیون لیگ این بازی (برای سطر فلش‌کارت) */
+  calibrationRule: string[];
   monteCarlo: {
     sims: number;
     pHome: number;
@@ -577,6 +587,28 @@ export interface LiveHedgeDTO {
   message: string;
 }
 
+// ═══════════════════════════════════════════════════════
+// v9.0 — بردار قانون فعال کالیبراسیون (Active Calibration Rule Vector)
+// ═══════════════════════════════════════════════════════
+
+/** یک قانون فعال لیگ — کلاینت‌سِیف (خروجی GET /api/calibration/rules) */
+export interface ActiveRuleDTO {
+  league: string;
+  /** تعداد بازی‌های تسویه‌شده مبنای قانون */
+  sample: number;
+  /** ٪ انحراف میانگین گل واقعی از λ پیش‌بینی */
+  goalBiasPct: number | null;
+  /** ضریب اعمالی روی λ موتور (مثلاً ۰.۹۴ = −۶٪) */
+  lambdaMultiplier: number;
+  /** پاداش/جریمه عددی UtilityScore هر الگو (A1..A5) */
+  archetypeBoosts: Record<string, number>;
+  archetypeHitRate: Record<string, { wins: number; total: number; profit: number }>;
+  /** متن قوانین فعال فارسی */
+  rules: string[];
+  /** نشان «⚡ اعمال‌شده در فرمول سوپروایزر» */
+  applied: boolean;
+}
+
 /** داشبورد کالیبراسیون (امتیاز بریر + اصلاح خودکار) */
 export interface CalibrationDTO {
   success: boolean;
@@ -645,6 +677,15 @@ export interface IssuedSlipDTO {
   guaranteedProfit: number;
   marginPct: number;
   archetype: string | null;
+  /** v9.0 — کد الگو (A1..A5) برای حلقه فعال کالیبراسیون */
+  archetypeCode: string | null;
+  /** v9.0 — λ ترکیبی نهایی مدل در لحظه صدور (مبنای انحراف گلزنی لیگ) */
+  lambdaHome: number | null;
+  lambdaAway: number | null;
+  /** v9.0 — فقط کارت‌های تایید سوپروایزر به تلگرام می‌روند */
+  supervisorApproved: boolean;
+  /** v9.0 — صادرشده توسط خط لوله خودکار سرور (Zero-Click) */
+  autoIssued: boolean;
   espnUrl: string | null;
   status: SlipStatus;
   homeGoals: number | null;
@@ -681,11 +722,13 @@ export interface SettlementStatsDTO {
 /** خروجی همگام‌سازی و تسویه خودکار با سرور ESPN */
 export interface SettlementSyncResultDTO {
   success: boolean;
-  checkedEspn: number; // تعداد رخدادهای ESPN بررسی‌شده (امروز + دیروز)
+  checkedEspn: number; // تعداد رخدادهای ESPN بررسی‌شده (۳ روز + امروز — v9.0)
   ftFound: number; // تعداد بازی‌های FT یافت‌شده
   settled: { id: string; matchLabel: string; status: SlipStatus; netProfit: number }[];
   live: number;
   notified: number; // پیام‌های تلگرام ارسال‌شده
+  /** v9.0 — خروجی خط لوله ثبت خودکار بازی‌های ۳ روز اخیر */
+  autoRegistered?: { scanned: number; past: number; today: number; vetoed: number; skippedExisting: number };
   elapsedMs: number;
   error?: string;
 }
@@ -721,6 +764,10 @@ export interface IssueSlipItemDTO {
   guaranteedProfit: number;
   marginPct: number;
   archetype?: string | null;
+  /** v9.0 — کد الگو (A1..A5) */
+  archetypeCode?: string | null;
   lambdaHome?: number | null;
   lambdaAway?: number | null;
+  /** v9.0 — بازی وتوشده سوپروایزر هرگز صدور/ارسال نمی‌شود */
+  supervisorApproved?: boolean;
 }

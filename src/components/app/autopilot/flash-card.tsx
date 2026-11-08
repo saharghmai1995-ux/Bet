@@ -36,6 +36,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
 import { faNum, faPct } from "@/lib/format";
 import { useQuantStore } from "@/lib/store";
@@ -401,6 +402,44 @@ export function FlashCard({
                   </ul>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ═══ v9.0 — موتور مهندسی معکوس ضرایب: شفافیت کامل λ ═══ */}
+          <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.05] p-2.5 text-[11px] leading-5">
+            <p className="flex items-center gap-1 font-semibold text-sky-300">
+              🎯 امید گل ترکیبی نهایی: میزبان{" "}
+              <b className="font-num" dir="ltr">{faNum(view.lambdaHome, 2)}</b> — میهمان{" "}
+              <b className="font-num" dir="ltr">{faNum(view.lambdaAway, 2)}</b>
+            </p>
+            {view.lambdaMarketHome !== null && view.lambdaMarketAway !== null ? (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                استخراج‌شده از الگوی Odds بازار: <b className="font-num text-sky-200" dir="ltr">{faNum(view.lambdaMarketHome, 2)}-{faNum(view.lambdaMarketAway, 2)}</b> | آمار فصل:{" "}
+                <b className="font-num text-emerald-300" dir="ltr">{faNum(view.lambdaStatsHome, 2)}-{faNum(view.lambdaStatsAway, 2)}</b> · فرمول ترکیبی:{" "}
+                <b className="text-foreground">۶۵٪ بازار + ۳۵٪ آمار</b>
+                {view.lambdaFitError !== null && (
+                  <> · خطای برازش بازار: <b className="font-num" dir="ltr">{view.lambdaFitError.toExponential(1)}</b></>
+                )}
+              </p>
+            ) : (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                خط بازار واقعی در دسترس نبود — λ از مدل آماری جدول و فرم فصل:{" "}
+                <b className="font-num text-emerald-300" dir="ltr">{faNum(view.lambdaStatsHome, 2)}-{faNum(view.lambdaStatsAway, 2)}</b> (مسیر STATS_ONLY)
+              </p>
+            )}
+          </div>
+
+          {/* ═══ v9.0 — درس کالیبراسیون اعمال‌شده روی این کارت (حلقه فعال) ═══ */}
+          {view.calibrationRule.length > 0 && (
+            <div className="rounded-xl border border-violet-500/30 bg-violet-500/[0.07] p-2.5 text-[11px] leading-5">
+              <p className="flex items-center gap-1 font-semibold text-violet-300">
+                🧠 درس کالیبراسیون اعمال‌شده روی این کارت: <Badge variant="outline" className="gap-0.5 border-violet-400/40 px-1 py-0 text-[8px] text-violet-200">⚡ اعمال‌شده در فرمول سوپروایزر</Badge>
+              </p>
+              <ul className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                {view.calibrationRule.slice(0, 3).map((r, i) => (
+                  <li key={i}>• {r}</li>
+                ))}
+              </ul>
             </div>
           )}
 

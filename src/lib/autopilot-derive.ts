@@ -10,6 +10,7 @@
 import { useMemo } from "react";
 import { useQuantStore } from "./store";
 import type { FlashcardView } from "./autopilot-types";
+import type { ActiveRuleDTO } from "./types";
 import { pickCrownPair, type SupervisorDecision } from "./supervisor";
 import type { DebateResultDTO, LineupShockDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "./types";
 
@@ -22,10 +23,14 @@ function firstSentence(text: string | null | undefined, maxLen = 130): string {
   return clean.length > maxLen ? `${clean.slice(0, maxLen)}…` : clean;
 }
 
-/** تصمیم سوپروایزر از پرتفوی یک بازی (با در نظر گرفتن حالت اجرایی) */
-export function supervisorFor(portfolio: PortfolioResultDTO | null, executionMode: "DUAL_BOOK" | "SINGLE_BOOK"): SupervisorDecision | null {
+/** تصمیم سوپروایزر از پرتفوی یک بازی (با در نظر گرفتن حالت اجرایی + قانون فعال لیگ) */
+export function supervisorFor(
+  portfolio: PortfolioResultDTO | null,
+  executionMode: "DUAL_BOOK" | "SINGLE_BOOK",
+  rule?: ActiveRuleDTO | null
+): SupervisorDecision | null {
   if (!portfolio?.pairs?.length) return null;
-  return pickCrownPair(portfolio.pairs, executionMode);
+  return pickCrownPair(portfolio.pairs, executionMode, rule);
 }
 
 /** ساخت کارت از ورودی‌های خام — زوج = تک‌تیپ طلایی سوپروایزر */
@@ -62,6 +67,13 @@ export function buildFlashcard(
     judgeLine: firstSentence(debate?.judge?.thesis ?? null),
     lambdaHome: portfolio?.primary?.lambdaHome ?? 1.35,
     lambdaAway: portfolio?.primary?.lambdaAway ?? 1.25,
+    // ─── v9.0 — شفافیت کامل λ + درس کالیبراسیون اعمال‌شده ───
+    lambdaMarketHome: portfolio?.primary?.lambdaMarketHome ?? null,
+    lambdaMarketAway: portfolio?.primary?.lambdaMarketAway ?? null,
+    lambdaStatsHome: portfolio?.primary?.lambdaStatsHome ?? portfolio?.primary?.lambdaHome ?? 1.35,
+    lambdaStatsAway: portfolio?.primary?.lambdaStatsAway ?? portfolio?.primary?.lambdaAway ?? 1.25,
+    lambdaFitError: portfolio?.primary?.lambdaFitError ?? null,
+    calibrationRule: portfolio?.calibrationRule ?? [],
     isArchetype: Boolean(pair.archetype),
     supervisor: supervisor
       ? {
@@ -84,17 +96,18 @@ export function useFlashcards(): FlashcardView[] {
   const matches = useQuantStore((s) => s.matches);
   const autopilot = useQuantStore((s) => s.autopilot);
   const executionMode = useQuantStore((s) => s.config.executionMode);
+  const activeRules = useQuantStore((s) => s.activeRules);
   return useMemo(() => {
     const out: FlashcardView[] = [];
     for (const m of matches) {
       const st = autopilot[m.id];
       if (!st?.portfolio?.pairs?.length) continue;
-      const sup = supervisorFor(st.portfolio, executionMode);
+      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null);
       if (!sup) continue;
       out.push(buildFlashcard(m, sup.crown, st.debate, st.lineup, st.portfolio, sup));
     }
     return out;
-  }, [matches, autopilot, executionMode]);
+  }, [matches, autopilot, executionMode, activeRules]);
 }
 
 /** آمار کارایی سوپروایزر برای ویجت هیرو (تایید / وتو) */
@@ -102,19 +115,20 @@ export function useSupervisorStats(): { scanned: number; approved: number; vetoe
   const matches = useQuantStore((s) => s.matches);
   const autopilot = useQuantStore((s) => s.autopilot);
   const executionMode = useQuantStore((s) => s.config.executionMode);
+  const activeRules = useQuantStore((s) => s.activeRules);
   return useMemo(() => {
     let approved = 0;
     let vetoed = 0;
     for (const m of matches) {
       const st = autopilot[m.id];
       if (!st?.portfolio?.pairs?.length) continue;
-      const sup = supervisorFor(st.portfolio, executionMode);
+      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null);
       if (!sup) continue;
       if (sup.veto) vetoed += 1;
       else approved += 1;
     }
     return { scanned: matches.length, approved, vetoed };
-  }, [matches, autopilot, executionMode]);
+  }, [matches, autopilot, executionMode, activeRules]);
 }
 
 /** آیتم‌های سبد انتخابی — حل کلید matchId::pairId به کارت کامل */
@@ -122,6 +136,7 @@ export function useCartItems(): { key: string; view: FlashcardView; pair: Portfo
   const matches = useQuantStore((s) => s.matches);
   const autopilot = useQuantStore((s) => s.autopilot);
   const executionMode = useQuantStore((s) => s.config.executionMode);
+  const activeRules = useQuantStore((s) => s.activeRules);
   const cart = useQuantStore((s) => s.cart);
   return useMemo(() => {
     const out: { key: string; view: FlashcardView; pair: PortfolioPairDTO }[] = [];
@@ -131,24 +146,21 @@ export function useCartItems(): { key: string; view: FlashcardView; pair: Portfo
       const match = matches.find((m) => m.id === matchId);
       const pair = st?.portfolio?.pairs.find((p) => p.id === pairId);
       if (!st || !match || !pair) continue;
-      const sup = supervisorFor(st.portfolio, executionMode);
+      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === match.league) ?? null);
       out.push({ key, pair, view: buildFlashcard(match, pair, st.debate, st.lineup, st.portfolio, sup) });
     }
     return out;
-  }, [cart, autopilot, matches, executionMode]);
+  }, [cart, autopilot, matches, executionMode, activeRules]);
 }
 
-/**
- * خروجی متنی سبد برای تلگرام / برگه‌ساز — v8.0
- * متن استاندارد UTF-8 با امضای سوپروایزر و فرمول صحیح سود خالص واحد
- */
+/** خروجی متنی سبد برای تلگرام / برگه‌ساز — v9.0 */
 export function buildTelegramText(
   items: { view: FlashcardView; stakeA: number; stakeB: number; profit: number }[],
   budget: number,
   strategyLabel: string
 ): string {
   const lines: string[] = [];
-  lines.push("⚽ فوتبال‌کوانت v8.0 Supervisor Quant — سبد تک‌تیپ‌های طلایی مونت‌کارلو");
+  lines.push("⚽ فوتبال‌کوانت v9.0 Supervisor Quant — سبد تک‌تیپ‌های طلایی مونت‌کارلو");
   lines.push(`💰 کل بودجه روزانه: ${budget} واحد | استراتژی: ${strategyLabel}`);
   lines.push("─────────────────────");
   for (const it of items) {

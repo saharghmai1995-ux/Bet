@@ -122,21 +122,63 @@ export function runDixonColes(input: DixonColesInput): MarketProbabilities {
   lambdaAway = Math.max(0.15, Math.min(lambdaAway, 5.5));
 
   // ماتریس نمره با تصحیح دیکسون-کولز
+  const matrix = buildScoreMatrix(lambdaHome, lambdaAway, rho);
+
+  const agg = aggregateMatrix(matrix);
+  const pUnder25 = 1 - agg.pOver25;
+
+  // محتمل‌ترین نمرات
+  const scores: { score: string; p: number }[] = [];
+  for (let h = 0; h <= 5; h++) for (let a = 0; a <= 5; a++) scores.push({ score: `${h}-${a}`, p: matrix[h][a] });
+  scores.sort((x, y) => y.p - x.p);
+
+  return {
+    lambdaHome,
+    lambdaAway,
+    ...agg,
+    pUnder25,
+    scenarioOther: agg.scenarioDrawOpen,
+    topScores: scores.slice(0, 6),
+    matrix,
+  };
+}
+
+/**
+ * v9.0 — ساخت ماتریس نمره مستقیم از جفت λ (بدون عبور از ضرایب حمله/دفاع).
+ * هسته مشترک موتور مستقیم و موتور مهندسی معکوس (Reverse-Poisson).
+ */
+export function buildScoreMatrix(lambdaHome: number, lambdaAway: number, rho = -0.08, maxGoals = MAX_GOALS): number[][] {
   const matrix: number[][] = [];
   let total = 0;
-  for (let h = 0; h <= MAX_GOALS; h++) {
+  for (let h = 0; h <= maxGoals; h++) {
     matrix[h] = [];
-    for (let a = 0; a <= MAX_GOALS; a++) {
+    for (let a = 0; a <= maxGoals; a++) {
       const p =
         poissonPmf(h, lambdaHome) * poissonPmf(a, lambdaAway) * dixonColesTau(h, a, lambdaHome, lambdaAway, rho);
       matrix[h][a] = Math.max(p, 0);
       total += matrix[h][a];
     }
   }
-  // نرمال‌سازی
-  for (let h = 0; h <= MAX_GOALS; h++) for (let a = 0; a <= MAX_GOALS; a++) matrix[h][a] /= total;
+  for (let h = 0; h <= maxGoals; h++) for (let a = 0; a <= maxGoals; a++) matrix[h][a] /= total;
+  return matrix;
+}
 
-  // سناریوهای متقابل مستثنی (Mutually Exclusive Scenarios)
+/** خروجی تجمیعی ماتریس نمره — سناریوهای متقابل مستثنی (Mutually Exclusive) */
+export interface MatrixAggregate {
+  pHome: number;
+  pDraw: number;
+  pAway: number;
+  pOver25: number;
+  pBtts: number;
+  pHomeCleanSheet: number;
+  pAwayCleanSheet: number;
+  scenarioClosed: number;
+  scenarioOpenHome: number;
+  scenarioOpenAway: number;
+  scenarioDrawOpen: number;
+}
+
+export function aggregateMatrix(matrix: number[][]): MatrixAggregate {
   let pHome = 0;
   let pDraw = 0;
   let pAway = 0;
@@ -145,11 +187,11 @@ export function runDixonColes(input: DixonColesInput): MarketProbabilities {
   let pHomeCleanSheet = 0;
   let pAwayCleanSheet = 0;
   let scenarioClosed = 0; // بازی بسته و کم‌گل: مجموع گل ≤ ۲
-  let scenarioOpenHome = 0; // برد پرگل میزبان: h > a و h+a ≥ ۳
-  let scenarioOpenAway = 0; // برد پرگل میهمان: a > h و h+a ≥ ۳
+  let scenarioOpenHome = 0; // برد پرگل میزبان
+  let scenarioOpenAway = 0; // برد پرگل میهمان
 
-  for (let h = 0; h <= MAX_GOALS; h++) {
-    for (let a = 0; a <= MAX_GOALS; a++) {
+  for (let h = 0; h < matrix.length; h++) {
+    for (let a = 0; a < matrix[h].length; a++) {
       const p = matrix[h][a];
       if (h > a) pHome += p;
       else if (h === a) pDraw += p;
@@ -163,32 +205,19 @@ export function runDixonColes(input: DixonColesInput): MarketProbabilities {
       else if (a > h) scenarioOpenAway += p;
     }
   }
-  // سناریوی «تساوی پرگل» = باقیمانده
   const scenarioDrawOpen = Math.max(0, 1 - scenarioClosed - scenarioOpenHome - scenarioOpenAway);
-  const pUnder25 = 1 - pOver25;
-
-  // محتمل‌ترین نمرات
-  const scores: { score: string; p: number }[] = [];
-  for (let h = 0; h <= 5; h++) for (let a = 0; a <= 5; a++) scores.push({ score: `${h}-${a}`, p: matrix[h][a] });
-  scores.sort((x, y) => y.p - x.p);
-
   return {
-    lambdaHome,
-    lambdaAway,
     pHome,
     pDraw,
     pAway,
     pOver25,
-    pUnder25,
     pBtts,
     pHomeCleanSheet,
     pAwayCleanSheet,
     scenarioClosed,
     scenarioOpenHome,
     scenarioOpenAway,
-    scenarioOther: scenarioDrawOpen,
-    topScores: scores.slice(0, 6),
-    matrix,
+    scenarioDrawOpen,
   };
 }
 

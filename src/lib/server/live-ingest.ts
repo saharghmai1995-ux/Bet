@@ -28,6 +28,7 @@ import {
 } from "./live-sources";
 import { getLeagueStandings, findStandingsEntry, type LeagueStandings } from "./espn-standings";
 import { runDixonColes, fairOdds } from "@/lib/engine/poisson";
+import { solveMarketImpliedLambdas, type MarketImpliedResult } from "@/lib/engine/reverse-poisson";
 import type { LiveFeedDTO, LiveFeedSourceDTO } from "@/lib/types";
 
 
@@ -71,6 +72,33 @@ const cache: CacheState = {
 
 function oddsApiKey(userKey?: string): string {
   return (userKey && userKey.trim()) || process.env.ODDS_API_KEY || DEFAULT_ODDS_API_KEY;
+}
+
+// ═══════════ v9.0 — موتور مهندسی معکوس ضرایب (Reverse-Poisson Market-Implied λ) ═══════════
+
+/** کش حل‌کننده بر اساس اثر انگشت ضرایب — ضرایب ثابت را دوباره حل نمی‌کنیم */
+const marketSolverCache = new Map<string, MarketImpliedResult | null>();
+const MARKET_SOLVER_CACHE_MAX = 600;
+
+function marketLambdasFor(odds: { oddsHome: number; oddsDraw: number; oddsAway: number; oddsOver25: number; oddsUnder25: number }): { home: number | null; away: number | null; fitError: number | null } {
+  const key = [odds.oddsHome, odds.oddsDraw, odds.oddsAway, odds.oddsOver25, odds.oddsUnder25].join("|");
+  if (!marketSolverCache.has(key)) {
+    if (marketSolverCache.size > MARKET_SOLVER_CACHE_MAX) marketSolverCache.clear();
+    marketSolverCache.set(
+      key,
+      solveMarketImpliedLambdas({
+        oddsHome: odds.oddsHome,
+        oddsDraw: odds.oddsDraw,
+        oddsAway: odds.oddsAway,
+        oddsOver25: odds.oddsOver25,
+        oddsUnder25: odds.oddsUnder25,
+      })
+    );
+  }
+  const solved = marketSolverCache.get(key) ?? null;
+  return solved
+    ? { home: solved.lambdaHome, away: solved.lambdaAway, fitError: solved.fitError }
+    : { home: null, away: null, fitError: null };
 }
 
 // ═════════════════════ مشتقات کمّی از دیتای واقعی ESPN ═════════════════════
@@ -140,8 +168,9 @@ interface DerivedStrength {
  *   λ_Away = α_Away × β_Home × LeagueTeamAvg
  * مسیر جایگزین شفاف (فقط وقتی جدول در دسترس نیست): رکورد واقعی W-D-L + فرم ۵ بازی.
  * تعدیل جوی: بارش > ۲mm یا باد > ۳۰km/h → λ × ۰.۹۲ (−۸٪)
+ * v9.0 — export شد: مشترک با خط لوله ثبت خودکار بازی‌های گذشته (auto-issue)
  */
-function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null, st: LeagueStandings | null): DerivedStrength {
+export function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null, st: LeagueStandings | null): DerivedStrength {
   const adverse = weather?.adverse ?? false;
   const wAdj = adverse ? 0.92 : 1.0;
 
@@ -253,7 +282,7 @@ function weatherString(w: LiveWeather | null): string {
 }
 
 /** احتمالات مدل دیکسون-کولز از روی استحاله مشتق‌شده (برای ضرایب fallback و T-60) */
-function modelProbs(d: DerivedStrength) {
+export function modelProbs(d: DerivedStrength) {
   return runDixonColes({
     homeAttack: d.homeAttack,
     awayAttack: d.awayAttack,
@@ -564,6 +593,7 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
   let liveInPlay = 0;
   let weatherAdjustedCount = 0;
   let oddsApiMatched = 0;
+  let marketSolvedCount = 0;
 
   for (const ev of keepEvents) {
     const kick = Date.parse(ev.kickoff);
@@ -601,6 +631,11 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     const isLive = ev.statusState === "in";
     if (isLive) liveInPlay += 1;
     else liveUpcoming += 1;
+
+    // ─── v9.0 — حل معکوس پواسون روی ضرایب واقعی بازار (الگوی مخفی قیمت‌گذاری بوک‌میکر) ───
+    // فقط روی ضرایب واقعی (The Odds API / ESPN DraftKings) — ضرایب مدل ENGINE مسیر بازار ندارند
+    const market = odds.source !== "ENGINE" ? marketLambdasFor(odds) : { home: null, away: null, fitError: null };
+    if (market.home !== null) marketSolvedCount += 1;
 
     const base = {
       league: ev.leagueName,
@@ -674,6 +709,11 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
       leagueTeamAvg: d.leagueTeamAvg,
       statsSource: d.statsSource,
       statsFetchedAt: st ? new Date(st.fetchedAt) : null,
+      // ─── v9.0 — λ بازار استخراج‌شده + شناسه مسیر λ ───
+      lambdaMarketHome: market.home,
+      lambdaMarketAway: market.away,
+      lambdaFitError: market.fitError,
+      lambdaSource: market.home !== null ? "MARKET_HYBRID" : "STATS_ONLY",
       // وضعیت ANALYZED قبلی حفظ می‌شود (فقط گذار LIVE/UPCOMING از منبع واقعی)
       status: isLive ? "LIVE" : existing?.status === "ANALYZED" ? "ANALYZED" : "UPCOMING",
     };
@@ -731,6 +771,16 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     latencyMs: 0,
   });
   sources.push({
+    key: "reverse-poisson",
+    label: "Reverse-Poisson λ Solver (v9.0)",
+    ok: marketSolvedCount > 0,
+    detail:
+      marketSolvedCount > 0
+        ? `${marketSolvedCount} بازی با حل معکوس پواسون — λ ترکیبی = ۶۵٪ بازار + ۳۵٪ آمار فصل`
+        : "خط بازار واقعی در دسترس نبود — مسیر STATS_ONLY",
+    latencyMs: 0,
+  });
+  sources.push({
     key: "weather",
     label: "Open-Meteo",
     ok: weatherAdjustedCount > 0 || weatherMap.size > 0,
@@ -776,6 +826,26 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     await autoSettleInBackground();
   } catch (err) {
     console.warn("auto-settle background failed:", err);
+  }
+
+  // ─── ۴.۶) v9.0 — Zero-Click Multi-Day Auto-Settlement ───
+  // ثبت و تسویه‌حساب ۱۰۰٪ خودکار بازی‌های تمام‌شده ۳ روز اخیر + بازی‌های امروز
+  // تاییدشده سوپروایزر (PENDING 🔒) — بدون نیاز به کلیک کاربر (throttle داخلی ۱۰ دقیقه)
+  try {
+    const { autoSyncPastAndPresentMatches } = await import("./auto-issue");
+    await autoSyncPastAndPresentMatches({ notify: true });
+  } catch (err) {
+    console.warn("auto past/present sync failed:", err);
+  }
+
+  // ─── ۴.۷) v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر به تلگرام ───
+  // پست پیش از بازی (کارت تایید) + پست تسویه FT + گزارش وین‌ریت کانال
+  // Dedupe با پرچم‌های تلگرام — ارسال تکراری صفر (سوییچ پیش‌فرض: روشن)
+  try {
+    const { autoDispatchApprovedSlips } = await import("./telegram-service");
+    await autoDispatchApprovedSlips();
+  } catch (err) {
+    console.warn("auto telegram dispatch failed:", err);
   }
 
   // ─── ۵) آرشیو: بازی‌های گذشته زنده + دیتای mock وقتی فید زنده پوشش می‌دهد ───
