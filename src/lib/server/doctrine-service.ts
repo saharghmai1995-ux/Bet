@@ -76,14 +76,18 @@ export async function recordSettlementLearning(slip: IssuedSlip): Promise<void> 
           timingWindow: slip.timingWindowA ?? slip.timingWindowB,
           lambdaHome: slip.lambdaHome,
           lambdaAway: slip.lambdaAway,
-          lesson: journalLessonOf(slip),
+          lesson: slip.supervisorApproved
+            ? journalLessonOf(slip)
+            : `🛡️ [دفتر سایه] وتو سوپروایزر — نتیجه counterfactual: ${slip.status === "MIDDLE_TRAP" ? "وتو درست بود (باخت همزمان رخ داد)" : slip.status === "VOID" ? "بازی تسویه نشد" : "وتو فرصت‌سوز بود (کارت می‌برد)"}`,
         },
       });
     }
   } catch (err) {
     console.warn("journal write failed:", err);
   }
-  await rebuildDoctrine().catch((err) => console.warn("doctrine rebuild failed:", err));
+  if (slip.supervisorApproved) {
+    await rebuildDoctrine().catch((err) => console.warn("doctrine rebuild failed:", err));
+  }
 }
 
 // ═════════════════════ بازسازی دفتر دکترین ═════════════════════
@@ -101,13 +105,14 @@ export interface DoctrineSummary {
   updatedAt: string;
 }
 
-/** متغیرهای مشترک استخراج کارت‌های تسویه‌شده ۳۰ روز اخیر */
+/** متغیرهای مشترک استخراج کارت‌های تسویه‌شده ۳۰ روز اخیر — فقط کارت‌های واقعی (دفتر سایه در دکترین دخالت نمی‌کند) */
 async function loadSettledSlips() {
   const since = new Date(Date.now() - 30 * 24 * 3600_000);
   return db.issuedSlip.findMany({
     where: {
       status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
       settledAt: { gte: since },
+      supervisorApproved: true,
     },
     orderBy: { settledAt: "desc" },
     take: 300,

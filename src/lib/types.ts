@@ -686,6 +686,11 @@ export interface IssuedSlipDTO {
   supervisorApproved: boolean;
   /** v9.0 — صادرشده توسط خط لوله خودکار سرور (Zero-Click) */
   autoIssued: boolean;
+  // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
+  supervisorScore: number | null;
+  vetoReason: string | null;
+  jointLossRiskPct: number | null;
+  doubleWinProbPct: number | null;
   espnUrl: string | null;
   status: SlipStatus;
   homeGoals: number | null;
@@ -755,6 +760,16 @@ export interface LedgerDTO {
   success: boolean;
   slips: IssuedSlipDTO[];
   stats: SettlementStatsDTO;
+  /** v11.0 — دفتر سایه: آمار تسویه کاغذی کارت‌های وتوشده سوپروایزر (بدون تلگرام) */
+  shadow: {
+    total: number;
+    settled: number;
+    wins: number;
+    losses: number;
+    winRate: number | null;
+    netProfit: number;
+    byStatus: Record<string, number>;
+  };
   outbox: { id: string; kind: string; ok: boolean; detail: string | null; slipHash: string | null; createdAt: string }[];
   telegram: { configured: boolean; channelSet: boolean };
   // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور + مبنا واحد ───
@@ -825,4 +840,39 @@ export interface IssueSlipItemDTO {
   pinnaclePrices?: Partial<Record<string, number>>;
   /** v9.0 — بازی وتوشده سوپروایزر هرگز صدور/ارسال نمی‌شود */
   supervisorApproved?: boolean;
+  /** v11.0 — دفتر سایه: سنجه‌های لحظه تصمیم سوپروایزر برای کارت‌های واقعی و سایه */
+  supervisorScore?: number | null;
+  vetoReason?: string | null;
+  jointLossRiskPct?: number | null;
+  doubleWinProbPct?: number | null;
+}
+
+/** v11.0 — آمار عملکرد یک دسته فلش‌کارت (تایید/وتو/سود۱۵/ریسک۱۰/دوبل‌وین) */
+export interface CategoryPerformanceDTO {
+  key: "APPROVED" | "VETOED" | "PROFIT15" | "RISK10" | "DOUBLE";
+  label: string;
+  description: string;
+  total: number;
+  settled: number;
+  pending: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  netProfit: number;
+  paper: boolean;
+  doubleWinHits: number;
+  avgGuaranteedProfitPct: number | null;
+  avgJointLossRiskPct: number | null;
+  avgDoubleWinProbPct: number | null;
+}
+
+export interface CategoryPerformanceResponseDTO {
+  success: boolean;
+  categories: CategoryPerformanceDTO[];
+  shadowLedger: {
+    approvedSlips: number;
+    shadowSlips: number;
+    note: string;
+  };
+  generatedAt: string;
 }

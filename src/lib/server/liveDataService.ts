@@ -19,6 +19,8 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { fetchEspnEvents, normTeam, type LiveMatchEvent } from "./live-sources";
 import { buildScoreMatrix, selectionCoversCell, isOffMatrixKey } from "@/lib/engine/coverage";
+import { computeMatchEngine } from "@/lib/engine/matchEngine";
+import { jointShadowMetrics } from "@/lib/engine/orthogonal";
 import { deriveTipKind, computeTimingWindowStatic, type TipKind } from "@/lib/timing-window";
 import { recordSettlementLearning, listDoctrine, listJournal, type DoctrineSummary } from "./doctrine-service";
 import { getSchedulerStatus } from "./scheduler-status";
@@ -366,7 +368,7 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
   if (notify) {
     try {
       const unnotified = await db.issuedSlip.findMany({
-        where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false },
+        where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true },
         orderBy: { settledAt: "asc" },
         take: 5,
       });
@@ -577,6 +579,10 @@ export async function issueSlip(
       espnUrl: item.match.espnUrl ?? espnUrlOf(externalId),
       supervisorApproved: item.supervisorApproved !== false,
       autoIssued: opts?.autoIssued === true,
+      supervisorScore: item.supervisorScore ?? null,
+      vetoReason: item.vetoReason ?? null,
+      jointLossRiskPct: item.jointLossRiskPct ?? null,
+      doubleWinProbPct: item.doubleWinProbPct ?? null,
       modelProbA: probA,
       modelProbB: probB,
       pinnacleOddsA: pinA,
@@ -622,7 +628,14 @@ export async function backfillSlipLearning(force = false): Promise<{ scanned: nu
   const targets = await db.issuedSlip.findMany({
     where: {
       status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP", "MANUAL_REVIEW"] },
-      OR: [{ edgeA: null }, { edgeB: null }, { timingWindowA: null }, { timingWindowB: null }],
+      OR: [
+        { edgeA: null },
+        { edgeB: null },
+        { timingWindowA: null },
+        { timingWindowB: null },
+        { jointLossRiskPct: null },
+        { doubleWinProbPct: null },
+      ],
     },
     orderBy: { kickoff: "desc" },
     take: 60,
@@ -678,11 +691,33 @@ export async function backfillSlipLearning(force = false): Promise<{ scanned: nu
       const winA = s.timingWindowA ? null : tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
       const winB = s.timingWindowB ? null : tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
 
+      // ─── v11.0 — سنجه‌های دفتر سایه: بازتولید ٪ باخت همزمان و ٪ برد طلایی از λ ذخیره‌شده ───
+      let jointLossRiskPct: number | undefined;
+      let doubleWinProbPct: number | undefined;
+      if (s.jointLossRiskPct === null || s.doubleWinProbPct === null) {
+        const matchRow = s.matchId ? await db.match.findUnique({ where: { id: s.matchId }, include: { referee: true } }) : null;
+        if (matchRow) {
+          const eng = computeMatchEngine(matchRow);
+          const m = jointShadowMetrics(
+            lH,
+            lA,
+            eng.lambdaCorners,
+            eng.lambdaCards,
+            legsA.map((l) => l.key),
+            legsB.map((l) => l.key)
+          );
+          jointLossRiskPct = s.jointLossRiskPct ?? m.jointLossRiskPct;
+          doubleWinProbPct = s.doubleWinProbPct ?? m.doubleWinProbPct;
+        }
+      }
+
       const refreshed = await db.issuedSlip.update({
         where: { id: s.id },
         data: {
           modelProbA: s.modelProbA ?? probA,
           modelProbB: s.modelProbB ?? probB,
+          jointLossRiskPct,
+          doubleWinProbPct,
           pinnacleOddsA: pinA,
           pinnacleOddsB: pinB,
           edgeA,
@@ -743,6 +778,10 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
     lambdaAway: s.lambdaAway,
     supervisorApproved: s.supervisorApproved,
     autoIssued: s.autoIssued,
+    supervisorScore: s.supervisorScore,
+    vetoReason: s.vetoReason,
+    jointLossRiskPct: s.jointLossRiskPct,
+    doubleWinProbPct: s.doubleWinProbPct,
     espnUrl: s.espnUrl,
     status: s.status as SlipStatus,
     homeGoals: s.homeGoals,
@@ -783,8 +822,10 @@ export async function getLedger(): Promise<LedgerDTO> {
   ]);
 
   const slips = rows.map((s) => mapSlip(s));
+  // ─── v11.0 — آمار تیتر کارنامه فقط از کارت‌های تایید سوپروایزر؛ وتوها به «دفتر سایه» می‌روند ───
+  const approvedSlips = slips.filter((s) => s.supervisorApproved);
   const stats: SettlementStatsDTO = {
-    total: slips.length,
+    total: approvedSlips.length,
     pending: 0,
     live: 0,
     wonA: 0,
@@ -798,7 +839,7 @@ export async function getLedger(): Promise<LedgerDTO> {
     netProfitPct: 0,
     staked: 0,
   };
-  for (const s of slips) {
+  for (const s of approvedSlips) {
     switch (s.status) {
       case "PENDING": stats.pending += 1; break;
       case "LIVE": stats.live += 1; break;
@@ -818,6 +859,31 @@ export async function getLedger(): Promise<LedgerDTO> {
   stats.netProfit = Math.round(stats.netProfit * 100) / 100;
   stats.netProfitPct = stats.staked > 0 ? Math.round((stats.netProfit / stats.staked) * 1000) / 10 : 0;
 
+  // ─── v11.0 — دفتر سایه: تسویه کاغذی کارت‌های وتوشده (paper P&L — هرگز واقعی نبوده) ───
+  const shadowSlips = slips.filter((s) => !s.supervisorApproved);
+  const shadowByStatus: Record<string, number> = {};
+  let shadowWins = 0;
+  let shadowLosses = 0;
+  let shadowNet = 0;
+  for (const s of shadowSlips) {
+    shadowByStatus[s.status] = (shadowByStatus[s.status] ?? 0) + 1;
+    if (["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status)) {
+      if (s.status === "MIDDLE_TRAP") shadowLosses += 1;
+      else shadowWins += 1;
+      shadowNet += s.netProfit ?? 0;
+    }
+  }
+  const shadowSettled = shadowWins + shadowLosses;
+  const shadow = {
+    total: shadowSlips.length,
+    settled: shadowSettled,
+    wins: shadowWins,
+    losses: shadowLosses,
+    winRate: shadowSettled > 0 ? Math.round((shadowWins / shadowSettled) * 1000) / 10 : null,
+    netProfit: Math.round(shadowNet * 100) / 100,
+    byStatus: shadowByStatus,
+  };
+
   // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور ───
   const [journal, doctrine, sched] = await Promise.all([
     listJournal(30).catch(() => []),
@@ -829,6 +895,7 @@ export async function getLedger(): Promise<LedgerDTO> {
     success: true,
     slips,
     stats,
+    shadow,
     outbox: outboxRows.map((o) => ({
       id: o.id,
       kind: o.kind,

@@ -38,7 +38,7 @@ export interface AutoSyncResult {
   scanned: number; // رخدادهای ESPN اسکن‌شده (۳ روز گذشته + امروز)
   registeredPast: number; // کارت‌های جدید از بازی‌های FT (تسویه فوری)
   registeredToday: number; // کارت‌های PENDING تاییدشده برای بازی‌های امروز
-  vetoed: number; // بازی‌های وتوشده توسط سوپروایزر — بدون صدور
+  vetoed: number; // کارت‌های سایه — وتوی سوپروایزر که به دفتر سایه ثبت و تسویه کاغذی می‌شوند
   skippedExisting: number; // کارت با همین externalId قبلاً صادر شده
   settled: number; // تعداد تسویه در این پاس
   notified: number; // پیام‌های تلگرام ارسال‌شده
@@ -236,10 +236,13 @@ export async function autoSyncPastAndPresentMatches(options?: {
         // ─── انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر (با درس کالیبراسیون) ───
         const decision = pickCrownPair(pairs, "DUAL_BOOK", rule);
         if (!decision) continue;
-        if (decision.veto) {
-          vetoed += 1;
-          continue;
-        }
+
+        // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
+        // وتو دیگر «دورانداختن» نیست: کارت سایه با supervisorApproved=false ثبت می‌شود
+        // تا با همان موتور ESPN تسویه کاغذی شود و سوگیری بازماندگی حذف گردد.
+        // تلگرام به‌صورت ساختاری هرگز کارت سایه را منتشر نمی‌کند (سپر سه‌لایه).
+        const shadow = decision.veto;
+
         const crown = decision.crown;
 
         const legsOf = (legs: string[] | undefined): SettlementLegDTO[] =>
@@ -273,11 +276,18 @@ export async function autoSyncPastAndPresentMatches(options?: {
           lambdaAway: engine.dc.lambdaAway,
           /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
           pinnaclePrices: sharpPrices,
-          supervisorApproved: true,
+          /** v11.0 — دفتر سایه: کارت واقعی یا سایه + سنجه‌های لحظه تصمیم */
+          supervisorApproved: !shadow,
+          supervisorScore: decision.score.raw,
+          vetoReason: shadow ? decision.vetoReason : null,
+          jointLossRiskPct: decision.score.jointLossRiskPct,
+          doubleWinProbPct: decision.score.doubleWinProbPct,
         };
 
         await issueSlip(item, { autoIssued: true });
-        if (isFinished) registeredPast += 1;
+        if (shadow) {
+          vetoed += 1;
+        } else if (isFinished) registeredPast += 1;
         else registeredToday += 1;
       } catch (err) {
         console.warn(`auto-issue failed for ${ev.externalId}:`, err);

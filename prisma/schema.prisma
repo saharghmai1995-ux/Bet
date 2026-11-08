@@ -285,6 +285,12 @@ model IssuedSlip {
   supervisorApproved Boolean @default(true) // فقط کارت‌های تایید سوپروایزر به تلگرام می‌روند
   autoIssued         Boolean @default(false) // ثبت خودکار سرور (Zero-Click Multi-Day Pipeline)
 
+  // ─── v11.0 — دفتر سایه (Shadow Ledger): سناریوی.counterfactual وتوها ───
+  supervisorScore   Float?  // امتیاز خام UtilityScore سوپروایزر در لحظه تصمیم
+  vetoReason        String? // دلیل وتو — فقط برای کارت‌های سایه (supervisorApproved=false)
+  jointLossRiskPct  Float?  // ٪ ریسک باخت همزمان (jointStates.bothLose × ۱۰۰) در لحظه صدور
+  doubleWinProbPct  Float?  // ٪ برد طلایی همزمان (jointStates.bothWin × ۱۰۰) در لحظه صدور
+
   // ─── v10.0 — ارزش عددی نسبت به خط پیناکل (همیشه عدد دارد) ───
   pinnacleOddsA Float?   // خط شارپ واقعی پیناکل برای تیپ A (وقتی فید در دسترس باشد)
   pinnacleOddsB Float?

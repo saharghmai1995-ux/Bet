@@ -10,7 +10,7 @@
 // کرنر/کارت/نیمه اول محاسبه می‌شود — کاملاً قطعی و بدون LLM.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { poissonPmf, dixonColesTau } from "./poisson";
+import { poissonPmf, dixonColesTau, buildScoreMatrix } from "./poisson";
 import { simultaneousKelly } from "./kelly";
 import type { PairStructureDTO, PortfolioPairDTO, PortfolioSelectionDTO } from "../types";
 
@@ -503,6 +503,40 @@ function jointWinProb(legsA: string[], legsB: string[], ctx: OrthoContext, lp: L
     }
   }
   return p;
+}
+
+/**
+ * v11.0 — jointShadowMetrics — بازتولید سنجه‌های لحظه تصمیم سوپروایزر از λ و پایه‌های
+ * ذخیره‌شده کارت (بدون هیچ عدد ساختگی): ٪ باخت همزمان + ٪ برد طلایی همزمان.
+ * دقیقاً همان ریاضیات generateOrthogonalComplementarySlips است تا backfill
+ * کارت‌های قدیمی با صدور جدید کاملاً هم‌مقیاس بماند.
+ */
+export function jointShadowMetrics(
+  lambdaHome: number,
+  lambdaAway: number,
+  lambdaCorners: number,
+  lambdaCards: number,
+  legsA: string[],
+  legsB: string[]
+): { jointLossRiskPct: number; doubleWinProbPct: number } {
+  const matrix = buildScoreMatrix(lambdaHome || 1.35, lambdaAway || 1.25);
+  const ctx: OrthoContext = { lambdaHome, lambdaAway, matrix, lambdaCorners, lambdaCards };
+  const ht = buildHtProbs(lambdaHome || 1.35, lambdaAway || 1.25);
+  const lp: LegProbs = {
+    htOver05: ht.over05,
+    ht00: ht.zero,
+    cornersOver95: poissonTail(9, ctx.lambdaCorners),
+    cornersUnder95: 1 - poissonTail(9, ctx.lambdaCorners),
+    cardsOver35: poissonTail(3, ctx.lambdaCards),
+    cardsOver45: poissonTail(4, ctx.lambdaCards),
+    cardsUnder45: 1 - poissonTail(4, ctx.lambdaCards),
+  };
+  const pA = slipProb(legsA, ctx, lp);
+  const pB = slipProb(legsB, ctx, lp);
+  const bothWin = jointWinProb(legsA, legsB, ctx, lp);
+  const bothLose = Math.max(0, 1 - pA - pB + bothWin);
+  const r1 = (v: number) => Math.round(v * 1000) / 10; // کسر → ٪ با یک رقم اعشار
+  return { jointLossRiskPct: r1(bothLose), doubleWinProbPct: r1(bothWin) };
 }
 
 /** برچسب کوتاه یک پایه (برای labelA/labelB پرتفوی) */

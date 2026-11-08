@@ -32,8 +32,12 @@ import {
   SendHorizonal,
   ServerCog,
   Settings2,
+  ShieldCheck,
+  ShieldOff,
   Sparkles,
+  TriangleAlert,
   Trophy,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,7 +52,7 @@ import { useCartItems } from "@/lib/autopilot-derive";
 import { faNum } from "@/lib/format";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import type { IssueSlipItemDTO, IssuedSlipDTO, LedgerDTO } from "@/lib/types";
+import type { CategoryPerformanceResponseDTO, IssueSlipItemDTO, IssuedSlipDTO, LedgerDTO } from "@/lib/types";
 
 // ═══════════ استیک داچینگ روی مجموع ۱۰۰ واحد (مبنای فرمول سند ارتقا) ═══════════
 
@@ -148,6 +152,22 @@ export function SettlementTab() {
     }
   }, []);
 
+  // ═══ v11.0 — عملکرد دسته‌های فلش‌کارت (وتوشده/سود۱۵/ریسک۱۰/دوبل‌وین) ═══
+  const [categories, setCategories] = useState<CategoryPerformanceResponseDTO | null>(null);
+  const loadCategories = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settlement/categories", { cache: "no-store" });
+      const data = (await res.json()) as CategoryPerformanceResponseDTO;
+      if (data.success) setCategories(data);
+    } catch {
+      // خطای شبکه — داده قبلی حفظ می‌شود
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCategories();
+  }, [loadCategories]);
+
   useEffect(() => {
     void loadLedger();
   }, [loadLedger]);
@@ -156,9 +176,10 @@ export function SettlementTab() {
   useEffect(() => {
     const t = setInterval(() => {
       void loadLedger();
+      void loadCategories();
     }, 60_000);
     return () => clearInterval(t);
-  }, [loadLedger]);
+  }, [loadLedger, loadCategories]);
 
   // ─── 🚀 ارسال فوری تمام کارت‌های تاییدشده سوپروایزر و گزارش نتایج تسویه‌شده (v9.0) ───
   const dispatchNow = useCallback(async () => {
@@ -413,6 +434,74 @@ export function SettlementTab() {
             tone={stats.netProfit >= 0 ? "text-emerald-300" : "text-rose-300"}
             sub={`${faNum(stats.netProfitPct, 1)}٪ از استیک`}
           />
+        </div>
+      )}
+
+      {/* ═══ v11.0 — عملکرد دسته‌های فلش‌کارت: پاسخ داده‌محور به چهار سوال کلیدی ═══ */}
+      {categories && categories.categories.length > 0 && (
+        <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Sparkles className="size-3.5 text-amber-300" />
+              عملکرد هر دسته فلش‌کارت — پاسخ «اگر شرط می‌بستیم چه می‌شد؟»
+            </p>
+            <Badge variant="outline" className="gap-1 border-violet-500/40 bg-violet-500/10 text-[9px] text-violet-300">
+              <ShieldOff className="size-2.5" />
+              دفتر سایه v11.0 — {faNum(categories.shadowLedger.shadowSlips, 0)} کارت وتوشده در حال ردیابی
+            </Badge>
+          </div>
+          <p className="text-[10px] leading-5 text-muted-foreground">
+            از v11.0 وتوهای سوپروایزر دور ریخته نمی‌شوند؛ مثل کارت واقعی با نتیجه ESPN تسویه کاغذی می‌شوند تا وین‌ریت کارنامه
+            <b className="text-foreground/90"> بدون سوگیری بازماندگی </b>
+            قابل ارزیابی باشد. کارت‌های سایه هرگز به تلگرام نمی‌روند و در سود واقعی کارنامه هم لحاظ نمی‌شوند.
+          </p>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+            {categories.categories.map((c) => {
+              const icon =
+                c.key === "APPROVED" ? ShieldCheck : c.key === "VETOED" ? ShieldOff : c.key === "PROFIT15" ? Wallet : c.key === "RISK10" ? TriangleAlert : Sparkles;
+              const Icon = icon;
+              return (
+                <div
+                  key={c.key}
+                  className={cn(
+                    "space-y-1.5 rounded-lg border p-3",
+                    c.paper ? "border-rose-500/25 bg-rose-500/[0.05]" : "border-white/10 bg-black/20"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Icon className={cn("size-3.5 shrink-0", c.paper ? "text-rose-300" : "text-emerald-300")} aria-hidden />
+                    <p className="truncate text-[10px] font-bold text-foreground/90" title={c.label}>{c.label}</p>
+                    {c.paper && (
+                      <span className="ms-auto shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1 py-px text-[8px] font-bold text-rose-300">
+                        کاغذی
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-baseline gap-1">
+                    <span className={cn("text-lg font-black tabular-nums", c.winRate === null ? "text-zinc-500" : c.winRate >= 50 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+                      {c.winRate === null ? "—" : `${faNum(c.winRate, 1)}٪`}
+                    </span>
+                    <span className="text-[9px] text-muted-foreground">وین‌ریت</span>
+                  </div>
+                  <div className="space-y-0.5 text-[9px] leading-4 text-muted-foreground" dir="rtl">
+                    <p>
+                      {faNum(c.settled, 0)} تسویه‌شده از {faNum(c.total, 0)} کارت
+                      {c.pending > 0 ? ` · ${faNum(c.pending, 0)} در انتظار` : ""}
+                    </p>
+                    <p className={cn("font-num", c.netProfit >= 0 ? "text-emerald-300/90" : "text-rose-300/90")} dir="ltr">
+                      {c.netProfit >= 0 ? "+" : ""}{faNum(c.netProfit, 1)} unit
+                    </p>
+                    {c.key === "DOUBLE" && (
+                      <p className="text-amber-300/90">🏆 برد طلایی واقعی: {faNum(c.doubleWinHits, 0)}</p>
+                    )}
+                    {c.avgJointLossRiskPct !== null && (
+                      <p dir="ltr">avg risk {faNum(c.avgJointLossRiskPct, 1)}%</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -940,7 +1029,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
   };
 
   return (
-    <TableRow className="border-white/6 align-top">
+    <TableRow className={cn("border-white/6 align-top", !slip.supervisorApproved && "bg-rose-500/[0.04]")}>
       <TableCell className="max-w-[190px] py-2.5">
         <p className="truncate text-[11px] font-bold">
           {slip.homeTeam} <span className="text-muted-foreground">×</span> {slip.awayTeam}
@@ -961,6 +1050,17 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
           <StatusIcon className={cn("size-2.5", slip.status === "LIVE" && "animate-spin")} />
           {meta.label}
         </Badge>
+        {!slip.supervisorApproved && (
+          <Badge variant="outline" className="mt-1 gap-1 whitespace-nowrap border-rose-500/40 bg-rose-500/10 text-[9px] text-rose-300">
+            <ShieldOff className="size-2.5" />
+            وتو — تسویه کاغذی
+          </Badge>
+        )}
+        {!slip.supervisorApproved && slip.vetoReason && (
+          <p className="mt-1 max-w-[160px] truncate text-[9px] text-rose-300/80" title={slip.vetoReason}>
+            {slip.vetoReason}
+          </p>
+        )}
         {slip.settleNote && (
           <p className="mt-1 max-w-[160px] truncate text-[9px] text-muted-foreground" title={slip.settleNote}>
             {slip.settleNote}

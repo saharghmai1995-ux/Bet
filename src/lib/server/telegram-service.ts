@@ -300,6 +300,8 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
  * برنده → تصویر جام پیروزی | بازنده → تصویر رختکن بهم‌ریخته
  */
 export async function sendSettlementNotification(slip: IssuedSlip): Promise<boolean> {
+  // v11.0 — سپر مطلق دفتر سایه: کارت وتوشده سوپروایزر هرگز نتیجه هم به کانال نمی‌رود
+  if (!slip.supervisorApproved) return false;
   const status = await telegramStatus();
   if (!status.configured || !status.channelSet) return false;
   if (slip.homeGoals === null || slip.awayGoals === null) return false;
@@ -342,8 +344,9 @@ export async function sendConfigTestMessage(): Promise<{ ok: boolean; detail: st
 
 /** آمار وین‌ریت کانال — مستقیم از دیتابیس (بدون وابستگی چرخه‌ای) */
 async function channelWinRateStats() {
+  // v11.0 — فقط کارت‌های واقعی تاییدشده؛ تسویه کاغذی دفتر سایه در وین‌ریت کانال دخالت نمی‌کند
   const settled = await db.issuedSlip.findMany({
-    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, supervisorApproved: true },
     select: { status: true, netProfit: true, stakeA: true, stakeB: true },
   });
   const st = { settled: settled.length, wonA: 0, wonB: 0, doubleWin: 0, middleTrap: 0, netProfit: 0, staked: 0 };
@@ -357,7 +360,21 @@ async function channelWinRateStats() {
   }
   const winRatePct = st.settled > 0 ? Math.round(((st.settled - st.middleTrap) / st.settled) * 1000) / 10 : 0;
   const netPct = st.staked > 0 ? Math.round((st.netProfit / st.staked) * 1000) / 10 : 0;
-  return { ...st, winRatePct, netPct, netProfit: Math.round(st.netProfit * 100) / 100 };
+  // ─── v11.0 — دفتر سایه: شفافیت counterfactual وتوها (خط جداگانه گزارش) ───
+  const shadowRows = await db.issuedSlip.findMany({
+    where: { supervisorApproved: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    select: { status: true, netProfit: true },
+  });
+  const shadowWins = shadowRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
+  const shadowNet = Math.round(shadowRows.reduce((a, b) => a + (b.netProfit ?? 0), 0) * 100) / 100;
+  const shadowWinRate = shadowRows.length > 0 ? Math.round((shadowWins / shadowRows.length) * 1000) / 10 : null;
+  return {
+    ...st,
+    winRatePct,
+    netPct,
+    netProfit: Math.round(st.netProfit * 100) / 100,
+    shadow: { settled: shadowRows.length, wins: shadowWins, winRatePct: shadowWinRate, netProfit: shadowNet },
+  };
 }
 
 /** پیام نوع دوم — گزارش تسویه + به‌روزرسانی وین‌ریت کل کانال */
@@ -532,6 +549,9 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
 
   // v10.0 — گزارش وین‌ریت با تصویر اختصاصی (گیج وین‌ریت + مبنای واحد برای حساب شخصی)
   const caption = buildWinRateReportMessage(st) +
+    (st.shadow.settled > 0
+      ? `\n\n🛡️ <b>دفتر سایه (شفافیت وتوها):</b> ${st.shadow.settled} کارت وتوشده تسویه کاغذی شد — وین‌ریت ${st.shadow.winRatePct ?? 0}٪ · سود کاغذی ${st.shadow.netProfit >= 0 ? "+" : ""}${st.shadow.netProfit.toFixed(1)} واحد (هرگز پول واقعی نبوده)`
+      : "") +
     `\n\n🧮 <b>مبنای واحد برای حساب شخصی شما:</b> هر کارت با مجموع استیک ۱۰۰ واحد ثبت می‌شود؛ ۱ واحد = ۱٪ بانک‌رول خودتان.` +
     `\nمثال با موجودی ۱۰ دلار: ۱ واحد = ۰٫۱ دلار → سود ${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)} واحد = ${st.netProfit >= 0 ? "+" : "−"}${Math.abs(st.netProfit * 0.1).toFixed(2)} دلار (مقیاس‌پذیر با هر موجودی).`;
 
