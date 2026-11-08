@@ -19,6 +19,9 @@ import crypto from "crypto";
 import { db } from "@/lib/db";
 import { fetchEspnEvents, normTeam, type LiveMatchEvent } from "./live-sources";
 import { buildScoreMatrix, selectionCoversCell, isOffMatrixKey } from "@/lib/engine/coverage";
+import { deriveTipKind, computeTimingWindowStatic, type TipKind } from "@/lib/timing-window";
+import { recordSettlementLearning, listDoctrine, listJournal, type DoctrineSummary } from "./doctrine-service";
+import { getSchedulerStatus } from "./scheduler-status";
 import type {
   IssueSlipItemDTO,
   IssuedSlipDTO,
@@ -305,6 +308,14 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
         },
       });
 
+      // ─── v10.0 — ژورنال + دفتر دکترین: سیستم از هر تسویه یاد می‌گیرد ───
+      try {
+        const fresh = await db.issuedSlip.findUnique({ where: { id: slip.id } });
+        if (fresh) await recordSettlementLearning(fresh);
+      } catch (err) {
+        console.warn("doctrine learning failed:", err);
+      }
+
       settled.push({
         id: slip.id,
         matchLabel: `${slip.homeTeam} ${hg}−${ag} ${slip.awayTeam}`,
@@ -448,6 +459,33 @@ function coveredCells(lambdaHome: number, lambdaAway: number, legs: SettlementLe
   return cells.slice(0, 12);
 }
 
+// ═══════════ v10.0 — ارزش عددی پیناکل + احتمال مدل + پنجره زمانی ═══════════
+
+/** احتمال مدل برای یک تیپ از ماتریس امتیاز دیکسون-کولز (جمع خانه‌های پوشش) */
+function legProbability(lambdaHome: number, lambdaAway: number, legs: SettlementLegDTO[]): number | null {
+  const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+  if (keys.length === 0) return null;
+  const matrix = buildScoreMatrix(lambdaHome || 1.35, lambdaAway || 1.25);
+  let p = 0;
+  for (let h = 0; h < matrix.length; h++) {
+    for (let a = 0; a < matrix[h].length; a++) {
+      if (keys.every((k) => legCovers(k, h, a))) p += matrix[h][a];
+    }
+  }
+  return Math.round(p * 10000) / 10000;
+}
+
+/**
+ * ارزش عددی نسبت به خط مرجع (سوال مستقیم کارفرما: «چرا عددی ندارد؟»):
+ *   edge٪ = (prob مدل × ضریب ثبت − ۱) × ۱۰۰
+ * خط مرجع: پیناکل وقتی خط شارپ واقعی موجود است؛ وگرنه خط منصفانه موتور (MARKET_FAIR)
+ * خروجی همیشه عدد دارد — «—» فقط برای بازار خارج ماتریس (کرنر/کارت).
+ */
+function computeEdge(modelProb: number | null, odds: number): number | null {
+  if (modelProb === null || modelProb <= 0 || odds <= 1) return null;
+  return Math.round((modelProb * odds - 1) * 1000) / 10;
+}
+
 /**
  * صدور کارت به کارنامه — Idempotent با هش SHA-256.
  * اگر کارت با همین هش قبلاً صادر شده باشد، همان ردیف بازگردانده می‌شود.
@@ -480,6 +518,21 @@ export async function issueSlip(
   const existing = await db.issuedSlip.findUnique({ where: { hash } });
   if (existing) return { created: false, slip: mapSlip(existing) };
 
+  // ─── v10.0 — احتمال مدل، ارزش عددی و پنجره زمانی طلایی ثبت ───
+  const lH = item.lambdaHome ?? 1.35;
+  const lA = item.lambdaAway ?? 1.25;
+  const probA = legProbability(lH, lA, item.legsA ?? []);
+  const probB = legProbability(lH, lA, item.legsB ?? []);
+  const edgeA = computeEdge(probA, item.oddsA);
+  const edgeB = computeEdge(probB, item.oddsB);
+  const edgeSourceA = edgeA !== null ? "MARKET_FAIR" : null;
+  const edgeSourceB = edgeB !== null ? "MARKET_FAIR" : null;
+  const tipKindA: TipKind | null = edgeA !== null ? deriveTipKind((item.legsA ?? []).map((l) => l.key), item.oddsA) : null;
+  const tipKindB: TipKind | null = edgeB !== null ? deriveTipKind((item.legsB ?? []).map((l) => l.key), item.oddsB) : null;
+  const koMs = new Date(item.match.kickoff).getTime();
+  const winA = tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
+  const winB = tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
+
   const row = await db.issuedSlip.create({
     data: {
       hash,
@@ -497,8 +550,8 @@ export async function issueSlip(
       oddsB: item.oddsB,
       stakeA: stakes.stakeA,
       stakeB: stakes.stakeB,
-      cellsA: JSON.stringify(coveredCells(item.lambdaHome ?? 1.35, item.lambdaAway ?? 1.25, item.legsA ?? [], externalId)),
-      cellsB: JSON.stringify(coveredCells(item.lambdaHome ?? 1.35, item.lambdaAway ?? 1.25, item.legsB ?? [], externalId)),
+      cellsA: JSON.stringify(coveredCells(lH, lA, item.legsA ?? [], externalId)),
+      cellsB: JSON.stringify(coveredCells(lH, lA, item.legsB ?? [], externalId)),
       guaranteedProfit: item.guaranteedProfit,
       marginPct: item.marginPct,
       archetype: item.archetype ?? null,
@@ -508,6 +561,20 @@ export async function issueSlip(
       espnUrl: item.match.espnUrl ?? espnUrlOf(externalId),
       supervisorApproved: item.supervisorApproved !== false,
       autoIssued: opts?.autoIssued === true,
+      modelProbA: probA,
+      modelProbB: probB,
+      edgeA,
+      edgeB,
+      edgeSourceA,
+      edgeSourceB,
+      tipKindA,
+      tipKindB,
+      timingWindowA: winA?.windowKey ?? null,
+      timingWindowB: winB?.windowKey ?? null,
+      timingStartA: winA?.startAt ?? null,
+      timingEndA: winA?.endAt ?? null,
+      timingStartB: winB?.startAt ?? null,
+      timingEndB: winB?.endAt ?? null,
       status: "PENDING",
     },
   });
@@ -555,6 +622,22 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
     telegramCard: s.telegramCard,
     telegramTeaser: s.telegramTeaser,
     telegramResult: s.telegramResult,
+    pinnacleOddsA: s.pinnacleOddsA,
+    pinnacleOddsB: s.pinnacleOddsB,
+    edgeA: s.edgeA,
+    edgeB: s.edgeB,
+    edgeSourceA: s.edgeSourceA,
+    edgeSourceB: s.edgeSourceB,
+    modelProbA: s.modelProbA,
+    modelProbB: s.modelProbB,
+    tipKindA: s.tipKindA,
+    tipKindB: s.tipKindB,
+    timingWindowA: s.timingWindowA,
+    timingWindowB: s.timingWindowB,
+    timingStartA: s.timingStartA?.toISOString() ?? null,
+    timingEndA: s.timingEndA?.toISOString() ?? null,
+    timingStartB: s.timingStartB?.toISOString() ?? null,
+    timingEndB: s.timingEndB?.toISOString() ?? null,
     createdAt: s.createdAt.toISOString(),
   };
 }
@@ -602,6 +685,13 @@ export async function getLedger(): Promise<LedgerDTO> {
   stats.netProfit = Math.round(stats.netProfit * 100) / 100;
   stats.netProfitPct = stats.staked > 0 ? Math.round((stats.netProfit / stats.staked) * 1000) / 10 : 0;
 
+  // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور ───
+  const [journal, doctrine, sched] = await Promise.all([
+    listJournal(30).catch(() => []),
+    listDoctrine().catch(() => [] as DoctrineSummary[]),
+    Promise.resolve(getSchedulerStatus()),
+  ]);
+
   return {
     success: true,
     slips,
@@ -615,6 +705,15 @@ export async function getLedger(): Promise<LedgerDTO> {
       createdAt: o.createdAt.toISOString(),
     })),
     telegram: { configured: tgStatus.configured, channelSet: tgStatus.channelSet },
+    journal,
+    doctrine,
+    automation: {
+      schedulerActive: sched.active,
+      lastTickAt: sched.lastTickAt ? new Date(sched.lastTickAt).toISOString() : null,
+      lastDailyReportAt: sched.lastDailyReportAt ? new Date(sched.lastDailyReportAt).toISOString() : null,
+      intervalSec: sched.intervalSec,
+    },
+    unitBasis: { stakePerTicket: 100, unitPctOfBankroll: 1, exampleBankrollUsd: 10 },
   };
 }
 

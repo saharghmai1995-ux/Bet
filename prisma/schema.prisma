@@ -285,6 +285,26 @@ model IssuedSlip {
   supervisorApproved Boolean @default(true) // فقط کارت‌های تایید سوپروایزر به تلگرام می‌روند
   autoIssued         Boolean @default(false) // ثبت خودکار سرور (Zero-Click Multi-Day Pipeline)
 
+  // ─── v10.0 — ارزش عددی نسبت به خط پیناکل (همیشه عدد دارد) ───
+  pinnacleOddsA Float?   // خط شارپ واقعی پیناکل برای تیپ A (وقتی فید در دسترس باشد)
+  pinnacleOddsB Float?
+  edgeA Float?           // ارزش عددی مدل: (prob×odds−۱)×۱۰۰ در برابر خط مرجع
+  edgeB Float?
+  edgeSourceA String?    // PINNACLE | MARKET_FAIR
+  edgeSourceB String?
+  modelProbA Float?      // احتمال مدل برای تیپ A در لحظه صدور
+  modelProbB Float?
+
+  // ─── v10.0 — پنجره زمانی طلایی ثبت ضریب (Optimal Odds Timing Window) ───
+  tipKindA String?       // FAVORITE | TOTALS | UNDERDOG
+  tipKindB String?
+  timingWindowA String?  // EARLY_FAVORITE | LINEUP_SHOCK | LATE_UNDERDOG
+  timingWindowB String?
+  timingStartA DateTime? // شروع مطلق پنجره (ساعت پیشنهادی ثبت)
+  timingEndA DateTime?
+  timingStartB DateTime?
+  timingEndB DateTime?
+
   // ─── تسویه خودکار پس از FT ───
   status     String  @default("PENDING") // PENDING | LIVE | WON_A | WON_B | DOUBLE_WIN | MIDDLE_TRAP | MANUAL_REVIEW | VOID
   homeGoals  Int?
@@ -320,4 +340,38 @@ model Setting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// ─── v10.0 — ژورنال تسویه: ثبت درس‌آموزی هر تسویه خودکار (Journal of Record) ───
+model SettlementJournal {
+  id            String   @id @default(cuid())
+  slipId        String?  // شناسه کارت تسویه‌شده
+  slipHash      String?  // هش راستی‌آزمایی
+  league        String
+  matchLabel    String
+  status        String   // WON_A | WON_B | DOUBLE_WIN | MIDDLE_TRAP | VOID | MANUAL_REVIEW
+  homeGoals     Int?
+  awayGoals     Int?
+  netProfit     Float?
+  archetypeCode String?
+  timingWindow  String?  // پنجره زمانی پیشنهادی در لحظه صدور
+  lambdaHome    Float?
+  lambdaAway    Float?
+  lesson        String   // درس خودکار استخراج‌شده از این نتیجه
+  createdAt     DateTime @default(now())
+}
+
+// ─── v10.0 — دفتر دکترین: قوانین عددی آموخته‌شده از کارنامه (Doctrine Registry) ───
+model DoctrineEntry {
+  id          String   @id @default(cuid())
+  kind        String   // LEAGUE_LAMBDA | ARCHETYPE | TIMING_WINDOW
+  scope       String   // نام لیگ / کد الگو (A1..A5) / کلید پنجره زمانی
+  summary     String   // متن خوانا دکترین
+  numericRule String   // JSON بردار عددی قانون (مصرف موتور و سوپروایزر)
+  multiplier  Float    // ضریب اصلاحی اعمالی (مثلاً λ ×۰.۹۴)
+  sampleSize  Int      // تعداد نمونه تسویه‌شده پشت این دکترین
+  netProfit   Float    // سود خالص تجمعی نمونه‌ها (واحد)
+  winRate     Float    // وین‌ریت نمونه‌ها (٪)
+  active      Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
 }

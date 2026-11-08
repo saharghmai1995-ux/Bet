@@ -6,6 +6,9 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/matches — لیست بازی‌های پیش رو (با auto-seed)
+ * v10.0 — رادار اسکنر فقط بازی‌های «آینده و در جریان» را نشان می‌دهد:
+ * بازی‌های FINISHED (گذشته) و رخدادهای قدیمی‌تر از ۳ ساعت حذف می‌شوند
+ * (رفع باگ گزارش‌شده: «من بازی‌های گذشته را می‌بینم»).
  */
 export async function GET(req: NextRequest) {
   try {
@@ -13,10 +16,18 @@ export async function GET(req: NextRequest) {
 
     const url = new URL(req.url);
     const league = url.searchParams.get("league");
+    // بازی‌های در جریان تا ۳ ساعت پس از کیک‌آف نگه داشته می‌شوند (ثانیه‌های تلف‌شده + نیمه دوم)
+    const liveCutoff = new Date(Date.now() - 3 * 3600_000);
 
     const matches = await db.match.findMany({
-      // v4.0: بازی‌های آرشیو‌شده (گذشته/جایگزین‌شده با فید زنده) نمایش داده نمی‌شوند
-      where: league ? { league, status: { not: "ARCHIVED" } } : { status: { not: "ARCHIVED" } },
+      where: {
+        ...(league ? { league } : {}),
+        AND: [
+          { status: { not: "ARCHIVED" } },
+          { status: { not: "FINISHED" } },
+          { kickoff: { gte: liveCutoff } },
+        ],
+      },
       orderBy: { kickoff: "asc" },
       include: {
         analyses: {

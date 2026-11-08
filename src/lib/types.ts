@@ -698,6 +698,23 @@ export interface IssuedSlipDTO {
   telegramCard: boolean;
   telegramTeaser: boolean;
   telegramResult: boolean;
+  // ─── v10.0 — ارزش عددی پیناکل + پنجره زمانی طلایی ثبت ───
+  pinnacleOddsA: number | null;
+  pinnacleOddsB: number | null;
+  edgeA: number | null;
+  edgeB: number | null;
+  edgeSourceA: string | null;
+  edgeSourceB: string | null;
+  modelProbA: number | null;
+  modelProbB: number | null;
+  tipKindA: string | null;
+  tipKindB: string | null;
+  timingWindowA: string | null;
+  timingWindowB: string | null;
+  timingStartA: string | null;
+  timingEndA: string | null;
+  timingStartB: string | null;
+  timingEndB: string | null;
   createdAt: string;
 }
 
@@ -740,6 +757,38 @@ export interface LedgerDTO {
   stats: SettlementStatsDTO;
   outbox: { id: string; kind: string; ok: boolean; detail: string | null; slipHash: string | null; createdAt: string }[];
   telegram: { configured: boolean; channelSet: boolean };
+  // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور + مبنا واحد ───
+  journal: JournalEntryDTO[];
+  doctrine: DoctrineSummaryDTO[];
+  automation: { schedulerActive: boolean; lastTickAt: string | null; lastDailyReportAt: string | null; intervalSec: number };
+  unitBasis: { stakePerTicket: number; unitPctOfBankroll: number; exampleBankrollUsd: number };
+}
+
+/** آیتم صدور کارت از سبد فلش‌کارت‌ها (بدنه POST /api/settlement/issue) */
+export interface JournalEntryDTO {
+  id: string;
+  league: string;
+  matchLabel: string;
+  status: string;
+  netProfit: number | null;
+  archetypeCode: string | null;
+  timingWindow: string | null;
+  lesson: string;
+  createdAt: string;
+}
+
+/** یک دکترین ثبت‌شده در دفتر یادگیری */
+export interface DoctrineSummaryDTO {
+  id: string;
+  kind: string; // LEAGUE_LAMBDA | ARCHETYPE | TIMING_WINDOW
+  scope: string;
+  summary: string;
+  multiplier: number;
+  sampleSize: number;
+  netProfit: number;
+  winRate: number;
+  active: boolean;
+  updatedAt: string;
 }
 
 /** آیتم صدور کارت از سبد فلش‌کارت‌ها (بدنه POST /api/settlement/issue) */

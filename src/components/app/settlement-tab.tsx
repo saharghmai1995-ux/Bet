@@ -14,6 +14,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
   Bot,
+  BookOpen,
+  Calculator,
   Check,
   ClipboardList,
   Copy,
@@ -25,8 +27,10 @@ import {
   MonitorSmartphone,
   RefreshCw,
   Rocket,
+  ScrollText,
   Send,
   SendHorizonal,
+  ServerCog,
   Settings2,
   Sparkles,
   Trophy,
@@ -88,6 +92,9 @@ export function SettlementTab() {
   const [dispatching, setDispatching] = useState(false);
   const [feed, setFeed] = useState<{ kind: string; matchLabel: string; message: string; status?: string }[]>([]);
   const [feedOpen, setFeedOpen] = useState(false);
+  // ═══ v10.0 — ماشین‌حساب بانک‌رول شخصی (۱ واحد = ۱٪ موجودی) ═══
+  const [bankrollUsd, setBankrollUsd] = useState(10);
+  const [doctrineFilter, setDoctrineFilter] = useState<string>("ALL");
 
   const loadFeed = useCallback(async () => {
     try {
@@ -143,6 +150,14 @@ export function SettlementTab() {
 
   useEffect(() => {
     void loadLedger();
+  }, [loadLedger]);
+
+  // v10.0 — تازه‌سازی خودکار کارنامه هر ۶۰ ثانیه (هماهنگ با زمان‌بند سرور)
+  useEffect(() => {
+    const t = setInterval(() => {
+      void loadLedger();
+    }, 60_000);
+    return () => clearInterval(t);
   }, [loadLedger]);
 
   // ─── 🚀 ارسال فوری تمام کارت‌های تاییدشده سوپروایزر و گزارش نتایج تسویه‌شده (v9.0) ───
@@ -364,6 +379,23 @@ export function SettlementTab() {
 
   const stats = ledger?.stats;
   const slipCount = ledger?.slips.length ?? 0;
+  const automation = ledger?.automation;
+  const unitValueUsd = bankrollUsd / 100; // ۱ واحد = ۱٪ بانک‌رول
+  const netUsd = (stats?.netProfit ?? 0) * unitValueUsd;
+  const perTicketUsd = 100 * unitValueUsd;
+
+  const journal = ledger?.journal ?? [];
+  const doctrineAll = ledger?.doctrine ?? [];
+  const doctrine = doctrineFilter === "ALL" ? doctrineAll : doctrineAll.filter((d) => d.kind === doctrineFilter);
+  const doctrineCounts = useMemo(
+    () => ({
+      ALL: doctrineAll.length,
+      LEAGUE_LAMBDA: doctrineAll.filter((d) => d.kind === "LEAGUE_LAMBDA").length,
+      ARCHETYPE: doctrineAll.filter((d) => d.kind === "ARCHETYPE").length,
+      TIMING_WINDOW: doctrineAll.filter((d) => d.kind === "TIMING_WINDOW").length,
+    }),
+    [doctrineAll]
+  );
 
   const tgStatusBadges = useMemo(
     () => (

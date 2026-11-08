@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from "@/lib/db";
-import { generateFootballCardImage, generateLockerRoomImage, generateTrophyImage } from "./slip-images";
+import { renderSlipCardPNG, renderSlipResultPNG, renderSlipTeaserPNG, renderWinRateReportPNG } from "./slip-images";
 import type { IssuedSlip } from "@prisma/client";
 
 // ═════════════════════ تنظیمات (Setting + env) ═════════════════════
@@ -143,12 +143,43 @@ export function buildCardMessage(slip: IssuedSlip): string {
   lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): ${esc(slip.labelB)}`);
   lines.push(`💵 مبلغ داچینگ B: <b>${slip.stakeB.toFixed(1)}</b> واحد`);
   lines.push("");
+  // ─── v10.0 — ارزش عددی نسبت به خط مرجع (همیشه عدد دارد) ───
+  if (slip.edgeA !== null || slip.edgeB !== null) {
+    const src = slip.edgeSourceA === "PINNACLE" ? "خط شارپ پیناکل" : "خط منصفانه بازار";
+    const fa = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+    const a = slip.edgeA !== null ? fa(slip.edgeA) : "—";
+    const b = slip.edgeB !== null ? fa(slip.edgeB) : "—";
+    lines.push(`📈 ارزش عددی نسبت به ${src}: تیپ A <b>${a}</b> · تیپ B <b>${b}</b>`);
+  }
+  // ─── v10.0 — بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ───
+  if (slip.timingWindowA || slip.timingWindowB) {
+    const winName = timingWindowLabel(slip.timingWindowA ?? slip.timingWindowB);
+    const start = slip.timingStartA ?? slip.timingStartB;
+    const end = slip.timingEndA ?? slip.timingEndB;
+    const fmt = (d: Date) => new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tehran" }).format(d);
+    const range = start && end ? ` | ساعت دقیق پیشنهادی ثبت: ${fmt(new Date(start))} تا ${fmt(new Date(end))} (تهران)` : "";
+    lines.push(`⏱️ بهترین زمان ثبت این تیپ: <b>${esc(winName)}</b>${range}`);
+  }
   lines.push(`💰 سود تضمینی پوشش: <b>+${slip.guaranteedProfit.toFixed(1)}%</b> (مجموع استیک ۱۰۰ واحد)`);
   lines.push(`🔐 هش راستی‌آزمایی SHA-256:\n<code>${slip.hash.slice(0, 32)}</code>`);
   if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">لینک راستی‌آزمایی رسمی ESPN</a>`);
   lines.push("");
   lines.push(`⚖️ ابزار تحلیل کمّی — مسئولیت استفاده با کاربر است.`);
   return lines.join("\n");
+}
+
+/** برچسب فارسی پنجره زمانی v10.0 */
+function timingWindowLabel(key: string | null): string {
+  switch (key) {
+    case "EARLY_FAVORITE":
+      return "⏰ پنجره شکار فاوریت — Early Favorite (T-24h تا T-12h)";
+    case "LINEUP_SHOCK":
+      return "⚡ پنجره طلایی ترکیب رسمی — Lineup Shock (T-60m تا T-45m)";
+    case "LATE_UNDERDOG":
+      return "🎯 پنجره اوج آندرداگ — Late Underdog Peak (T-30m تا T-10m)";
+    default:
+      return "پنجره استاندارد";
+  }
 }
 
 // ═════════════════════ سازنده پیام تیزر (تیپ B سانسور) ═════════════════════
@@ -235,12 +266,7 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
     return { ok: false, detail: "TELEGRAM_NOT_CONFIGURED", preview };
   }
 
-  const photo = await generateFootballCardImage({
-    homeTeam: slip.homeTeam,
-    awayTeam: slip.awayTeam,
-    league: slip.league,
-    hashShort: slip.hash.slice(0, 8),
-  });
+  const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
 
   let result: { ok: boolean; detail: string };
   if (photo) {
@@ -269,17 +295,14 @@ export async function sendSettlementNotification(slip: IssuedSlip): Promise<bool
   if (!status.configured || !status.channelSet) return false;
   if (slip.homeGoals === null || slip.awayGoals === null) return false;
 
-  const r = slipResultLabel(slip.status);
   const caption = buildResultMessage(slip);
-  const score = `${slip.homeGoals}−${slip.awayGoals}`;
 
-  const photo = r.win
-    ? await generateTrophyImage({ homeTeam: slip.homeTeam, awayTeam: slip.awayTeam, score })
-    : await generateLockerRoomImage({ homeTeam: slip.homeTeam, awayTeam: slip.awayTeam, score });
+  // v10.0 — تصویربرداری قطعی: برد طلایی همزمان (Double-Win) طراحی طلایی اختصاصی دارد
+  const photo = await renderSlipResultPNG(slip);
 
   let ok = false;
   if (photo) {
-    ok = (await tgSendPhoto(photo, caption, `${r.win ? "trophy" : "locker"}-${slip.hash.slice(0, 10)}.png`)).ok;
+    ok = (await tgSendPhoto(photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`)).ok;
   } else {
     ok = (await tgCall("sendMessage", { chat_id: await channelId(), text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   }
@@ -497,12 +520,35 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
   const status = await telegramStatus();
   if (!status.configured || !status.channelSet) return false;
   const st = await channelWinRateStats();
-  const res = await tgCall("sendMessage", {
-    chat_id: await channelId(),
-    text: buildWinRateReportMessage(st),
-    parse_mode: "HTML",
-    disable_web_page_preview: true,
-  });
+
+  // v10.0 — گزارش وین‌ریت با تصویر اختصاصی (گیج وین‌ریت + مبنای واحد برای حساب شخصی)
+  const caption = buildWinRateReportMessage(st) +
+    `\n\n🧮 <b>مبنای واحد برای حساب شخصی شما:</b> هر کارت با مجموع استیک ۱۰۰ واحد ثبت می‌شود؛ ۱ واحد = ۱٪ بانک‌رول خودتان.` +
+    `\nمثال با موجودی ۱۰ دلار: ۱ واحد = ۰٫۱ دلار → سود ${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)} واحد = ${st.netProfit >= 0 ? "+" : "−"}${Math.abs(st.netProfit * 0.1).toFixed(2)} دلار (مقیاس‌پذیر با هر موجودی).`;
+
+  let res: { ok: boolean; detail: string };
+  try {
+    const photo = await renderWinRateReportPNG({
+      winRatePct: st.winRatePct,
+      settled: st.settled,
+      wonA: st.wonA,
+      wonB: st.wonB,
+      doubleWin: st.doubleWin,
+      middleTrap: st.middleTrap,
+      netProfit: st.netProfit,
+      netPct: st.netPct,
+      generatedAtIso: new Date().toISOString(),
+    });
+    res = await tgSendPhoto(photo, caption, `winrate-report-${Date.now()}.png`);
+  } catch (err) {
+    console.warn("winrate image render failed:", err);
+    res = await tgCall("sendMessage", {
+      chat_id: await channelId(),
+      text: caption,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    });
+  }
   if (res.ok) {
     lastWinRateAt = Date.now();
     await logOutbox(null, "WINRATE", true, "sent");

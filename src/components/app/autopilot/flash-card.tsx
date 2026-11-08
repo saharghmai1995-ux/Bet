@@ -10,7 +10,7 @@
 // فرمول صحیح سود واحد: netUnits = +(Payout − B) که Payout = B / S
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
   BrainCircuit,
@@ -38,6 +38,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
+import { computePairTiming, faDuration, type TimingStatus } from "@/lib/timing-window";
 import { faNum, faPct } from "@/lib/format";
 import { useQuantStore } from "@/lib/store";
 import { SupervisorSeal } from "@/components/app/fx/supervisor-seal";
@@ -83,6 +84,58 @@ export function cardCopyText(v: FlashcardView): string {
 }
 
 export type DeepLlmState = "IDLE" | "RUNNING" | "CACHED" | "RATELIMITED";
+
+// ═══ v10.0 — نشانگر بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ═══
+
+const TIMING_STATUS_STYLE: Record<TimingStatus, string> = {
+  OPEN: "border-emerald-500/40 bg-emerald-500/[0.08] text-emerald-300",
+  WAITING: "border-amber-500/40 bg-amber-500/[0.07] text-amber-300",
+  LATE: "border-rose-500/40 bg-rose-500/[0.07] text-rose-300",
+  KICKED_OFF: "border-white/15 bg-white/[0.03] text-muted-foreground",
+};
+
+/** بنر پنجره زمانی طلایی ثبت — با شمارش معکوس زنده (به‌روزرسانی هر ۳۰ ثانیه) */
+function TimingBanner({ kickoff, legsA, oddsA, legsB, oddsB }: { kickoff: string; legsA: string[]; oddsA: number; legsB: string[]; oddsB: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const pair = useMemo(() => computePairTiming(kickoff, legsA, oddsA, legsB, oddsB, now), [kickoff, legsA, oddsA, legsB, oddsB, now]);
+
+  const rows = pair.same ? [pair.a] : [pair.a, pair.b];
+  const sideLabel = (i: number) => (pair.same ? "تیپ A + تیپ B" : i === 0 ? "تیپ A" : "تیپ B");
+
+  return (
+    <div className="space-y-1.5 rounded-xl border border-amber-500/30 bg-gradient-to-l from-amber-500/[0.08] to-transparent p-2.5">
+      <p className="flex items-center gap-1 text-[10px] font-bold text-amber-300">
+        ⏱️ بهترین زمان ثبت این تیپ (پنجره طلایی ضرایب — v10.0)
+      </p>
+      {rows.map((w, i) => {
+        const style = TIMING_STATUS_STYLE[w.status];
+        const clock = new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit" });
+        return (
+          <div key={`${w.windowKey}-${i}`} className={`rounded-lg border px-2 py-1.5 ${style}`}>
+            <p className="text-[10.5px] font-bold leading-4">
+              {w.meta.icon} {sideLabel(i)}: {w.meta.nameFa}
+              <span className="mx-1 font-normal text-foreground/70">|</span>
+              ساعت دقیق پیشنهادی ثبت:
+              <b className="mx-1 font-num" dir="ltr">{w.suggestedClock}</b>
+            </p>
+            <p className="mt-0.5 text-[9.5px] leading-3.5 opacity-90">
+              {w.statusText}
+              {w.status === "OPEN" && w.msUntilClose > 0 && ` — ${faDuration(w.msUntilClose)} تا بستن پنجره`}
+              {w.status === "WAITING" && w.msUntilOpen > 0 && ` (${clock.format(new Date(w.startAt))} تا ${clock.format(new Date(w.endAt))})`}
+            </p>
+          </div>
+        );
+      })}
+      <p className="text-[9px] leading-3 text-muted-foreground">
+        منطق علمی: {rows[0].meta.rationale}
+      </p>
+    </div>
+  );
+}
 
 export function FlashCard({
   view,
@@ -312,11 +365,26 @@ export function FlashCard({
               <span className="flex items-center gap-1 text-muted-foreground">
                 <Trophy className="size-3.5 text-cyan-400" /> ارزش نسبت به خط پیناکل
               </span>
-              <b className={pair.sharpEdgePct !== null && pair.sharpEdgePct > 0 ? "text-cyan-300" : "text-muted-foreground"} dir="ltr">
-                {pair.sharpEdgePct !== null ? `${pair.sharpEdgePct > 0 ? "+" : ""}${faNum(pair.sharpEdgePct, 1)}% CLV` : "—"}
-              </b>
+              {pair.sharpEdgePct !== null ? (
+                <b className={pair.sharpEdgePct > 0 ? "text-cyan-300" : pair.sharpEdgePct < 0 ? "text-rose-300" : "text-muted-foreground"} dir="ltr" title="ارزش عددی = (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰ نسبت به خط منصفانه/شارپ بازار">
+                  {pair.sharpEdgePct > 0 ? "+" : ""}{faNum(pair.sharpEdgePct, 1)}% CLV
+                </b>
+              ) : (
+                <b className="text-muted-foreground" dir="ltr">{faNum((pair.selectionA.evPct + pair.selectionB.evPct) / 2 * 100, 1)}% EV</b>
+              )}
             </div>
           </div>
+
+          {/* ═══ v10.0 — بنر بهترین ساعت ثبت ضریب ═══ */}
+          {!vetoed && (
+            <TimingBanner
+              kickoff={match.kickoff}
+              legsA={pair.structure.legsA}
+              oddsA={pair.totalOddsA}
+              legsB={pair.structure.legsB}
+              oddsB={pair.totalOddsB}
+            />
+          )}
 
           </div>
 

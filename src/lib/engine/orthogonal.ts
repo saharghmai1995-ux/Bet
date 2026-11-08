@@ -539,9 +539,11 @@ export function buildOrthoPortfolioPair(
     modelProb: a.slipA.prob,
     bestOdds: a.slipA.odds,
     bestBook: "بازارهای متعامد v5.0",
-    sharpOdds: null,
+    // v10.0 — ارزش عددی همیشه دارد: (prob مدل × ضریب − ۱) × ۱۰۰ نسبت به خط منصفانه
+    sharpOdds: a.slipA.odds,
     evPct: a.slipA.prob * a.slipA.odds - 1,
-  };
+    sharpEdgePct: Math.round((a.slipA.prob * a.slipA.odds - 1) * 1000) / 10,
+  } as PortfolioSelectionDTO;
   const selectionB: PortfolioSelectionDTO = {
     key: `ORTHO_${a.code}_B`,
     label: a.slipB.label,
@@ -550,9 +552,12 @@ export function buildOrthoPortfolioPair(
     modelProb: a.slipB.prob,
     bestOdds: a.slipB.odds,
     bestBook: "بازارهای متعامد v5.0",
-    sharpOdds: null,
+    sharpOdds: a.slipB.odds,
     evPct: a.slipB.prob * a.slipB.odds - 1,
-  };
+    sharpEdgePct: Math.round((a.slipB.prob * a.slipB.odds - 1) * 1000) / 10,
+  } as PortfolioSelectionDTO;
+  // v10.0 — ارزش عددی جفت‌تیپ: میانگین لبه دو سمت (جواب «چرا عددی ندارد؟»)
+  const pairSharpEdgePct = Math.round(((selectionA.sharpEdgePct ?? 0) + (selectionB.sharpEdgePct ?? 0)) / 2 * 10) / 10;
   const structure: PairStructureDTO = {
     baseKey: "ORTHO",
     varAKey: a.legsA[0] ?? "ORTHO_A",
@@ -591,7 +596,7 @@ export function buildOrthoPortfolioPair(
     guaranteedMarginPct: (1 - impliedSum) * 100,
     equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
     kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
-    sharpEdgePct: null,
+    sharpEdgePct: pairSharpEdgePct,
     archetype: {
       code: a.code,
       name: a.name,
