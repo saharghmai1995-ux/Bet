@@ -269,7 +269,7 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
   const maxW = W - 96;
   const leagueSize = fitSize(input.league, maxW - 340, 26, 17, 600);
   const homeSize = fitSize(input.homeTeam, W / 2 - 80 - 190, 42, 15, 700);
-  const awaySize = fitSize(input.awayTeam, W / 2 - 80 - 190, 42, 15, 700);
+  const awaySize = fitSize(input.awayTeam, 260, 42, 15, 700);
   const aLines = wrapText(input.labelAEn, maxW - 72, 26, 400, 3);
   const bLines = input.teaser ? ["Full complementary pick + stake locked for VIP members"] : wrapText(input.labelBEn, maxW - 72, 26, 400, 3);
   const tLines = wrapText(input.timingDetail, maxW - 130, 22, 400, 2);
@@ -304,7 +304,7 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
 
   <circle cx="${W - 120}" cy="242" r="46" fill="rgba(255,255,255,0.05)" stroke="${C.emerald}" stroke-width="2"/>
   <text x="${W - 120}" y="254" text-anchor="middle" font-family="${C.sans}" font-size="32" font-weight="bold" fill="${C.emerald}">${esc(crestInitials(input.awayTeam))}</text>
-  <text x="${W / 2 + 80}" y="256" text-anchor="start" font-family="${C.sans}" font-size="${awaySize}" font-weight="bold" fill="${C.ink}">${esc(input.awayTeam)}</text>
+  <text x="${W - 190}" y="256" text-anchor="end" font-family="${C.sans}" font-size="${awaySize}" font-weight="bold" fill="${C.ink}">${esc(input.awayTeam)}</text>
 
   <!-- ═══ TIP A ═══ -->
   <rect x="48" y="${A.y}" width="${W - 96}" height="${A.h}" rx="18" fill="${C.cyanSoft}" stroke="rgba(56,214,245,0.45)" stroke-width="1.6"/>
@@ -400,7 +400,7 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
   const netY = jackpot ? 782 : 648;
   const netLY = netY + 42;
   const netVY = netY + 96;
-  const formulaY = netY + 132;
+  const formulaY = netY + 128;
   const hashY = netY + 158;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">
@@ -426,7 +426,7 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
   <text x="${S / 2}" y="${leagueY}" text-anchor="middle" font-family="${C.sans}" font-size="20" fill="${C.inkDim}">${esc(input.league)} · FT · official ESPN scoreboard</text>
 
   <!-- سود خالص -->
-  <rect x="84" y="${netY}" width="${S - 168}" height="118" rx="18" fill="${meta.soft}" stroke="${meta.accent}" stroke-opacity="0.55" stroke-width="1.8"/>
+  <rect x="84" y="${netY}" width="${S - 168}" height="140" rx="18" fill="${meta.soft}" stroke="${meta.accent}" stroke-opacity="0.55" stroke-width="1.8"/>
   <text x="${S / 2}" y="${netLY}" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${C.inkDim}" letter-spacing="3">NET RESULT · 100-UNIT DUTCH TICKET</text>
   <text x="${S / 2}" y="${netVY}" text-anchor="middle" font-family="${C.mono}" font-size="50" font-weight="bold" fill="${profit >= 0 ? (jackpot ? C.gold : C.emerald) : C.rose}">${sign(profit)} units</text>
 
@@ -515,9 +515,9 @@ export async function renderWinRateReportPNG(input: WinRateReportInput): Promise
   <text x="${S - 84}" y="914" text-anchor="end" font-family="${C.mono}" font-size="38" font-weight="bold" fill="${C.ink}">${input.netPct >= 0 ? "+" : ""}${input.netPct.toFixed(1)}%</text>
 
   <!-- مبنای واحد برای حساب شخصی -->
-  <rect x="48" y="962" width="${S - 96}" height="66" rx="12" fill="rgba(0,0,0,0.4)" stroke="${C.line}"/>
-  <text x="84" y="990" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.gold}">UNIT BASIS: 1 unit = 1% of your own bankroll</text>
-  <text x="84" y="1016" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">Example · $10 balance: 1 unit = $0.10 → ${sign(input.netProfit)} units = $${(Math.abs(input.netProfit) * 0.1).toFixed(2)}</text>
+  <rect x="48" y="956" width="${S - 96}" height="58" rx="12" fill="rgba(0,0,0,0.4)" stroke="${C.line}"/>
+  <text x="84" y="982" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.gold}">UNIT BASIS: 1 unit = 1% of your own bankroll</text>
+  <text x="84" y="1006" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">Example · $10 balance: 1 unit = $0.10 → ${sign(input.netProfit)} units = $${(Math.abs(input.netProfit) * 0.1).toFixed(2)}</text>
 
   ${footer(S, S, `Generated ${new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tehran" }).format(new Date(input.generatedAtIso))} · graded only on official ESPN results`)}
 </svg>`;

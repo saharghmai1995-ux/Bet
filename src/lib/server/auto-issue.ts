@@ -146,7 +146,9 @@ export async function autoSyncPastAndPresentMatches(options?: {
   if (inFlight) return inFlight;
 
   const run = async (): Promise<AutoSyncResult> => {
-    const events: LiveMatchEvent[] = await fetchEspnEvents(-3, 0);
+    // v10.0.2 — پنجره اسکن: ۳ روز گذشته (تسویه) + امروز و ۲ روز آینده (صدور پیش از بازی)
+    // بدون هیچ وابستگی به مرورگر؛ رادار اسکنر همیشه بازی‌های پیش‌رو دارد
+    const events: LiveMatchEvent[] = await fetchEspnEvents(-3, 2);
     const activeSlugs = [...new Set(events.map((e) => e.leagueSlug))];
     const standingsMap = new Map<string, LeagueStandings | null>();
     await Promise.all(
@@ -291,6 +293,17 @@ export async function autoSyncPastAndPresentMatches(options?: {
       notified = result.notified;
     } catch (err) {
       console.warn("auto-issue settle pass failed:", err);
+    }
+
+    // ─── v10.0.2 — بازپررسی یادگیری کارت‌های قدیمی (edge/پنجره/ژورنال — throttle داخلی ۳۰ دقیقه) ───
+    try {
+      const { backfillSlipLearning } = await import("./liveDataService");
+      const bf = await backfillSlipLearning();
+      if (bf.updated > 0 || bf.journalled > 0) {
+        console.log(`[auto-issue] learning backfill: ${bf.updated} slips enriched, ${bf.journalled} journalled`);
+      }
+    } catch (err) {
+      console.warn("auto-issue learning backfill failed:", err);
     }
 
     // درس‌های تازه تسویه‌شده → بردار قانون را تازه‌سازی کن

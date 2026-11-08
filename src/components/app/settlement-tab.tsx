@@ -34,12 +34,12 @@ import {
   Settings2,
   Sparkles,
   Trophy,
-  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -48,7 +48,7 @@ import { useCartItems } from "@/lib/autopilot-derive";
 import { faNum } from "@/lib/format";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import type { IssueSlipItemDTO, IssuedSlipDTO, LedgerDTO, SettlementSyncResultDTO } from "@/lib/types";
+import type { IssueSlipItemDTO, IssuedSlipDTO, LedgerDTO } from "@/lib/types";
 
 // ═══════════ استیک داچینگ روی مجموع ۱۰۰ واحد (مبنای فرمول سند ارتقا) ═══════════
 
@@ -79,7 +79,6 @@ export function SettlementTab() {
 
   const [ledger, setLedger] = useState<LedgerDTO | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [publishing, setPublishing] = useState<string | null>(null);
   const [issuing, setIssuing] = useState(false);
   const [savingTg, setSavingTg] = useState(false);
@@ -92,8 +91,9 @@ export function SettlementTab() {
   const [dispatching, setDispatching] = useState(false);
   const [feed, setFeed] = useState<{ kind: string; matchLabel: string; message: string; status?: string }[]>([]);
   const [feedOpen, setFeedOpen] = useState(false);
-  // ═══ v10.0 — ماشین‌حساب بانک‌رول شخصی (۱ واحد = ۱٪ موجودی) ═══
+  // ═══ v10.0 — ماشین‌حساب بانک‌رول شخصی (۱ واحد = ریسک هر کارت ÷ ۱۰۰) ═══
   const [bankrollUsd, setBankrollUsd] = useState(10);
+  const [riskPct, setRiskPct] = useState(5);
   const [doctrineFilter, setDoctrineFilter] = useState<string>("ALL");
 
   const loadFeed = useCallback(async () => {
@@ -279,37 +279,6 @@ export function SettlementTab() {
     }
   }, [cartItems, buildIssueItem, loadLedger]);
 
-  // ─── ⚡ همگام‌سازی و تسویه خودکار با سرور ESPN ───
-  const syncAndSettle = useCallback(async () => {
-    setSyncing(true);
-    try {
-      const res = await fetch("/api/settlement/sync", { method: "POST", cache: "no-store" });
-      const data = (await res.json()) as SettlementSyncResultDTO;
-      if (data.success) {
-        if (data.settled.length > 0) {
-          const jackpot = data.settled.filter((s) => s.status === "DOUBLE_WIN").length;
-          const trap = data.settled.filter((s) => s.status === "MIDDLE_TRAP").length;
-          const net = data.settled.reduce((a, s) => a + s.netProfit, 0);
-          toast.success(`⚡ ${faNum(data.settled.length, 0)} کارت با نتیجه واقعی FT ESPN تسویه شد`, {
-            description: `سود خالص: ${net >= 0 ? "+" : ""}${faNum(net, 1)} واحد${jackpot ? ` · 🏆 جکپات دو برد: ${faNum(jackpot, 0)}` : ""}${trap ? ` · 🔴 تله میانی: ${faNum(trap, 0)}` : ""}${data.notified ? ` · تلگرام: ${faNum(data.notified, 0)} پیام` : ""}`,
-            duration: 8000,
-          });
-        } else {
-          toast.info(`ESPN بررسی شد (${faNum(data.checkedEspn, 0)} رخداد · ${faNum(data.ftFound, 0)} پایان‌یافته)`, {
-            description: `کارت در جریان: ${faNum(data.live, 0)} · کارت در انتظار نتیجه جدید: صفر — همه قبلاً تسویه شده‌اند`,
-          });
-        }
-        await loadLedger();
-      } else {
-        toast.error(data.error ?? "تسویه خودکار ناموفق بود");
-      }
-    } catch {
-      toast.error("خطای شبکه در همگام‌سازی با سرور ESPN");
-    } finally {
-      setSyncing(false);
-    }
-  }, [loadLedger]);
-
   // ─── انتشار تلگرام: کارت کامل / تیزر ───
   const publish = useCallback(
     async (it: (typeof cartItems)[number], mode: "CARD" | "TEASER") => {
@@ -380,9 +349,10 @@ export function SettlementTab() {
   const stats = ledger?.stats;
   const slipCount = ledger?.slips.length ?? 0;
   const automation = ledger?.automation;
-  const unitValueUsd = bankrollUsd / 100; // ۱ واحد = ۱٪ بانک‌رول
+  // استیک هر کارت = ریسک انتخابی کاربر؛ ۱ واحد = استیک کارت ÷ ۱۰۰ (استاندارد صد واحدی کارنامه)
+  const perCardUsd = (bankrollUsd * riskPct) / 100;
+  const unitValueUsd = perCardUsd / 100;
   const netUsd = (stats?.netProfit ?? 0) * unitValueUsd;
-  const perTicketUsd = 100 * unitValueUsd;
 
   const journal = ledger?.journal ?? [];
   const doctrineAll = ledger?.doctrine ?? [];
@@ -446,23 +416,133 @@ export function SettlementTab() {
         </div>
       )}
 
-      {/* ═══ ⚡ دکمه همگام‌سازی و تسویه خودکار — بالای جدول کارنامه ═══ */}
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3">
-        <Button
-          className="h-9 gap-1.5 bg-gradient-to-l from-amber-500 to-amber-400 text-xs font-bold text-black hover:from-amber-400 hover:to-amber-300"
-          onClick={() => void syncAndSettle()}
-          disabled={syncing}
-          aria-label="همگام‌سازی و تسویه خودکار نتایج پایان‌یافته با سرور ESPN"
-        >
-          {syncing ? <Loader2 className="size-4 animate-spin" /> : <Zap className="size-4" />}
-          ⚡ همگام‌سازی و تسویه خودکار نتایج پایان‌یافته با سرور ESPN
-        </Button>
+      {/* ═══ v10.0 — 🧮 ماشین‌حساب بانک‌رول شخصی: «۲۹۵ واحد یعنی چی؟» ═══ */}
+      {stats && (
+        <div className="grid gap-3 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-4 lg:grid-cols-[1fr_320px]">
+          <div className="space-y-2">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-violet-300">
+              <Calculator className="size-3.5" /> سود خالص تجمعی بر چه اساسی محاسبه می‌شود؟ — استاندارد «واحد»
+            </p>
+            <p className="text-[10px] leading-5 text-muted-foreground">
+              هر کارت با <b className="text-foreground/90">مجموع استیک ۱۰۰ واحد</b> (داچینگ تیپ A + تیپ B) ثبت می‌شود و سود/زیان هر کارت با
+              فرمول <b className="font-num" dir="ltr">stake×odds−۱۰۰</b> به «واحد» ثبت می‌گردد. یعنی
+              <b className="text-foreground/90"> {faNum(stats.netProfit, 1)} واحد </b>
+              یعنی: اگر برای هر کارت ۱۰۰ واحد می‌دانستی، اکنون {stats.netProfit >= 0 ? "+" : ""}
+              {faNum(stats.netProfit, 1)} واحد (≈ {faNum(stats.netProfit / 100, 2)} برابرِ استیک یک کارت) در خالص‌سازی داشته باشی —
+              بازده <b className="font-num">{faNum(stats.netProfitPct, 1)}٪</b> روی کل استیک‌های تسویه‌شده (
+              {faNum(stats.staked, 0)} واحد). مقیاس واقعی پول کاملاً به تو بستگی دارد و با فرمول روبه‌رو خطی تبدیل می‌شود.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-black/25 p-2.5">
+              <div className="space-y-0.5">
+                <Label htmlFor="bankroll-usd" className="text-[9px] text-muted-foreground">موجودی حساب شخصی شما ($)</Label>
+                <Input
+                  id="bankroll-usd"
+                  type="number"
+                  min={1}
+                  step="any"
+                  dir="ltr"
+                  value={bankrollUsd}
+                  onChange={(e) => setBankrollUsd(Math.max(1, Number(e.target.value) || 0))}
+                  className="h-8 w-28 border-white/10 bg-black/30 text-xs"
+                />
+              </div>
+              <div className="space-y-0.5">
+                <Label className="text-[9px] text-muted-foreground">ریسک هر کارت (درصد موجودی)</Label>
+                <Select value={String(riskPct)} onValueChange={(v) => setRiskPct(Number(v))}>
+                  <SelectTrigger className="h-8 w-24 border-white/10 bg-black/30 text-xs" aria-label="درصد ریسک هر کارت">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-popover">
+                    {[1, 2, 5, 10].map((p) => (
+                      <SelectItem key={p} value={String(p)} className="text-xs">
+                        {faNum(p, 0)}٪ <span className="text-[9px] text-muted-foreground">({p === 10 ? "تهاجمی" : p === 5 ? "متعادل" : "محافظه‌کار"})</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="mr-auto grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+                  <p className="text-[8px] text-muted-foreground">استیک هر کارت</p>
+                  <p className="font-num text-xs font-bold text-foreground" dir="ltr">${perCardUsd.toFixed(2)}</p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+                  <p className="text-[8px] text-muted-foreground">ارزش ۱ واحد</p>
+                  <p className="font-num text-xs font-bold text-cyan-300" dir="ltr">${unitValueUsd.toFixed(3)}</p>
+                </div>
+                <div className={cn("rounded-lg border px-2.5 py-1.5", netUsd >= 0 ? "border-emerald-500/30 bg-emerald-500/[0.06]" : "border-rose-500/30 bg-rose-500/[0.06]")}>
+                  <p className="text-[8px] text-muted-foreground">معادل سود شما</p>
+                  <p className={cn("font-num text-xs font-bold", netUsd >= 0 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+                    {netUsd >= 0 ? "+" : "−"}${Math.abs(netUsd).toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <p className="text-[9px] leading-4 text-muted-foreground">
+              مثال با موجودی <b className="font-num">${faNum(bankrollUsd, 0)}</b> و ریسک {faNum(riskPct, 0)}٪: هر کارت ={" "}
+              <b className="font-num" dir="ltr">${perCardUsd.toFixed(2)}</b>، هر واحد ={" "}
+              <b className="font-num" dir="ltr">${unitValueUsd.toFixed(3)}</b> ← سود {faNum(stats.netProfit, 1)} واحد ={" "}
+              <b className="font-num" dir="ltr">{netUsd >= 0 ? "+" : "−"}${Math.abs(netUsd).toFixed(2)}</b>. موجودی بالاتر؟ همین اعداد خطی مقیاس می‌شوند — نسبت بازده یکسان می‌ماند.
+            </p>
+          </div>
+          <div className="flex flex-col justify-center gap-1.5 rounded-lg border border-white/10 bg-black/25 p-3">
+            <p className="text-[10px] font-semibold text-violet-300">📊 ترکیب نتایج تسویه‌شده</p>
+            <ul className="space-y-1 text-[10px] text-muted-foreground">
+              <li className="flex justify-between"><span>🟢 برد تیپ A</span><b className="font-num text-sky-300">{faNum(stats.wonA, 0)}</b></li>
+              <li className="flex justify-between"><span>🟢 برد تیپ B</span><b className="font-num text-emerald-300">{faNum(stats.wonB, 0)}</b></li>
+              <li className="flex justify-between"><span>🏆 برد طلایی همزمان (Double-Win)</span><b className="font-num text-amber-300">{faNum(stats.doubleWin, 0)}</b></li>
+              <li className="flex justify-between"><span>🔴 تله میانی (ثبت شفاف)</span><b className="font-num text-rose-300">{faNum(stats.middleTrap, 0)}</b></li>
+              <li className="mt-1 flex justify-between border-t border-white/8 pt-1"><span>وین‌ریت کل کانال</span><b className="font-num text-foreground">{faNum(stats.settled > 0 ? ((stats.settled - stats.middleTrap) / stats.settled) * 100 : 0, 1)}٪</b></li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ 🤖 اتوماسیون سرور — تسویه ۱۰۰٪ خودکار بدون هیچ دکمه دستی (دستور مستقیم کارفرما) ═══ */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border p-3",
+          automation?.schedulerActive ? "border-emerald-500/25 bg-emerald-500/[0.06]" : "border-amber-500/25 bg-amber-500/[0.06]"
+        )}
+        role="status"
+        aria-label="وضعیت اتوماسیون سرور"
+      >
+        <div className="flex items-center gap-2">
+          <span className="relative flex size-2.5">
+            {automation?.schedulerActive ? (
+              <>
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                <span className="relative inline-flex size-2.5 rounded-full bg-emerald-400" />
+              </>
+            ) : (
+              <span className="relative inline-flex size-2.5 rounded-full bg-amber-400" />
+            )}
+          </span>
+          <ServerCog className={cn("size-4", automation?.schedulerActive ? "text-emerald-400" : "text-amber-400")} />
+          <b className={cn("text-xs", automation?.schedulerActive ? "text-emerald-300" : "text-amber-300")}>
+            {automation?.schedulerActive ? "تسویه خودکار سرور فعال" : "اتوماسیون سرور در حال راه‌اندازی"}
+          </b>
+        </div>
         <p className="text-[10px] leading-4 text-muted-foreground">
-          اسکوربورد رسمی ESPN (۳ روز گذشته + امروز — Scheduled / In-Progress / Final) بررسی می‌شود؛ به محض FT، نتیجه واقعی
-          <b className="font-num" dir="ltr"> homeScore/awayScore </b> خوانده و تیپ A و تیپ B با فرمول
-          <b className="font-num" dir="ltr"> stake×odds−۱۰۰ </b>
-          تسویه می‌شوند. v9.0: بازی‌های پایان‌یافته ۳ روز اخیر به‌صورت خودکار ثبت و تسویه می‌شوند (Zero-Click) و نتیجه‌ها با تصویر جام پیروزی /
-          رختکن بهم‌ریخته به کانال VIP اعلام می‌گردند.
+          حلقه سرور هر <b className="font-num">{faNum(automation?.intervalSec ?? 90, 0)}</b> ثانیه بدون نیاز به مرورگر اجرا می‌شود:
+          اسکن ESPN (۳ روز گذشته + امروز و ۲ روز آینده) ← صدور کارت تایید سوپروایزر ← تسویه FT با
+          <b className="font-num" dir="ltr"> stake×odds−۱۰۰ </b>← ثبت ژورنال/دکترین ← انتشار خودکار تلگرام (کارت، نتیجه، گزارش وین‌ریت).
+          {automation?.lastTickAt && (
+            <>
+              {" "}آخرین ضرب‌آهنگ:{" "}
+              <b className="font-num" dir="ltr">
+                {new Date(automation.lastTickAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </b>
+            </>
+          )}
+          {automation?.lastDailyReportAt && (
+            <>
+              {" "}· گزارش روزانه:{" "}
+              <b className="font-num" dir="ltr">
+                {new Date(automation.lastDailyReportAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}
+              </b>
+            </>
+          )}
         </p>
       </div>
 
@@ -712,11 +792,138 @@ export function SettlementTab() {
           </ScrollArea>
         )}
       </div>
+
+      {/* ═══ v10.0 — 🧠 حلقه یادگیری: ژورنال تسویه + دفتر دکترین (پاسخ مستقیم: «آیا سیستم آموزش‌پذیر است؟») ═══ */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        {/* ─── ژورنال تسویه: درس ساختاریافته هر نتیجه ─── */}
+        <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+          <div className="flex items-center justify-between gap-2 border-b border-white/8 px-3 py-2.5">
+            <p className="flex items-center gap-1.5 text-xs font-semibold">
+              <BookOpen className="size-3.5 text-cyan-400" /> ژورنال تسویه — درس ثبت‌شده هر نتیجه
+            </p>
+            <Badge variant="outline" className="border-cyan-500/30 text-[9px] text-cyan-300">{faNum(journal.length, 0)} ردیف</Badge>
+          </div>
+          <p className="px-3 pt-2 text-[10px] leading-4 text-muted-foreground">
+            بله — سیستم ۱۰۰٪ آموزش‌پذیر است. پس از هر تسویه خودکار، یک درس قطعی (بدون LLM) از نتیجه واقعی ESPN در ژورنال ثبت می‌شود؛
+            هم بردها و هم باخت‌های صادقانه (تله میانی) به‌عنوان داده آموزشی وارد می‌شوند.
+          </p>
+          {journal.length === 0 ? (
+            <p className="p-4 text-center text-[10px] text-muted-foreground">هنوز درسی ثبت نشده — با اولین تسویه خودکار پر می‌شود.</p>
+          ) : (
+            <ScrollArea className="max-h-72">
+              <ul className="space-y-1.5 p-3">
+                {journal.slice(0, 12).map((j) => {
+                  const tone =
+                    j.status === "DOUBLE_WIN"
+                      ? "border-amber-500/30 bg-amber-500/[0.05]"
+                      : j.status === "MIDDLE_TRAP"
+                        ? "border-rose-500/25 bg-rose-500/[0.04]"
+                        : j.status === "WON_A" || j.status === "WON_B"
+                          ? "border-emerald-500/25 bg-emerald-500/[0.04]"
+                          : "border-white/10 bg-white/[0.02]";
+                  return (
+                    <li key={j.id} className={cn("rounded-lg border p-2", tone)}>
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <p className="text-[10px] font-bold">{j.matchLabel}</p>
+                        <span className="flex items-center gap-1.5">
+                          {(j.netProfit ?? 0) !== 0 && (
+                            <b className={cn("font-num text-[10px]", (j.netProfit ?? 0) > 0 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+                              {(j.netProfit ?? 0) > 0 ? "+" : ""}{faNum(j.netProfit ?? 0, 1)}
+                            </b>
+                          )}
+                          <span className="text-[8px] text-muted-foreground" dir="ltr">
+                            {new Date(j.createdAt).toLocaleDateString("fa-IR", { month: "short", day: "numeric" })}
+                          </span>
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[9px] leading-4 text-muted-foreground">{j.lesson}</p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </ScrollArea>
+          )}
+        </div>
+
+        {/* ─── دفتر دکترین: قوانین عددی آموخته‌شده که مستقیم به موتور می‌روند ─── */}
+        <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 px-3 py-2.5">
+            <p className="flex items-center gap-1.5 text-xs font-semibold">
+              <Sparkles className="size-3.5 text-amber-400" /> دفتر دکترین — قوانین عددی آموخته‌شده
+            </p>
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="فیلتر نوع دکترین">
+              {([
+                ["ALL", `همه (${doctrineCounts.ALL})`],
+                ["LEAGUE_LAMBDA", `لیگ (${doctrineCounts.LEAGUE_LAMBDA})`],
+                ["ARCHETYPE", `الگو (${doctrineCounts.ARCHETYPE})`],
+                ["TIMING_WINDOW", `زمان (${doctrineCounts.TIMING_WINDOW})`],
+              ] as const).map(([k, lbl]) => (
+                <button
+                  key={k}
+                  type="button"
+                  role="tab"
+                  aria-selected={doctrineFilter === k}
+                  onClick={() => setDoctrineFilter(k)}
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[9px] transition-colors",
+                    doctrineFilter === k ? "border-amber-500/50 bg-amber-500/15 text-amber-300" : "border-white/10 text-muted-foreground hover:bg-white/5"
+                  )}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="px-3 pt-2 text-[10px] leading-4 text-muted-foreground">
+            این دفتر نیازی به ثبت دستی ندارد — خودکار ساخته می‌شود: از هر ۳۰ روز کارنامه، بردار عددی هر لیگ (ضریب λ)، پاداش/جریمه هر الگو
+            و عملکرد هر پنجره زمانی استخراج و مستقیم در موتور پیش‌بینی و امتیاز سوپروایزر اعمال می‌شود.
+          </p>
+          {doctrine.length === 0 ? (
+            <p className="p-4 text-center text-[10px] text-muted-foreground">
+              هنوز دکترینی ثبت نشده — پس از حداقل ۳ تسویه در یک لیگ، قانون عددی آن لیگ خودکار مهر و تاریخ می‌خورد.
+            </p>
+          ) : (
+            <ScrollArea className="max-h-72">
+              <ul className="space-y-1.5 p-3">
+                {doctrine.map((d) => (
+                  <li key={d.id} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <p className="text-[10px] font-bold">
+                        {d.kind === "LEAGUE_LAMBDA" ? "🏟️" : d.kind === "ARCHETYPE" ? "📐" : "⏱️"} {d.scope}
+                      </p>
+                      <span className="flex items-center gap-1.5 text-[9px]">
+                        <Badge variant="outline" className="border-white/15 px-1.5 py-0 text-[8px] text-muted-foreground">{faNum(d.sampleSize, 0)} نمونه</Badge>
+                        <b className={cn("font-num", d.netProfit > 0 ? "text-emerald-300" : d.netProfit < 0 ? "text-rose-300" : "text-muted-foreground")} dir="ltr">
+                          {d.netProfit > 0 ? "+" : ""}{faNum(d.netProfit, 1)}
+                        </b>
+                        <b className="font-num text-cyan-300" dir="ltr">{faNum(d.winRate, 1)}٪</b>
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[9px] leading-4 text-muted-foreground">{d.summary}</p>
+                  </li>
+                ))}
+              </ul>
+            </ScrollArea>
+          )}
+        </div>
+      </div>
     </section>
   );
 }
 
 // ═══════════ سطر کارنامه ═══════════
+
+/** v10.0.2 — نشان ارزش عددی نسبت به خط مرجع (پاسخ «چرا عددی ندارد؟» — همیشه عدد دارد) */
+function EdgeChip({ edge, source, pin }: { edge: number | null; source: string | null; pin: number | null }) {
+  if (edge === null) return null;
+  const tone = edge > 0 ? "text-emerald-300" : edge < 0 ? "text-rose-300" : "text-muted-foreground";
+  const srcLabel = source === "PINNACLE" ? `پیناکل ${pin?.toFixed(2) ?? ""}` : "خط منصفانه";
+  return (
+    <p className="mt-0.5 text-[8px] leading-3 text-muted-foreground" title="ارزش عددی = (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰؛ یا مزیت قیمت نسبت به خط شارپ پیناکل">
+      📈 ارزش <b className={cn("font-num", tone)} dir="ltr">{edge > 0 ? "+" : ""}{faNum(edge, 1)}٪</b> نسبت به {srcLabel}
+    </p>
+  );
+}
 
 function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
   const meta = STATUS_META[slip.status] ?? STATUS_META.PENDING;
@@ -772,6 +979,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
             <b className="mr-1 font-num text-rose-300" dir="ltr"> ✗</b>
           ) : null}
         </p>
+        <EdgeChip edge={slip.edgeA} source={slip.edgeSourceA} pin={slip.pinnacleOddsA} />
       </TableCell>
 
       <TableCell className="max-w-[170px] py-2.5">
@@ -785,6 +993,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
             <b className="mr-1 font-num text-rose-300" dir="ltr"> ✗</b>
           ) : null}
         </p>
+        <EdgeChip edge={slip.edgeB} source={slip.edgeSourceB} pin={slip.pinnacleOddsB} />
       </TableCell>
 
       <TableCell className="py-2.5 text-left">

@@ -599,6 +599,121 @@ export async function issueSlip(
   return { created: true, slip: mapSlip(row) };
 }
 
+// ═══════════ v10.0.2 — بازپررسی یادگیری کارت‌های قدیمی (Idempotent Backfill) ═══════════
+
+/** throttle بازپررسی — حداکثر هر ۳۰ دقیقه یک‌بار (فراخوانی از خط لوله سرور) */
+let lastBackfillAt = 0;
+const BACKFILL_TTL_MS = 30 * 60_000;
+
+/**
+ * backfillSlipLearning — پرکردن ستون‌های یادگیری کارت‌های صادرشده پیش از v10:
+ *   · modelProbA/B و edgeA/B (ارزش عددی نسبت به پیناکل واقعی یا خط منصفانه)
+ *   · tipKind + پنجره زمانی طلایی ثبت
+ *   · ردیف ژورنال تسویه (recordSettlementLearning — Idempotent با slipId)
+ * همه محاسبات از λ ذخیره‌شده کارت بازتولید می‌شود — هیچ عدد ساختگی نیست.
+ */
+export async function backfillSlipLearning(force = false): Promise<{ scanned: number; updated: number; journalled: number }> {
+  if (!force && Date.now() - lastBackfillAt < BACKFILL_TTL_MS) {
+    return { scanned: 0, updated: 0, journalled: 0 };
+  }
+  lastBackfillAt = Date.now();
+
+  // کارت‌های تسویه‌شده بدون ارزش عددی (نسخه‌های ≤ v9) — سقف هر پاس ۶۰ ردیف
+  const targets = await db.issuedSlip.findMany({
+    where: {
+      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP", "MANUAL_REVIEW"] },
+      OR: [{ edgeA: null }, { edgeB: null }, { timingWindowA: null }, { timingWindowB: null }],
+    },
+    orderBy: { kickoff: "desc" },
+    take: 60,
+  });
+  if (targets.length === 0) return { scanned: 0, updated: 0, journalled: 0 };
+
+  let updated = 0;
+  let journalled = 0;
+  for (const s of targets) {
+    try {
+      const legsA: SettlementLegDTO[] = safeParseLegs(s.legsA);
+      const legsB: SettlementLegDTO[] = safeParseLegs(s.legsB);
+      const lH = s.lambdaHome ?? 1.35;
+      const lA = s.lambdaAway ?? 1.25;
+      const probA = s.modelProbA ?? legProbability(lH, lA, legsA);
+      const probB = s.modelProbB ?? legProbability(lH, lA, legsB);
+
+      // خط شارپ واقعی پیناکل — از رکورد OddsRecord مرتبط با بازی (وقتی فید موجود باشد)
+      let pinPrices: Record<string, number> = {};
+      if (s.matchId) {
+        const oddsRows = await db.oddsRecord.findMany({ where: { matchId: s.matchId } });
+        const pin = oddsRows.find((o) => o.bookmaker === "PINNACLE");
+        if (pin) {
+          pinPrices = {
+            HOME: pin.oddsHome,
+            DRAW: pin.oddsDraw,
+            AWAY: pin.oddsAway,
+            DC_1X: 1 / (1 / pin.oddsHome + 1 / pin.oddsDraw),
+            DC_X2: 1 / (1 / pin.oddsAway + 1 / pin.oddsDraw),
+            O25: pin.oddsOver25,
+            U25: pin.oddsUnder25,
+          };
+        }
+      }
+      const pinPriceOf = (legs: SettlementLegDTO[]): number | null => {
+        const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+        if (keys.length !== 1) return null;
+        const p = pinPrices[keys[0]];
+        return typeof p === "number" && p > 1.01 ? p : null;
+      };
+      const priceAdvantage = (odds: number, pin: number): number => Math.round((odds / pin - 1) * 1000) / 10;
+
+      const pinA = s.pinnacleOddsA ?? pinPriceOf(legsA);
+      const pinB = s.pinnacleOddsB ?? pinPriceOf(legsB);
+      const edgeA = s.edgeA ?? (pinA !== null ? priceAdvantage(s.oddsA, pinA) : computeEdge(probA, s.oddsA));
+      const edgeB = s.edgeB ?? (pinB !== null ? priceAdvantage(s.oddsB, pinB) : computeEdge(probB, s.oddsB));
+      const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+      const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+
+      const tipKindA = s.tipKindA ?? (edgeA !== null ? deriveTipKind(legsA.map((l) => l.key), s.oddsA) : null);
+      const tipKindB = s.tipKindB ?? (edgeB !== null ? deriveTipKind(legsB.map((l) => l.key), s.oddsB) : null);
+      const koMs = s.kickoff.getTime();
+      const winA = s.timingWindowA ? null : tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
+      const winB = s.timingWindowB ? null : tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
+
+      const refreshed = await db.issuedSlip.update({
+        where: { id: s.id },
+        data: {
+          modelProbA: s.modelProbA ?? probA,
+          modelProbB: s.modelProbB ?? probB,
+          pinnacleOddsA: pinA,
+          pinnacleOddsB: pinB,
+          edgeA,
+          edgeB,
+          edgeSourceA,
+          edgeSourceB,
+          tipKindA: tipKindA ?? undefined,
+          tipKindB: tipKindB ?? undefined,
+          timingWindowA: s.timingWindowA ?? winA?.windowKey ?? undefined,
+          timingWindowB: s.timingWindowB ?? winB?.windowKey ?? undefined,
+          timingStartA: s.timingStartA ?? winA?.startAt ?? undefined,
+          timingEndA: s.timingEndA ?? winA?.endAt ?? undefined,
+          timingStartB: s.timingStartB ?? winB?.startAt ?? undefined,
+          timingEndB: s.timingEndB ?? winB?.endAt ?? undefined,
+        },
+      });
+      updated += 1;
+
+      // ژورنال یادگیری — Idempotent (هر کارت حداکثر یک ردیف)
+      const hasJournal = await db.settlementJournal.findFirst({ where: { slipId: s.id }, select: { id: true } });
+      if (!hasJournal) {
+        await recordSettlementLearning(refreshed);
+        journalled += 1;
+      }
+    } catch (err) {
+      console.warn(`backfill failed for slip ${s.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return { scanned: targets.length, updated, journalled };
+}
+
 // ═════════════════════ کارنامه و آمار ═════════════════════
 
 type DbSlip = Awaited<ReturnType<typeof db.issuedSlip.findFirst>>;
