@@ -116,15 +116,19 @@ export interface FlashcardView {
   isArchetype?: boolean;
   /** v8.0 — تصمیم ایجنت سوپروایزر ارشد (تک‌تیپ طلایی مونت‌کارلو) */
   supervisor: {
-    /** امتیاز خام فرمول سند ارتقا */
+    /** امتیاز خام فرمول v11.0 */
     raw: number;
     /** نمایش ۰..۱۰۰ (مثل ۹۴/۱۰۰) */
     score100: number;
     veto: boolean;
     vetoReason: string | null;
     guaranteedProfitPct: number;
+    /** v11.0 — پهنای پوشش متعامد (درصد) */
+    coveragePct: number;
     doubleWinProbPct: number;
     jointLossRiskPct: number;
+    /** v11.0 — دژ نفوذناپذیر: ریسک زیر ۷٪ + تایید سوپروایزر */
+    fortress: boolean;
     executionMode: ExecutionMode;
     /** ۴ الگوی رد‌شده + دلیل — پشت کارت */
     rejected: RejectedCandidate[];

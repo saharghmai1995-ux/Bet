@@ -21,6 +21,7 @@ import {
   Copy,
   Crown,
   ExternalLink,
+  Eye,
   EyeOff,
   Loader2,
   Lock,
@@ -35,8 +36,10 @@ import {
   ShieldCheck,
   ShieldOff,
   Sparkles,
+  Trash2,
   TriangleAlert,
   Trophy,
+  Upload,
   Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +52,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useQuantStore } from "@/lib/store";
 import { useCartItems } from "@/lib/autopilot-derive";
+import { principalLockSettledPnl } from "@/lib/engine/asymmetric";
 import { faNum } from "@/lib/format";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -99,6 +103,73 @@ export function SettlementTab() {
   const [bankrollUsd, setBankrollUsd] = useState(10);
   const [riskPct, setRiskPct] = useState(5);
   const [doctrineFilter, setDoctrineFilter] = useState<string>("ALL");
+
+  // ═══ v12.0 — قالب‌های استادیومی کانال (آپلود در سرور — بدون وابستگی به مرورگر) ═══
+  const [stadiumTpls, setStadiumTpls] = useState<Record<string, { exists: boolean; updatedAt: string | null; bytes: number | null }>>({});
+  const [uploadingKind, setUploadingKind] = useState<string | null>(null);
+
+  const loadStadium = useCallback(async () => {
+    try {
+      const res = await fetch("/api/telegram/stadium", { cache: "no-store" });
+      const data = (await res.json()) as { success: boolean; templates?: { kind: string; exists: boolean; updatedAt: string | null; bytes: number | null }[] };
+      if (data.success && data.templates) {
+        setStadiumTpls(Object.fromEntries(data.templates.map((t) => [t.kind, t])));
+      }
+    } catch {
+      /* پنل قالب‌ها اختیاری است */
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadStadium();
+  }, [loadStadium]);
+
+  const uploadStadium = useCallback(
+    async (kind: string, file: File) => {
+      setUploadingKind(kind);
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(new Error("read-failed"));
+          fr.readAsDataURL(file);
+        });
+        const res = await fetch("/api/telegram/stadium", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, dataUrl }),
+        });
+        const data = (await res.json()) as { success: boolean; error?: string };
+        if (data.success) {
+          toast.success(`قالب استادیومی «${kind}» ذخیره شد — پست‌های کانال اکنون Broadcast می‌شوند`, {
+            description: "از این پس کارت‌های @aineobet روی این پس‌زمینه چاپ و بدون کپشن متنی ارسال می‌شوند",
+          });
+          await loadStadium();
+        } else {
+          toast.error(`آپلود قالب ناموفق: ${data.error ?? "?"}`);
+        }
+      } catch {
+        toast.error("خطای خواندن فایل تصویر");
+      } finally {
+        setUploadingKind(null);
+      }
+    },
+    [loadStadium]
+  );
+
+  const deleteStadium = useCallback(
+    async (kind: string) => {
+      setUploadingKind(kind);
+      try {
+        await fetch(`/api/telegram/stadium?kind=${kind}`, { method: "DELETE" });
+        toast.info(`قالب «${kind}» حذف شد — بازگشت به پس‌زمینه برداری`);
+        await loadStadium();
+      } finally {
+        setUploadingKind(null);
+      }
+    },
+    [loadStadium]
+  );
 
   const loadFeed = useCallback(async () => {
     try {
@@ -375,6 +446,27 @@ export function SettlementTab() {
   const unitValueUsd = perCardUsd / 100;
   const netUsd = (stats?.netProfit ?? 0) * unitValueUsd;
 
+  // ═══ v11.0-④ — سرمایه نجات‌یافته توسط وتوی سوپروایزر ═══
+  // زیان کاغذی دفتر سایه که اگر وتو نمی‌شد پول واقعی بود
+  const savedByVeto = Math.max(0, -(ledger?.shadow?.netProfit ?? 0));
+
+  // ═══ v11.0-② — شبیه‌سازی شتاب‌دهنده نامتقارن روی دسته «ریسک زیر ۱۰٪» ═══
+  const boosterSim = useMemo(() => {
+    const slips = ledger?.slips ?? [];
+    const risk10 = slips.filter((s) => (s.jointLossRiskPct ?? 100) < 10);
+    let equalNet = 0;
+    let boosterNet = 0;
+    let settled = 0;
+    for (const s of risk10) {
+      if (s.status === "WON_A" || s.status === "WON_B" || s.status === "DOUBLE_WIN" || s.status === "MIDDLE_TRAP") {
+        settled += 1;
+        equalNet += s.netProfit ?? 0;
+        boosterNet += principalLockSettledPnl(s.oddsA, s.oddsB, s.status);
+      }
+    }
+    return { settled, equalNet: Math.round(equalNet * 10) / 10, boosterNet: Math.round(boosterNet * 10) / 10 };
+  }, [ledger]);
+
   const journal = ledger?.journal ?? [];
   const doctrineAll = ledger?.doctrine ?? [];
   const doctrine = doctrineFilter === "ALL" ? doctrineAll : doctrineAll.filter((d) => d.kind === doctrineFilter);
@@ -434,6 +526,24 @@ export function SettlementTab() {
             tone={stats.netProfit >= 0 ? "text-emerald-300" : "text-rose-300"}
             sub={`${faNum(stats.netProfitPct, 1)}٪ از استیک`}
           />
+        </div>
+      )}
+
+      {/* ═══ v11.0-④ — بج طلایی سرمایه نجات‌یافته توسط وتوی سوپروایزر ═══ */}
+      {savedByVeto > 0 && (
+        <div
+          className="flex flex-wrap items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-gradient-to-l from-amber-500/[0.14] via-amber-500/[0.07] to-emerald-500/[0.08] px-4 py-2.5 text-center"
+          role="status"
+          aria-label="سرمایه نجات‌یافته توسط وتوی سوپروایزر"
+        >
+          <ShieldCheck className="size-4 shrink-0 text-amber-300" />
+          <p className="text-xs font-bold text-amber-200">
+            🛡️ سرمایه نجات‌یافته توسط وتوی سوپروایزر:
+            <b className="font-num mx-1.5 rounded-md border border-amber-500/40 bg-black/40 px-2 py-0.5 text-sm text-amber-300" dir="ltr">
+              +{faNum(savedByVeto, 1)} واحد
+            </b>
+            — این ضرر در دفتر سایه تسویه کاغذی شد و هرگز پول واقعی نشد
+          </p>
         </div>
       )}
 
@@ -502,6 +612,18 @@ export function SettlementTab() {
               );
             })}
           </div>
+
+          {/* ═══ v11.0-② — اثر شتاب‌دهنده نامتقارن روی دسته ریسک زیر ۱۰٪ ═══ */}
+          {boosterSim.settled > 0 && boosterSim.boosterNet > boosterSim.equalNet && (
+            <div className="flex flex-wrap items-center justify-center gap-2 rounded-lg border border-amber-500/35 bg-amber-500/[0.06] px-3 py-2 text-[11px]" role="note">
+              <Rocket className="size-3.5 shrink-0 text-amber-300" />
+              <p className="text-amber-200/90">
+                🚀 اثر «شتاب‌دهنده نامتقارن» روی {faNum(boosterSim.settled, 0)} کارت دسته ریسک زیر ۱۰٪: سود خالص از{" "}
+                <b className="font-num text-emerald-300" dir="ltr">+{faNum(boosterSim.equalNet, 1)}</b> به{" "}
+                <b className="font-num text-amber-300" dir="ltr">+{faNum(boosterSim.boosterNet, 1)} واحد</b> ارتقا می‌یافت — قفل اصل سرمایه روی تیپ B + پرتاب سود روی تیپ A
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -681,6 +803,91 @@ export function SettlementTab() {
           <Button size="sm" variant="outline" className="h-8 gap-1 border-white/15 text-[11px] text-foreground/80" onClick={() => void saveTelegram(true)} disabled={savingTg}>
             <SendHorizonal className="size-3" /> ارسال پیام آزمون به کانال
           </Button>
+        </div>
+
+        {/* ═══ v12.0 — ۵ قالب استادیومی @aineobet (آپلود مستقیم — چاپ Broadcast بدون کپشن) ═══ */}
+        <div className="space-y-2.5 rounded-xl border border-violet-500/30 bg-violet-500/[0.05] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-violet-300">
+              🏟️ ۵ قالب استادیومی NeoBet — پس‌زمینه رسمی پست‌های کانال (۱۰۸۰×۱۴۴۰ · نسبت ۳:۴)
+            </p>
+            <Badge variant="outline" className="gap-1 border-violet-500/40 bg-violet-500/10 text-[9px] text-violet-300">
+              {Object.values(stadiumTpls).filter((t) => t.exists).length > 0
+                ? `حالت Broadcast فعال — ${faNum(Object.values(stadiumTpls).filter((t) => t.exists).length, 0)} از ۵ قالب`
+                : "فالبک: پس‌زمینه برداری (بدون قالب)"}
+            </Badge>
+          </div>
+          <p className="text-[10px] leading-4 text-muted-foreground">
+            هر قالب را آپلود کنید تا موتور رندر سرور، لوگوی باشگاه‌ها (از فید زنده ESPN) و متن‌های انگلیسی را دقیقاً روی مختصات رسمی همین عکس‌ها چاپ کند و پست‌ها با
+            <b className="text-violet-300"> sendPhoto بدون هیچ کپشن متنی </b>
+            مخابره شوند. قالب‌ها روی دیسک سرور ذخیره می‌شوند — بدون وابستگی به مرورگر و برای تسویه خودکار شبانه هم فعال است.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {[
+              { kind: "PRE_MATCH", label: "۱. کارت تیپ بازی", hint: "لوگوها بالا · باکس تیپ A آبی / تیپ B سبز" },
+              { kind: "WIN", label: "۲. کارت برنده", hint: "باکس مرکزی نتیجه جلوی تور دروازه" },
+              { kind: "LOSS", label: "۳. کارت باخت", hint: "استادیوم بارانی · هش SHA-256" },
+              { kind: "DOUBLE_WIN", label: "۴. کارت دابل برد", hint: "دو باکس طلایی تیپ A و B" },
+              { kind: "DAILY_REPORT", label: "۵. گزارش برآیند روزانه", hint: "۴ باکس KPI + ۴ ردیف بازی تسویه‌شده" },
+            ].map((tpl) => {
+              const info = stadiumTpls[tpl.kind];
+              const busy = uploadingKind === tpl.kind;
+              return (
+                <div key={tpl.kind} className={cn("space-y-1.5 rounded-lg border p-2.5", info?.exists ? "border-emerald-500/35 bg-emerald-500/[0.05]" : "border-white/10 bg-black/25")}>
+                  <p className="truncate text-[10.5px] font-bold text-foreground/90">{tpl.label}</p>
+                  <p className="truncate text-[9px] text-muted-foreground" title={tpl.hint}>{tpl.hint}</p>
+                  <div className="flex items-center gap-1.5">
+                    <label className="min-w-0 flex-1 cursor-pointer">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="sr-only"
+                        aria-label={`آپلود تصویر قالب ${tpl.label}`}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) void uploadStadium(tpl.kind, f);
+                          e.currentTarget.value = "";
+                        }}
+                      />
+                      <span className={cn("flex h-7 items-center justify-center gap-1 rounded-md border border-violet-500/40 bg-violet-500/10 text-[10px] font-bold text-violet-300 transition hover:bg-violet-500/20", busy && "opacity-60")}>
+                        {busy ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}
+                        {info?.exists ? "تعویض تصویر" : "آپلود تصویر"}
+                      </span>
+                    </label>
+                    {info?.exists && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                          onClick={() => window.open(`/api/telegram/stadium?kind=${tpl.kind}&raw=1`, "_blank")}
+                          aria-label={`پیش‌نمایش قالب ${tpl.label}`}
+                        >
+                          <Eye className="size-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-rose-300/80 hover:text-rose-300"
+                          onClick={() => void deleteStadium(tpl.kind)}
+                          disabled={busy}
+                          aria-label={`حذف قالب ${tpl.label}`}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                  {info?.exists && (
+                    <p className="text-[9px] text-emerald-300/80" dir="ltr">
+                      ✓ {info.bytes ? `${Math.round(info.bytes / 1024)} KB` : ""} {info.updatedAt ? `· ${new Date(info.updatedAt).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" })}` : ""}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {/* ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر ═══ */}

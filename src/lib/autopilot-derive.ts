@@ -82,8 +82,10 @@ export function buildFlashcard(
           veto: supervisor.veto,
           vetoReason: supervisor.vetoReason,
           guaranteedProfitPct: supervisor.score.guaranteedProfitPct,
+          coveragePct: supervisor.score.coveragePct,
           doubleWinProbPct: supervisor.score.doubleWinProbPct,
           jointLossRiskPct: supervisor.score.jointLossRiskPct,
+          fortress: supervisor.score.fortress,
           executionMode: supervisor.executionMode,
           rejected: supervisor.rejected,
         }

@@ -33,6 +33,7 @@ import { SettlementTab } from "@/components/app/settlement-tab";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
 import { HeroPerformance } from "@/components/app/hero-performance";
+import { RolloverLadder } from "@/components/app/autopilot/rollover-ladder";
 import { SupervisorRadar } from "@/components/app/fx/supervisor-radar";
 import { useQuantStore } from "@/lib/store";
 import { useAutopilot } from "@/lib/use-autopilot";
@@ -174,13 +175,13 @@ export default function Home() {
             </div>
             <div>
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
-                فوتبال‌کوانت
+                <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v9.0 Supervisor Quant
+                  <Sparkles className="size-2.5" /> v12.0 @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی — انطباق ضد گوبینگ و ضرایب زنده ۴ منبع رایگان
+                ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی — گیت سخت ریسک ۹.۸٪ + انطباق ضد گوبینگ · کانال رسمی <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -277,6 +278,8 @@ export default function Home() {
           <div className="space-y-4">
             <HeroPerformance onOpenSha={openShaTable} />
             <FlashcardDeck />
+            {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (بالای داشبورد سریع) */}
+            <RolloverLadder startBank={100} />
             <NewsTickerStrip />
             <PipelineRadar onOpenCard={openFlashcardsFor} />
             <div id="settlement-section">
@@ -378,7 +381,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            فوتبال‌کوانت ۹.۰ Supervisor Quant — Reverse-Poisson λ Solver (مهندسی معکوس ضرایب بوک‌میکر: ۶۵٪ بازار + ۳۵٪ آمار × درس کالیبراسیون) + تسویه خودکار ۳ روز ESPN (Zero-Click) + کانال تلگرام VIP @aineobet (فقط کارت‌های تایید سوپروایزر + گزارش وین‌ریت) + حلقه فعال درس‌های کالیبراسیون ← ایجنت سوپروایزر ← دیکسون-کولز ← کلِی همزمان ← پوشش زنده
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v12.0 Official Broadcast Edition · Reverse-Poisson λ Solver (۶۵٪ بازار + ۳۵٪ آمار × درس کالیبراسیون) + گیت سخت ریسک ۹.۸٪ + تسویه خودکار ۳ روز ESPN (Zero-Click) + قالب‌های استادیومی ۱۰۸۰×۱۴۴۰ (فقط کارت‌های تایید سوپروایزر + گزارش روزانه) + حلقه فعال درس‌های کالیبراسیون ← ایجنت سوپروایزر ← دیکسون-کولز ← کلِی همزمان ← پوشش زنده
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

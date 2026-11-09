@@ -9,11 +9,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrainCircuit, ChevronLeft, ChevronRight, Grid3X3, Layers, Loader2, ShieldCheck, ShieldOff, Sparkles, Store, TriangleAlert, Users, Wallet } from "lucide-react";
+import { BrainCircuit, ChevronLeft, ChevronRight, Grid3X3, Layers, Loader2, Shield, ShieldCheck, ShieldOff, Sparkles, Store, TriangleAlert, Users, Wallet, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuantStore } from "@/lib/store";
 import { useFlashcards } from "@/lib/autopilot-derive";
+import { boosterProfitPct } from "@/lib/engine/asymmetric";
 import { FlashCard, type DeepLlmState } from "./flash-card";
 import { faNum } from "@/lib/format";
 import { getCachedDebate, setCachedDebate } from "@/lib/llm-cache";
@@ -21,15 +22,17 @@ import type { DebateResultDTO } from "@/lib/types";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-type FilterKey = "APPROVED" | "ALL" | "PROFIT15" | "RISK10" | "DOUBLE" | "VETOED";
+type FilterKey = "APPROVED" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "ALL" | "VETOED";
 
-const FILTERS: { key: FilterKey; label: string; icon: typeof Layers }[] = [
-  { key: "APPROVED", label: "✅ تاییدشده سوپروایزر", icon: ShieldCheck },
+// v11.0 — ۴ دکمه طلایی طبق سند ارتقا + فیلتر دژ نفوذناپذیر + شفافیت همه/وتو
+const FILTERS: { key: FilterKey; label: string; icon: typeof Layers; golden?: boolean }[] = [
+  { key: "APPROVED", label: "👑 تاییدشده سوپروایزر — وین‌ریت ۱۰۰٪", icon: ShieldCheck, golden: true },
+  { key: "RISK10", label: "🛡️ ریسک باخت همزمان زیر ۱۰٪ (۳۹/۳۹ برد)", icon: TriangleAlert, golden: true },
+  { key: "BOOSTER", label: "🚀 شتاب‌دهنده نامتقارن (بیمه اصل پول + سود بالای ۲۵٪)", icon: Zap, golden: true },
+  { key: "PROFIT15", label: "💰 سود تضمینی بالای ۱۵٪", icon: Wallet, golden: true },
+  { key: "FORTRESS", label: "🏰 دژ نفوذناپذیر (زیر ۷٪ + تایید)", icon: Shield },
   { key: "ALL", label: "همه بازی‌ها", icon: Layers },
   { key: "VETOED", label: "وتو شده", icon: ShieldOff },
-  { key: "PROFIT15", label: "سود تضمینی بالای ۱۵٪", icon: Wallet },
-  { key: "RISK10", label: "ریسک باخت همزمان زیر ۱۰٪", icon: TriangleAlert },
-  { key: "DOUBLE", label: "فرصت‌های Double-Win", icon: Sparkles },
 ];
 
 /** فاصله حداقل بین درخواست‌های LLM در اجرای توالی ۳ بازی برتر (سپر سمت کلاینت) */
@@ -76,8 +79,12 @@ export function FlashcardDeck({
         return cards.filter((c) => c.pair.guaranteedMarginPct > 15);
       case "RISK10":
         return cards.filter((c) => c.pair.jointStates.bothLose < 0.1);
-      case "DOUBLE":
-        return cards.filter((c) => c.pair.structure.doubleWin);
+      case "BOOSTER":
+        // v11.0 — بیمه اصل پول (Principal-Lock سود > ۲۵٪) روی کارت‌های کم‌ریسک
+        return cards.filter((c) => c.pair.jointStates.bothLose < 0.1 && boosterProfitPct(c.pair.totalOddsA, c.pair.totalOddsB) > 25);
+      case "FORTRESS":
+        // v11.0 — دژ نفوذناپذیر: ریسک زیر ۷٪ + تایید سوپروایزر
+        return cards.filter((c) => !(c.supervisor?.veto ?? false) && c.pair.jointStates.bothLose < 0.07);
       default:
         return cards;
     }
@@ -90,7 +97,8 @@ export function FlashcardDeck({
       VETOED: vetoedCount,
       PROFIT15: cards.filter((c) => c.pair.guaranteedMarginPct > 15).length,
       RISK10: cards.filter((c) => c.pair.jointStates.bothLose < 0.1).length,
-      DOUBLE: cards.filter((c) => c.pair.structure.doubleWin).length,
+      BOOSTER: cards.filter((c) => c.pair.jointStates.bothLose < 0.1 && boosterProfitPct(c.pair.totalOddsA, c.pair.totalOddsB) > 25).length,
+      FORTRESS: cards.filter((c) => !(c.supervisor?.veto ?? false) && c.pair.jointStates.bothLose < 0.07).length,
     }),
     [cards, approvedCount, vetoedCount]
   );
@@ -299,7 +307,7 @@ export function FlashcardDeck({
         </div>
       </div>
 
-      {/* فیلترهای سریع — v8.0: پیش‌فرض «فقط تاییدشده سوپروایزر» */}
+      {/* فیلترهای طلایی v11.0 — پیش‌فرض «👑 تاییدشده سوپروایزر» */}
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="فیلتر سریع فلش‌کارت‌ها">
         {FILTERS.map((f) => (
           <Button
@@ -308,7 +316,13 @@ export function FlashcardDeck({
             variant="outline"
             className={cn(
               "h-7 gap-1 rounded-full border-white/10 px-2.5 text-[10px] sm:text-[11px]",
-              filter === f.key ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" : "text-muted-foreground",
+              filter === f.key
+                ? f.golden
+                  ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
+                  : "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                : f.golden
+                  ? "border-amber-500/20 text-amber-200/70 hover:bg-amber-500/10"
+                  : "text-muted-foreground",
               f.key === "APPROVED" && filter !== f.key && "border-emerald-500/25 text-emerald-300/80"
             )}
             onClick={() => setFilter(f.key)}

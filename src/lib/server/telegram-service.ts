@@ -14,7 +14,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from "@/lib/db";
-import { renderSlipCardPNG, renderSlipResultPNG, renderSlipTeaserPNG, renderWinRateReportPNG } from "./slip-images";
+import { renderSlipCardPNG, renderSlipResultPNG, renderSlipTeaserPNG, renderWinRateReportPNG, renderDailyReportPNG } from "./slip-images";
+import { getStadiumBackground, type StadiumKind } from "./stadium-store";
 import type { IssuedSlip } from "@prisma/client";
 
 // ═════════════════════ تنظیمات (Setting + env) ═════════════════════
@@ -91,7 +92,8 @@ async function tgCall(method: string, body: Record<string, unknown>): Promise<{ 
 async function tgSendPhoto(
   photo: Buffer,
   caption: string,
-  filename = "slip-card.png"
+  filename = "slip-card.png",
+  captionless = false
 ): Promise<{ ok: boolean; detail: string }> {
   const token = await botToken();
   const chatId = await channelId();
@@ -100,16 +102,40 @@ async function tgSendPhoto(
   try {
     const form = new FormData();
     form.append("chat_id", chatId);
-    form.append("caption", caption.slice(0, 1024));
-    form.append("parse_mode", "HTML");
+    if (!captionless) {
+      // v12.0 — در حالت Broadcast (قالب استادیومی آپلودشده) پوستر بدون هیچ کپشن متنی می‌رود
+      form.append("caption", caption.slice(0, 1024));
+      form.append("parse_mode", "HTML");
+    }
     form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), filename);
     const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: form });
     const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
-    if (json.ok) return { ok: true, detail: `photo:${json.result?.message_id ?? "?"}` };
+    if (json.ok) return { ok: true, detail: `photo:${json.result?.message_id ?? "?"}${captionless ? ":broadcast" : ""}` };
     return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : "network error" };
   }
+}
+
+/** v12.0 — آیا قالب استادیومی برای این نوع کارت آپلود شده؟ (حالت Broadcast بدون کپشن) */
+async function stadiumActive(kind: StadiumKind): Promise<boolean> {
+  try {
+    return (await getStadiumBackground(kind)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** v12.0 — ارسال مستقیم پوسترهای تولیدی سرور (نردبان مرکب/گزارش‌ها) با پشتیبانی Broadcast */
+export async function sendBroadcastPhoto(
+  photo: Buffer,
+  caption: string,
+  filename: string,
+  captionless = false
+): Promise<{ ok: boolean; detail: string }> {
+  const res = await tgSendPhoto(photo, caption, filename, captionless);
+  await logOutbox(null, "BROADCAST", res.ok, res.detail);
+  return res;
 }
 
 async function logOutbox(slipId: string | null, kind: string, ok: boolean, detail: string): Promise<void> {
@@ -277,9 +303,12 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
 
   const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
 
+  // v12.0 — Broadcast mode: قالب استادیومی آپلودشده → sendPhoto بدون هیچ کپشن متنی
+  const broadcast = await stadiumActive("PRE_MATCH");
+
   let result: { ok: boolean; detail: string };
   if (photo) {
-    result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
+    result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`, broadcast);
   } else {
     // تصویر تولید نشد — پیام متنی HTML همچنان کامل ارسال می‌شود
     result = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
@@ -311,9 +340,13 @@ export async function sendSettlementNotification(slip: IssuedSlip): Promise<bool
   // v10.0 — تصویربرداری قطعی: برد طلایی همزمان (Double-Win) طراحی طلایی اختصاصی دارد
   const photo = await renderSlipResultPNG(slip);
 
+  // v12.0 — Broadcast mode: قالب استادیومی متناظر → sendPhoto بدون کپشن
+  const templateKind: StadiumKind = slip.status === "DOUBLE_WIN" ? "DOUBLE_WIN" : slip.status === "MIDDLE_TRAP" ? "LOSS" : "WIN";
+  const broadcast = await stadiumActive(templateKind);
+
   let ok = false;
   if (photo) {
-    ok = (await tgSendPhoto(photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`)).ok;
+    ok = (await tgSendPhoto(photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`, broadcast)).ok;
   } else {
     ok = (await tgCall("sendMessage", { chat_id: await channelId(), text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   }
@@ -584,3 +617,96 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
   }
   return res.ok;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// v12.0 — گزارش برآیند روزانه روی قالب استادیومی DAILY_REPORT
+// (۱۰۸۰×۱۴۴۰ — ۴ KPI + ۴ ردیف بازی تسویه‌شده — فقط نتیجه واقعی ESPN)
+// ═══════════════════════════════════════════════════════════════
+
+/** کلید روز تهران برای Dedupe گزارش روزانه */
+function tehranDayKey(d = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(d);
+}
+
+const KEY_LAST_DIGEST_DAY = "last_daily_digest_day";
+
+/**
+ * پوستر برآیند روزانه @aineobet — یک‌بار در هر روز تهران (از زمان‌بند سرور).
+ * KPIها: تعداد تسویه · وین‌ریت · جکپات · سود خالص واحدِ همان روز.
+ */
+export async function sendDailyDigest(force = false): Promise<boolean> {
+  const status = await telegramStatus();
+  if (!status.configured || !status.channelSet) return false;
+
+  const today = tehranDayKey();
+  if (!force) {
+    const last = await getSetting(KEY_LAST_DIGEST_DAY);
+    if (last === today) return false;
+  }
+
+  // بازی‌های تسویه‌شده «امروز تهران» — فقط کارت‌های واقعی تاییدشده
+  const rows = await db.issuedSlip.findMany({
+    where: {
+      supervisorApproved: true,
+      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+      settledAt: { not: null },
+    },
+    orderBy: { settledAt: "desc" },
+    take: 60,
+  });
+  const todayRows = rows.filter((r) => tehranDayKey(r.settledAt as Date) === today);
+
+  const settled = todayRows.length;
+  const wins = todayRows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+  const jackpots = todayRows.filter((r) => r.status === "DOUBLE_WIN").length;
+  const net = todayRows.reduce((a, r) => a + (r.netProfit ?? 0), 0);
+  const staked = todayRows.reduce((a, r) => a + r.stakeA + r.stakeB, 0);
+  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+
+  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+  const timeEn = (d: Date) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d);
+
+  const photo = await renderDailyReportPNG({
+    dateLabelEn,
+    kpis: [
+      { label: "TICKETS SETTLED", value: String(settled), color: C_cyan },
+      { label: "CHANNEL WIN-RATE", value: `${winRate.toFixed(0)}%`, color: C_emerald },
+      { label: "GOLDEN JACKPOTS", value: String(jackpots), color: C_gold },
+      { label: "NET UNITS TODAY", value: `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}`, color: net >= 0 ? C_emerald : C_rose },
+    ],
+    matches: todayRows.slice(0, 4).map((r) => ({
+      teams: `${r.homeTeam} vs ${r.awayTeam}`,
+      score: `${r.homeGoals ?? 0}-${r.awayGoals ?? 0}`,
+      verdict: `${r.status.replace("_", " ")} · settled ${r.settledAt ? timeEn(r.settledAt) : ""} Tehran`,
+      profit: r.netProfit ?? 0,
+    })),
+    dayNetProfit: Math.round(net * 100) / 100,
+    daySettled: settled,
+    dayStaked: Math.round(staked),
+  });
+
+  const caption =
+    `📊 <b>NEOBET QUANT PRO • @AINEOBET — Daily Settlement Digest</b>\n` +
+    `${settled} کارت امروز روی اسکوربورد رسمی ESPN تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد\n` +
+    `🔒 هیچ شبیه‌سازی و هیچ کارت کاغذی در این گزارش نیست.`;
+
+  const broadcast = await stadiumActive("DAILY_REPORT");
+  let res: { ok: boolean; detail: string };
+  try {
+    res = await tgSendPhoto(photo, caption, `daily-digest-${today}.png`, broadcast);
+  } catch (err) {
+    console.warn("daily digest render failed:", err);
+    res = await tgCall("sendMessage", { chat_id: await channelId(), text: caption, parse_mode: "HTML", disable_web_page_preview: true });
+  }
+  if (res.ok) {
+    await setSetting(KEY_LAST_DIGEST_DAY, today);
+    await logOutbox(null, "DAILY_DIGEST", true, broadcast ? "broadcast" : "sent");
+  }
+  return res.ok;
+}
+
+// پالت hex برای KPIهای گزارش روزانه (مستقل از ثابت‌های card-render)
+const C_cyan = "#38d6f5";
+const C_emerald = "#3ddc97";
+const C_gold = "#f5c542";
+const C_rose = "#ff6b7a";

@@ -74,8 +74,10 @@ async function runTick(): Promise<void> {
     const lastReportDay = st.lastDailyReportAt ? tehranNowKey(st.lastDailyReportAt) : null;
     if (th.hour === DAILY_REPORT_HOUR_TEHRAN && th.minute < DAILY_REPORT_MINUTE_WINDOW && lastReportDay !== todayKey) {
       try {
-        const { sendWinRateReport } = await import("./telegram-service");
+        const { sendWinRateReport, sendDailyDigest } = await import("./telegram-service");
         const ok = await sendWinRateReport(true);
+        // v12.0 — پوستر برآیند روزانه روی قالب استادیومی DAILY_REPORT (فقط نتایج واقعی)
+        await sendDailyDigest(true).catch((e: unknown) => console.warn("[scheduler] daily digest failed:", e));
         if (ok) {
           patchSchedulerStatus({ lastDailyReportAt: Date.now() });
           await setSetting("scheduler_last_daily_report", new Date().toISOString()).catch(() => undefined);

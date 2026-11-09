@@ -25,6 +25,7 @@ import { faNum, faPctSigned } from "@/lib/format";
 import { TacticalPitch } from "@/components/app/fx/tactical-pitch";
 import { PulseFlow, type FlowNode } from "@/components/app/fx/pulse-flow";
 import { AnimNum } from "@/components/app/fx/anim-num";
+import { RolloverLadder } from "@/components/app/autopilot/rollover-ladder";
 import { useQuantStore } from "@/lib/store";
 
 const PIPELINE: FlowNode[] = [
@@ -123,6 +124,9 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
 
       {/* دک فشرده فلش‌کارت‌های آماده (v3.0) */}
       {autopilotDeck}
+
+      {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (کنار جریان فلش‌کارت‌ها) */}
+      <RolloverLadder startBank={100} />
 
       {/* رادار اسکنر خودکار زنده (v3.0) */}
       {autopilotRadar}

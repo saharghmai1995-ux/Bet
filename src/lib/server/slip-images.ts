@@ -1,11 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// تصویرسازی کارت‌های کانال (Slip Image Facade) — v10.0
+// تصویرسازی کارت‌های کانال (Slip Image Facade) — v12.0 NeoBet
 //
 // نسخه‌های ≤ v9 از تولید تصویر هوش مصنوعی (z-ai-web-dev-sdk) استفاده می‌کردند:
 //   · خطای content-filter 1301 · تأخیر ~۲۰ ثانیه · متن‌های به‌هم‌ریخته در تصویر
-//     (باگ نمایشی — نام تیم/اعداد اشتباه رندر می‌شد)
 // v10.0: تمام تصاویر با رندر برداری قطعی (card-render.ts + sharp) ساخته می‌شوند
-//   · متن = دقیقاً داده واقعی (صفر توهم) · <۱۰۰ms · صفر خطای فیلتر محتوا
+// v12.0: قالب‌های استادیومی 1080×1440 + لوگوی رسمی باشگاه‌ها از فید زنده ESPN
+//   (کش دیسکی ۷ روزه) + برندینگ NEOBET QUANT PRO • @AINEOBET
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { IssuedSlip } from "@prisma/client";
@@ -14,9 +14,13 @@ import {
   renderResultPNG,
   renderTeaserPNG,
   renderWinRateReportPNG,
+  renderDailyReportPNG,
+  renderRolloverLadderPNG,
   englishSelectionLabel,
   type ResultKind,
 } from "./card-render";
+import { fetchTeamLogoBuffer } from "./stadium-store";
+import { fetchEspnEvents, normTeam } from "./live-sources";
 import { TIMING_WINDOWS, type TimingWindowKey } from "@/lib/timing-window";
 
 function parseLegs(json: string | null): string[] {
@@ -51,10 +55,48 @@ function timingLineOf(slip: IssuedSlip): { title: string; detail: string; state:
   return { title: meta.nameEn.toUpperCase(), detail, state: timingStateOf(start, end, slip.kickoff) };
 }
 
-function cardBase(slip: IssuedSlip) {
+// ═════════════════════ لوگوی باشگاه‌ها از فید زنده ESPN (کش دیسکی) ═════════════════════
+
+let logoFeedCache: { at: number; map: Map<string, string> } | null = null;
+const LOGO_FEED_TTL = 30 * 60_000; // ۳۰ دقیقه
+
+/** نقشه نام‌نرمال‌شده تیم → URL لوگوی ESPN */
+async function logoUrlMap(): Promise<Map<string, string>> {
+  if (logoFeedCache && Date.now() - logoFeedCache.at < LOGO_FEED_TTL) return logoFeedCache.map;
+  const map = new Map<string, string>();
+  try {
+    const events = await fetchEspnEvents();
+    for (const ev of events ?? []) {
+      if (ev.homeLogo) map.set(normTeam(ev.homeTeam), ev.homeLogo);
+      if (ev.awayLogo) map.set(normTeam(ev.awayTeam), ev.awayLogo);
+    }
+  } catch {
+    /* فید در دسترس نیست — مونوگرام چاپ می‌شود */
+  }
+  logoFeedCache = { at: Date.now(), map };
+  return map;
+}
+
+/** لوگوی دو تیم یک اسلیپ (به‌صورت بافر PNG کش‌شده) — صفر شکست سخت */
+async function clubLogos(slip: IssuedSlip): Promise<{ homeLogo: Buffer | null; awayLogo: Buffer | null }> {
+  try {
+    const map = await logoUrlMap();
+    const [homeUrl, awayUrl] = [map.get(normTeam(slip.homeTeam)) ?? null, map.get(normTeam(slip.awayTeam)) ?? null];
+    const [homeLogo, awayLogo] = await Promise.all([
+      fetchTeamLogoBuffer(homeUrl, slip.homeTeam),
+      fetchTeamLogoBuffer(awayUrl, slip.awayTeam),
+    ]);
+    return { homeLogo, awayLogo };
+  } catch {
+    return { homeLogo: null, awayLogo: null };
+  }
+}
+
+async function cardBase(slip: IssuedSlip) {
   const legsA = parseLegs(slip.legsA);
   const legsB = parseLegs(slip.legsB);
   const timing = timingLineOf(slip);
+  const logos = await clubLogos(slip);
   return {
     homeTeam: slip.homeTeam,
     awayTeam: slip.awayTeam,
@@ -76,6 +118,8 @@ function cardBase(slip: IssuedSlip) {
     hashShort: slip.hash.slice(0, 12),
     espnUrl: slip.espnUrl,
     doubleWin: (slip.cellsA && slip.cellsB ? overlapCells(slip.cellsA, slip.cellsB) : false) || false,
+    homeLogo: logos.homeLogo,
+    awayLogo: logos.awayLogo,
   };
 }
 
@@ -90,14 +134,14 @@ function overlapCells(cellsAJson: string, cellsBJson: string): boolean {
   }
 }
 
-/** تصویر کارت کامل فلش‌کارت (English broadcast card) */
+/** تصویر کارت کامل فلش‌کارت (English broadcast card — قالب استادیومی 1080×1440) */
 export async function renderSlipCardPNG(slip: IssuedSlip): Promise<Buffer> {
-  return renderMatchCardPNG(cardBase(slip));
+  return renderMatchCardPNG(await cardBase(slip));
 }
 
 /** تصویر تیزر — تیپ B قفل (Teaser) */
 export async function renderSlipTeaserPNG(slip: IssuedSlip): Promise<Buffer> {
-  return renderTeaserPNG(cardBase(slip));
+  return renderTeaserPNG(await cardBase(slip));
 }
 
 const KIND_MAP: Record<string, ResultKind> = {
@@ -118,6 +162,24 @@ export async function renderSlipResultPNG(slip: IssuedSlip): Promise<Buffer> {
         : slip.status === "DOUBLE_WIN"
           ? `${slip.stakeA.toFixed(1)} x ${slip.oddsA.toFixed(2)} + ${slip.stakeB.toFixed(1)} x ${slip.oddsB.toFixed(2)} - 100`
           : "both tips lost";
+
+  // وین‌ریت لحظه‌ای کانال (فقط کارت‌های تاییدشده) برای نوار پایینی WIN
+  let winRatePct: number | null = null;
+  try {
+    const { db } = await import("@/lib/db");
+    const rows = await db.issuedSlip.findMany({
+      where: { supervisorApproved: true, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+      select: { status: true },
+    });
+    if (rows.length > 0) {
+      const wins = rows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+      winRatePct = (wins / rows.length) * 100;
+    }
+  } catch {
+    /* آمار جانبی — شکست سخت ندارد */
+  }
+
+  const logos = await clubLogos(slip);
   return renderResultPNG({
     homeTeam: slip.homeTeam,
     awayTeam: slip.awayTeam,
@@ -125,10 +187,20 @@ export async function renderSlipResultPNG(slip: IssuedSlip): Promise<Buffer> {
     league: slip.league,
     kind,
     netProfit: slip.netProfit ?? 0,
+    profitA: slip.profitA ?? null,
+    profitB: slip.profitB ?? null,
+    stakeAHint: slip.stakeA,
+    stakeBHint: slip.stakeB,
+    oddsAHint: slip.oddsA,
+    oddsBHint: slip.oddsB,
+    winRatePct,
+    lesson: slip.settleNote,
     formula,
     hashShort: slip.hash.slice(0, 12),
+    homeLogo: logos.homeLogo,
+    awayLogo: logos.awayLogo,
   });
 }
 
-export { renderWinRateReportPNG };
-export type { WinRateReportInput } from "./card-render";
+export { renderWinRateReportPNG, renderDailyReportPNG, renderRolloverLadderPNG };
+export type { WinRateReportInput, DailyReportInput, RolloverLadderInput } from "./card-render";

@@ -38,10 +38,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
+import { allocationPlans } from "@/lib/engine/asymmetric";
 import { computePairTiming, faDuration, type TimingStatus } from "@/lib/timing-window";
 import { faNum, faPct } from "@/lib/format";
 import { useQuantStore } from "@/lib/store";
 import { SupervisorSeal } from "@/components/app/fx/supervisor-seal";
+import { cn } from "@/lib/utils";
 import type { FlashcardView } from "@/lib/autopilot-types";
 
 const TRUST_STYLES: Record<FlashcardView["trust"]["kind"], string> = {
@@ -184,6 +186,15 @@ export function FlashCard({
   const vetoed = sup?.veto ?? false;
   const dualBook = (sup?.executionMode ?? "DUAL_BOOK") === "DUAL_BOOK";
   const insuranceMode = marginPct <= 0; // S ≥ 1 → بدون عدد سود متناقض
+
+  // ═══ v11.0 — سوییچ دوحالته تخصیص بودجه (سود برابر ↔ شتاب‌دهنده نامتقارن) ═══
+  const boosterEligible = !vetoed && !insuranceMode && bothLosePct < 10;
+  const plans = useMemo(
+    () => (boosterEligible ? allocationPlans(pair.totalOddsA, pair.totalOddsB) : null),
+    [boosterEligible, pair.totalOddsA, pair.totalOddsB]
+  );
+  const [allocMode, setAllocMode] = useState<"EQUAL_PROFIT" | "PRINCIPAL_LOCK">("EQUAL_PROFIT");
+  const activePlan = plans ? (allocMode === "EQUAL_PROFIT" ? plans.equal : plans.booster) : null;
 
   return (
     <div className={`[perspective:1400px] ${compact ? "h-[430px]" : "h-[470px]"} w-full`}>
@@ -375,13 +386,75 @@ export function FlashCard({
             </div>
           </div>
 
+          {/* ═══ v11.0 — سوییچ دوحالته تخصیص: سود برابر ↔ شتاب‌دهنده نامتقارن ═══ */}
+          {plans && activePlan && (
+            <div className="space-y-2 rounded-xl border border-amber-500/30 bg-gradient-to-l from-amber-500/[0.08] to-emerald-500/[0.05] p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="flex items-center gap-1 text-[10px] font-bold text-amber-200">
+                  <Zap className="size-3.5 text-amber-400" /> استراتژی تخصیص بودجه ۱۰۰ واحدی
+                </p>
+                <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-black/30 p-0.5" role="radiogroup" aria-label="انتخاب استراتژی تخصیص بودجه">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={allocMode === "EQUAL_PROFIT"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAllocMode("EQUAL_PROFIT");
+                    }}
+                    className={cn(
+                      "h-6 rounded-md px-2 text-[9px] font-bold transition",
+                      allocMode === "EQUAL_PROFIT" ? "bg-emerald-500/25 text-emerald-200" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    ⚖️ حالت ۱: سود برابر
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={allocMode === "PRINCIPAL_LOCK"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAllocMode("PRINCIPAL_LOCK");
+                    }}
+                    className={cn(
+                      "h-6 rounded-md px-2 text-[9px] font-bold transition",
+                      allocMode === "PRINCIPAL_LOCK" ? "bg-amber-500/25 text-amber-200" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    🚀 حالت ۲: شتاب‌دهنده نامتقارن
+                  </button>
+                </div>
+              </div>
+              {allocMode === "EQUAL_PROFIT" ? (
+                <p className="text-[10px] leading-4 text-muted-foreground">
+                  ⚖️ <b className="text-emerald-300">سود تضمینی برابر:</b> چه تیپ A ببرد چه تیپ B — دقیقاً{" "}
+                  <b className="font-num text-emerald-300" dir="ltr">+{faNum(plans.equal.profitIfA, 1)} واحد</b> سود خالص (استیک‌ها: {faNum(plans.equal.stakeA, 1)} / {faNum(plans.equal.stakeB, 1)})
+                </p>
+              ) : (
+                <div className="space-y-1 text-[10px] leading-4">
+                  <p>
+                    🚀 اگر <b className="text-sky-300">تیپ A ببرد</b>: <b className="font-num text-amber-300" dir="ltr">+{faNum(plans.booster.profitIfA, 1)} واحد سود خالص</b> (استیک {faNum(plans.booster.stakeA, 1)} روی ضریب {pair.totalOddsA.toFixed(2)})
+                  </p>
+                  <p>
+                    🔒 اگر <b className="text-emerald-300">تیپ B ببرد</b>: <b className="font-num text-emerald-300" dir="ltr">0.0 واحد (برگشت ۱۰۰٪ اصل پول بدون ضرر)</b> (استیک {faNum(plans.booster.stakeB, 1)} روی ضریب {pair.totalOddsB.toFixed(2)})
+                  </p>
+                  <p className="text-[9px] text-muted-foreground">قفل اصل سرمایه روی تیپ B + پرتاب سود روی تیپ A — مخصوص کارت‌های ریسک زیر ۱۰٪</p>
+                </div>
+              )}
+              <p className="text-[9px] text-muted-foreground">
+                استیک فعال روی کارت: <b className="font-num text-foreground" dir="ltr">{faNum(activePlan.stakeA, 1)} / {faNum(activePlan.stakeB, 1)}</b> واحد — ثبت واقعی همیشه با حالت ۱ (سود برابر) انجام می‌شود؛ حالت ۲ نقشه اجرای شخصی توست.
+              </p>
+            </div>
+          )}
+
           {/* ═══ v10.0 — بنر بهترین ساعت ثبت ضریب ═══ */}
           {!vetoed && (
             <TimingBanner
               kickoff={match.kickoff}
-              legsA={pair.structure.legsA}
+              legsA={pair.structure.legsA ?? []}
               oddsA={pair.totalOddsA}
-              legsB={pair.structure.legsB}
+              legsB={pair.structure.legsB ?? []}
               oddsB={pair.totalOddsB}
             />
           )}
@@ -442,12 +515,14 @@ export function FlashCard({
                 <b className="font-num text-foreground" dir="ltr">۱۰,۰۰۰</b> شبیه‌سازی مونت‌کارلو، این الگو بالاترین امتیاز کیفیت را گرفت:
               </p>
               <p className="mt-1 rounded-lg bg-black/30 p-1.5 text-[10px] leading-4">
-                <b className="text-foreground">UtilityScore</b> = (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۴) + (شانس دو-برد{" "}
-                {faNum(sup.doubleWinProbPct, 1)}٪ × ۱.۸) − (ریسک باخت همزمان {faNum(sup.jointLossRiskPct, 1)}٪ × ۲.۵) ={" "}
+                <b className="text-foreground">SupervisorScore v11.0</b> = (پوشش متعامد {faNum(sup.coveragePct, 0)}٪ × ۱.۵) + (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۳) − (ریسک {faNum(sup.jointLossRiskPct, 1)}٪^۱.۷۵) ={" "}
                 <b className={vetoed ? "text-rose-300" : "text-emerald-300"} dir="ltr">
                   {sup.raw}
                 </b>{" "}
                 → امتیاز نهایی <b className="text-amber-300" dir="ltr">{sup.score100}/100</b>
+                <span className="mt-0.5 block text-[9px] text-muted-foreground">
+                  فرمول v11.0: پاداش فریبنده Double-Win حذف شد — ۱۰۰٪ بر پایه پهنای پوشش متعامد و کمینه‌سازی ریسک باخت همزمان (گیت سخت: ریسک &gt; ۹.۸٪ = وتو خودکار)
+                </span>
               </p>
               {sup.vetoReason && (
                 <p className="mt-1 flex items-start gap-1 text-[10px] text-rose-300">

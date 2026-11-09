@@ -1,0 +1,717 @@
+     1→"use client";
+     2→
+     3→// ─────────────────────────────────────────────────────────────────────────────
+     4→// فلش‌کارت سه‌بعدی دوطرفه تیپ مکمل (3D Flip Flashcard) — v8.0 Supervisor Quant
+     5→//   روی کارت  : 👑 تنها «تک‌تیپ طلایی مونت‌کارلو» تاییدشده ایجنت سوپروایزر ارشد
+     6→//               + مهر هولوگرافیک + برچسب بوک‌میکر (ضد گوبینگ) + اکشن‌ها
+     7→//   پشت کارت  : سناریوی تصمیم سوپروایزر (فرمول امتیاز + ۴ الگوی رد‌شده)
+     8→//               + خلاصه مناظره ۳ خطی + مینی‌مپ پوشش ۶×۶ + وضعیت T-60 + ESPN
+     9→// v8.0: حذف «الگوی بعدی» — کاربر فقط یک زوج برنده نهایی می‌بیند.
+    10→// فرمول صحیح سود واحد: netUnits = +(Payout − B) که Payout = B / S
+    11→// ─────────────────────────────────────────────────────────────────────────────
+    12→
+    13→import { useEffect, useMemo, useState } from "react";
+    14→import {
+    15→  BadgeCheck,
+    16→  BrainCircuit,
+    17→  Check,
+    18→  Copy,
+    19→  Award,
+    20→  ChevronDown,
+    21→  Clock,
+    22→  ExternalLink,
+    23→  RefreshCw,
+    24→  SearchCheck,
+    25→  ShieldAlert,
+    26→  ShoppingCart,
+    27→  Sparkles,
+    28→  Trophy,
+    29→  Scale,
+    30→  Banknote,
+    31→  AlertTriangle,
+    32→  Loader2,
+    33→  Zap,
+    34→  Crown,
+    35→  Lock,
+    36→  MapPin,
+    37→} from "lucide-react";
+    38→import { Button } from "@/components/ui/button";
+    39→import { Badge } from "@/components/ui/badge";
+    40→import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
+    41→import { computePairTiming, faDuration, type TimingStatus } from "@/lib/timing-window";
+    42→import { faNum, faPct } from "@/lib/format";
+    43→import { useQuantStore } from "@/lib/store";
+    44→import { SupervisorSeal } from "@/components/app/fx/supervisor-seal";
+    45→import type { FlashcardView } from "@/lib/autopilot-types";
+    46→
+    47→const TRUST_STYLES: Record<FlashcardView["trust"]["kind"], string> = {
+    48→  GOLD: "border-amber-400/50 bg-amber-400/15 text-amber-300 shadow-[0_0_14px_rgba(251,191,36,0.35)]",
+    49→  T60: "border-violet-400/50 bg-violet-400/15 text-violet-300 shadow-[0_0_14px_rgba(167,139,250,0.3)]",
+    50→  SILVER: "border-zinc-400/30 bg-zinc-400/10 text-zinc-300",
+    51→};
+    52→
+    53→const TRUST_ICONS: Record<FlashcardView["trust"]["kind"], typeof Award> = {
+    54→  GOLD: Award,
+    55→  T60: Sparkles,
+    56→  SILVER: BadgeCheck,
+    57→};
+    58→
+    59→/** متن آماده کپی تیپ — v8.0 (تک‌تیپ طلایی سوپروایزر + فرمول صحیح سود) */
+    60→export function cardCopyText(v: FlashcardView): string {
+    61→  const p = v.pair;
+    62→  const sup = v.supervisor;
+    63→  const head = `⚽ فوتبال‌کوانت v8.0 Supervisor Quant — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
+    64→  const crownLine = sup
+    65→    ? `👑 تک‌تیپ تاییدشده سوپروایزر — امتیاز مونت‌کارلو: ${sup.score100}/۱۰۰${p.archetype ? ` (${p.archetype.short})` : ""}`
+    66→    : p.archetype
+    67→      ? `📐 الگو: ${p.archetype.short}`
+    68→      : "";
+    69→  const profitLine =
+    70→    p.guaranteedMarginPct > 0
+    71→      ? `💰 سود تضمینی: +${p.guaranteedMarginPct.toFixed(1)}٪ (+${faNum(p.equalProfit.profit, 1)} واحد سود خالص)`
+    72→      : `🛡️ پوشش بیمه سرمایه — بازگشت وجه در سناریوی پایه`;
+    73→  return [
+    74→    head,
+    75→    crownLine,
+    76→    `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeA, 1)} واحد`,
+    77→    `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeB, 1)} واحد`,
+    78→    profitLine,
+    79→    `✅ پوشش سناریوها: ${(p.archetype ? p.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100).toFixed(0)}٪ | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
+    80→    `⚖️ ${p.verdict}`,
+    81→  ]
+    82→    .filter(Boolean)
+    83→    .join("\n");
+    84→}
+    85→
+    86→export type DeepLlmState = "IDLE" | "RUNNING" | "CACHED" | "RATELIMITED";
+    87→
+    88→// ═══ v10.0 — نشانگر بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ═══
+    89→
+    90→const TIMING_STATUS_STYLE: Record<TimingStatus, string> = {
+    91→  OPEN: "border-emerald-500/40 bg-emerald-500/[0.08] text-emerald-300",
+    92→  WAITING: "border-amber-500/40 bg-amber-500/[0.07] text-amber-300",
+    93→  LATE: "border-rose-500/40 bg-rose-500/[0.07] text-rose-300",
+    94→  KICKED_OFF: "border-white/15 bg-white/[0.03] text-muted-foreground",
+    95→};
+    96→
+    97→/** بنر پنجره زمانی طلایی ثبت — با شمارش معکوس زنده (به‌روزرسانی هر ۳۰ ثانیه) */
+    98→function TimingBanner({ kickoff, legsA, oddsA, legsB, oddsB }: { kickoff: string; legsA: string[]; oddsA: number; legsB: string[]; oddsB: number }) {
+    99→  const [now, setNow] = useState(() => Date.now());
+   100→  useEffect(() => {
+   101→    const t = setInterval(() => setNow(Date.now()), 30_000);
+   102→    return () => clearInterval(t);
+   103→  }, []);
+   104→  const pair = useMemo(() => computePairTiming(kickoff, legsA, oddsA, legsB, oddsB, now), [kickoff, legsA, oddsA, legsB, oddsB, now]);
+   105→
+   106→  const rows = pair.same ? [pair.a] : [pair.a, pair.b];
+   107→  const sideLabel = (i: number) => (pair.same ? "تیپ A + تیپ B" : i === 0 ? "تیپ A" : "تیپ B");
+   108→
+   109→  return (
+   110→    <div className="space-y-1.5 rounded-xl border border-amber-500/30 bg-gradient-to-l from-amber-500/[0.08] to-transparent p-2.5">
+   111→      <p className="flex items-center gap-1 text-[10px] font-bold text-amber-300">
+   112→        ⏱️ بهترین زمان ثبت این تیپ (پنجره طلایی ضرایب — v10.0)
+   113→      </p>
+   114→      {rows.map((w, i) => {
+   115→        const style = TIMING_STATUS_STYLE[w.status];
+   116→        const clock = new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit" });
+   117→        return (
+   118→          <div key={`${w.windowKey}-${i}`} className={`rounded-lg border px-2 py-1.5 ${style}`}>
+   119→            <p className="text-[10.5px] font-bold leading-4">
+   120→              {w.meta.icon} {sideLabel(i)}: {w.meta.nameFa}
+   121→              <span className="mx-1 font-normal text-foreground/70">|</span>
+   122→              ساعت دقیق پیشنهادی ثبت:
+   123→              <b className="mx-1 font-num" dir="ltr">{w.suggestedClock}</b>
+   124→            </p>
+   125→            <p className="mt-0.5 text-[9.5px] leading-3.5 opacity-90">
+   126→              {w.statusText}
+   127→              {w.status === "OPEN" && w.msUntilClose > 0 && ` — ${faDuration(w.msUntilClose)} تا بستن پنجره`}
+   128→              {w.status === "WAITING" && w.msUntilOpen > 0 && ` (${clock.format(new Date(w.startAt))} تا ${clock.format(new Date(w.endAt))})`}
+   129→            </p>
+   130→          </div>
+   131→        );
+   132→      })}
+   133→      <p className="text-[9px] leading-3 text-muted-foreground">
+   134→        منطق علمی: {rows[0].meta.rationale}
+   135→      </p>
+   136→    </div>
+   137→  );
+   138→}
+   139→
+   140→export function FlashCard({
+   141→  view,
+   142→  inCart,
+   143→  onToggleCart,
+   144→  compact = false,
+   145→  onDeepLlm,
+   146→  deepLlmState = "IDLE",
+   147→}: {
+   148→  view: FlashcardView;
+   149→  inCart: boolean;
+   150→  onToggleCart: () => void;
+   151→  compact?: boolean;
+   152→  /** v5.0 — تحلیل عمیق LLM فقط با تقاضای کاربر (کش ۶۰ دقیقه‌ای + صف ۱۵ ثانیه‌ای) */
+   153→  onDeepLlm?: () => void;
+   154→  deepLlmState?: DeepLlmState;
+   155→}) {
+   156→  const [flipped, setFlipped] = useState(false);
+   157→  const [copied, setCopied] = useState(false);
+   158→  const tier = useQuantStore((s) => s.config.tier);
+   159→  const setUsdtModalOpen = useQuantStore((s) => s.setUsdtModalOpen);
+   160→  const isFree = tier === "FREE";
+   161→
+   162→  const { pair, match } = view;
+   163→  const matrix = useMemo(() => buildScoreMatrix(view.lambdaHome, view.lambdaAway), [view.lambdaHome, view.lambdaAway]);
+   164→  const coverage = useMemo(() => coverageGrid(pair.structure, match.id, matrix), [pair.structure, match.id, matrix]);
+   165→  // v6.0 — شناسه رسمی ESPN برای باکس راستی‌آزمایی (espn-<slug>-<eventId>)
+   166→  const verificationEventId = useMemo(() => {
+   167→    const ext = match.externalId ?? "";
+   168→    return ext.startsWith("espn-") ? (ext.split("-").pop() ?? null) : null;
+   169→  }, [match.externalId]);
+   170→
+   171→  const handleCopy = (e: React.MouseEvent) => {
+   172→    e.stopPropagation();
+   173→    void navigator.clipboard?.writeText(cardCopyText(view));
+   174→    setCopied(true);
+   175→    setTimeout(() => setCopied(false), 1600);
+   176→  };
+   177→
+   178→  const TrustIcon = TRUST_ICONS[view.trust.kind];
+   179→  const marginPct = pair.guaranteedMarginPct;
+   180→  const bothLosePct = pair.jointStates.bothLose * 100;
+   181→  const riskTone = bothLosePct < 8 ? "text-emerald-400" : bothLosePct < 15 ? "text-amber-400" : "text-rose-400";
+   182→  const riskBar = bothLosePct < 8 ? "bg-emerald-500" : bothLosePct < 15 ? "bg-amber-500" : "bg-rose-500";
+   183→  const sup = view.supervisor;
+   184→  const vetoed = sup?.veto ?? false;
+   185→  const dualBook = (sup?.executionMode ?? "DUAL_BOOK") === "DUAL_BOOK";
+   186→  const insuranceMode = marginPct <= 0; // S ≥ 1 → بدون عدد سود متناقض
+   187→
+   188→  return (
+   189→    <div className={`[perspective:1400px] ${compact ? "h-[430px]" : "h-[470px]"} w-full`}>
+   190→      <div
+   191→        role="button"
+   192→        tabIndex={0}
+   193→        aria-pressed={flipped}
+   194→        aria-label={`فلش‌کارت ${match.homeTeam} مقابل ${match.awayTeam} — برای چرخش کلیک کنید`}
+   195→        onClick={() => setFlipped((f) => !f)}
+   196→        onKeyDown={(e) => {
+   197→          if (e.key === "Enter" || e.key === " ") {
+   198→            e.preventDefault();
+   199→            setFlipped((f) => !f);
+   200→          }
+   201→        }}
+   202→        className={`glass relative size-full cursor-pointer rounded-2xl border [transform-style:preserve-3d] transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+   203→          vetoed ? "border-rose-500/30" : "border-white/10"
+   204→        }`}
+   205→        style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
+   206→      >
+   207→        {/* ═══════════ روی کارت ═══════════ */}
+   208→        {/* fix v8.1: روی چهره غیرفعال pointer-events-none تا دکمه‌های پشتِ کارت، کلیک را نميربايند */}
+   209→        {/* fix v8.1: محتوای بلند فقط داخل ناحیه اسکرول می‌شود؛ نوار اکشن همیشه پایین کارت پین می‌ماند */}
+   210→        <div
+   211→          aria-hidden={flipped}
+   212→          className={`absolute inset-0 flex flex-col gap-2 overflow-hidden rounded-2xl bg-[rgba(10,14,24,0.92)] p-4 [backface-visibility:hidden] ${flipped ? "pointer-events-none" : "pointer-events-auto"}`}
+   213→        >
+   214→          {/* ناحیه اسکرول‌شونده محتوا — هرگز به بیرون کارت سرریز نمی‌شود */}
+   215→          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain">
+   216→          {/* هدر — v8.0: نام کامل تیم‌ها بدون برش (flex-wrap + leading-snug) */}
+   217→          <div className="flex items-start justify-between gap-2">
+   218→            <div className="min-w-0 flex-1">
+   219→              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+   220→                <span className="inline-block size-1.5 rounded-full bg-cyan-400" />
+   221→                {match.league}
+   222→                <Clock className="size-3" />
+   223→                <span dir="ltr">{new Date(match.kickoff).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}</span>
+   224→              </div>
+   225→              <h3 className="text-sm font-bold leading-snug sm:text-base">
+   226→                <span className="break-words">{match.homeTeam}</span> <span className="text-muted-foreground">×</span>{" "}
+   227→                <span className="break-words">{match.awayTeam}</span>
+   228→              </h3>
+   229→            </div>
+   230→            <div className="flex shrink-0 flex-col items-end gap-1">
+   231→              <span className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${TRUST_STYLES[view.trust.kind]}`}>
+   232→                <TrustIcon className="size-3" />
+   233→                {view.trust.label}
+   234→              </span>
+   235→              {match.weatherAdjusted && (
+   236→                <span
+   237→                  className="flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[9px] font-semibold text-sky-300"
+   238→                  title={`آب‌وهوای واقعی ورزشگاه: ${match.weather ?? ""} — لامبدا −۸٪ اصلاح شد`}
+   239→                >
+   240→                  🌧️ تعدیل جوی زنده
+   241→                </span>
+   242→              )}
+   243→            </div>
+   244→          </div>
+   245→
+   246→          {/* ═══ v8.0 — نوار تک‌تیپ طلایی سوپروایزر (یا وتو) ═══ */}
+   247→          {vetoed ? (
+   248→            <div className="flex items-center gap-2 rounded-lg border border-rose-500/35 bg-rose-500/[0.09] px-2.5 py-1.5">
+   249→              <ShieldAlert className="size-4 shrink-0 text-rose-400" />
+   250→              <p className="text-[10px] font-bold leading-4 text-rose-300">
+   251→                وتو شده توسط ایجنت سوپروایزر: ریسک نامتقارن — عدم پیشنهاد شرط
+   252→                {sup?.vetoReason && <span className="block font-normal text-rose-200/80">{sup.vetoReason}</span>}
+   253→              </p>
+   254→            </div>
+   255→          ) : (
+   256→            <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-gradient-to-l from-amber-500/[0.12] to-emerald-500/[0.08] px-2.5 py-1.5">
+   257→              <SupervisorSeal size={34} approved score={sup?.score100} />
+   258→              <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-[10px] font-bold text-amber-200">
+   259→                <Crown className="size-3.5 shrink-0 text-amber-300" />
+   260→                تنها تیپ تاییدشده سوپروایزر (Monte-Carlo Winner)
+   261→                {pair.archetype && <span className="font-medium text-amber-200/85">· {pair.archetype.short}</span>}
+   262→              </p>
+   263→            </div>
+   264→          )}
+   265→
+   266→          {/* باکس دوقلوی تیپ مکمل */}
+   267→          <div className="grid grid-cols-2 gap-2">
+   268→            <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-2.5">
+   269→              <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold text-sky-300">
+   270→                <span className="inline-block size-2 rounded-sm bg-sky-500" />
+   271→                تیپ A — ضریب هدف ~۲
+   272→              </p>
+   273→              <p className="line-clamp-3 min-h-[42px] text-[11px] leading-4 text-foreground/90">{pair.labelA}</p>
+   274→              <div className="mt-1.5 flex items-end justify-between gap-1">
+   275→                <div>
+   276→                  <p className="text-[9px] text-muted-foreground">ضریب</p>
+   277→                  <p className="font-num text-base font-bold text-sky-300" dir="ltr">{pair.totalOddsA.toFixed(2)}</p>
+   278→                </div>
+   279→                <div className="text-left">
+   280→                  <p className="text-[9px] text-muted-foreground">استیک خودکار</p>
+   281→                  <p className="font-num text-base font-bold text-foreground" dir="ltr">{faNum(pair.equalProfit.stakeA, 1)}</p>
+   282→                </div>
+   283→              </div>
+   284→              {/* v8.0 — برچسب انطباق ضد گوبینگ */}
+   285→              <p className="mt-1.5 flex items-center gap-1 border-t border-white/10 pt-1 text-[8.5px] font-medium text-sky-200/80">
+   286→                <MapPin className="size-2.5 shrink-0" />
+   287→                {dualBook ? "ثبت در بوک‌میکر اول (سایت A)" : "سایت واحد — برگه ۱ (پایه امن)"}
+   288→              </p>
+   289→            </div>
+   290→            <div className="relative overflow-hidden rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5">
+   291→              <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold text-emerald-300">
+   292→                <span className="inline-block size-2 rounded-sm bg-emerald-500" />
+   293→                تیپ B مکمل — ضریب ~۳
+   294→              </p>
+   295→              <p className={`line-clamp-3 min-h-[42px] text-[11px] leading-4 text-foreground/90 ${isFree ? "select-none blur-[5px]" : ""}`} aria-hidden={isFree}>
+   296→                {pair.labelB}
+   297→              </p>
+   298→              {isFree ? (
+   299→                <button
+   300→                  type="button"
+   301→                  onClick={(e) => {
+   302→                    e.stopPropagation();
+   303→                    setUsdtModalOpen(true);
+   304→                  }}
+   305→                  className="absolute inset-x-2.5 bottom-9 flex items-center justify-center gap-1 rounded-lg border border-emerald-400/40 bg-emerald-500/20 py-1 text-[9px] font-bold text-emerald-200 backdrop-blur-[2px] transition hover:bg-emerald-500/30"
+   306→                  aria-label="تیپ B مخصوص اعضای کانال VIP — باز کردن مودال اشتراک"
+   307→                >
+   308→                  <Lock className="size-3" /> 🔒 مخصوص اعضای کانال VIP
+   309→                </button>
+   310→              ) : null}
+   311→              <div className="mt-1.5 flex items-end justify-between gap-1">
+   312→                <div>
+   313→                  <p className="text-[9px] text-muted-foreground">ضریب</p>
+   314→                  <p className={`font-num text-base font-bold text-emerald-300 ${isFree ? "blur-[3px]" : ""}`} dir="ltr" aria-hidden={isFree}>
+   315→                    {pair.totalOddsB.toFixed(2)}
+   316→                  </p>
+   317→                </div>
+   318→                <div className="text-left">
+   319→                  <p className="text-[9px] text-muted-foreground">استیک خودکار</p>
+   320→                  <p className={`font-num text-base font-bold text-foreground ${isFree ? "blur-[3px]" : ""}`} dir="ltr" aria-hidden={isFree}>
+   321→                    {faNum(pair.equalProfit.stakeB, 1)}
+   322→                  </p>
+   323→                </div>
+   324→              </div>
+   325→              {/* v8.0 — برچسب انطباق ضد گوبینگ */}
+   326→              <p className="mt-1.5 flex items-center gap-1 border-t border-white/10 pt-1 text-[8.5px] font-medium text-emerald-200/80">
+   327→                <MapPin className="size-2.5 shrink-0" />
+   328→                {dualBook ? "ثبت در بوک‌میکر دوم یا صرافی (سایت B / Exchange)" : "سایت واحد — برگه ۲ (میکس امن دو بازی)"}
+   329→              </p>
+   330→            </div>
+   331→          </div>
+   332→
+   333→          {/* شاخص‌های کلیدی — v8.0: فرمول صحیح سود واحد / حالت بیمه سرمایه */}
+   334→          <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+   335→            {insuranceMode ? (
+   336→              <div className="flex items-center justify-between gap-2 text-[11px]">
+   337→                <span className="flex items-center gap-1 text-muted-foreground">
+   338→                  <ShieldAlert className="size-3.5 text-amber-400" /> پوشش بیمه سرمایه (S ≥ ۱)
+   339→                </span>
+   340→                <b className="text-amber-300">بازگشت سرمایه در سناریوی پایه — بدون سود تضمینی</b>
+   341→              </div>
+   342→            ) : (
+   343→              <div className="flex items-center justify-between text-[11px]">
+   344→                <span className="flex items-center gap-1 text-muted-foreground">
+   345→                  <Banknote className="size-3.5 text-emerald-400" /> سود خالص تضمینی داچینگ
+   346→                </span>
+   347→                <b className="text-emerald-300" dir="ltr">
+   348→                  +{faNum(marginPct, 1)}٪ (+{faNum(pair.equalProfit.profit, 1)} واحد سود خالص)
+   349→                </b>
+   350→              </div>
+   351→            )}
+   352→            <div className="flex items-center justify-between gap-2 text-[11px]">
+   353→              <span className="flex items-center gap-1 text-muted-foreground">
+   354→                <ShieldAlert className="size-3.5 text-amber-400" /> ریسک باخت همزمان
+   355→              </span>
+   356→              <span className="flex items-center gap-1.5">
+   357→                <b className={riskTone} dir="ltr">{faNum(bothLosePct, 1)}%</b>
+   358→                <span className={`text-[9px] ${riskTone}`}>{bothLosePct < 8 ? "بسیار امن" : bothLosePct < 12 ? "قابل قبول" : bothLosePct < 15 ? "مرزی" : "پرریسک"}</span>
+   359→              </span>
+   360→            </div>
+   361→            <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
+   362→              <div className={`h-1 rounded-full ${riskBar} transition-all`} style={{ width: `${Math.min(100, bothLosePct * 2.5)}%` }} />
+   363→            </div>
+   364→            <div className="flex items-center justify-between text-[11px]">
+   365→              <span className="flex items-center gap-1 text-muted-foreground">
+   366→                <Trophy className="size-3.5 text-cyan-400" /> ارزش نسبت به خط پیناکل
+   367→              </span>
+   368→              {pair.sharpEdgePct !== null ? (
+   369→                <b className={pair.sharpEdgePct > 0 ? "text-cyan-300" : pair.sharpEdgePct < 0 ? "text-rose-300" : "text-muted-foreground"} dir="ltr" title="ارزش عددی = (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰ نسبت به خط منصفانه/شارپ بازار">
+   370→                  {pair.sharpEdgePct > 0 ? "+" : ""}{faNum(pair.sharpEdgePct, 1)}% CLV
+   371→                </b>
+   372→              ) : (
+   373→                <b className="text-muted-foreground" dir="ltr">{faNum((pair.selectionA.evPct + pair.selectionB.evPct) / 2 * 100, 1)}% EV</b>
+   374→              )}
+   375→            </div>
+   376→          </div>
+   377→
+   378→          {/* ═══ v10.0 — بنر بهترین ساعت ثبت ضریب ═══ */}
+   379→          {!vetoed && (
+   380→            <TimingBanner
+   381→              kickoff={match.kickoff}
+   382→              legsA={pair.structure.legsA}
+   383→              oddsA={pair.totalOddsA}
+   384→              legsB={pair.structure.legsB}
+   385→              oddsB={pair.totalOddsB}
+   386→            />
+   387→          )}
+   388→
+   389→          </div>
+   390→
+   391→          {/* دکمه‌های عملیاتی — پین‌شده پایین کارت (همیشه قابل کلیک) */}
+   392→          <div className="shrink-0 grid grid-cols-[1fr_1fr_auto] gap-1.5" onClick={(e) => e.stopPropagation()}>
+   393→            <Button
+   394→              size="sm"
+   395→              className="h-8 gap-1 bg-gradient-to-l from-amber-500/80 to-amber-400/80 text-[11px] text-black hover:from-amber-500 hover:to-amber-400"
+   396→              onClick={() => setFlipped((f) => !f)}
+   397→              aria-label="چرخش کارت و مشاهده تحلیل"
+   398→            >
+   399→              <RefreshCw className="size-3.5" /> چرخش کارت
+   400→            </Button>
+   401→            <Button
+   402→              size="sm"
+   403→              variant="outline"
+   404→              className={`h-8 gap-1 border-white/15 text-[11px] ${inCart ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300" : "text-foreground/80"}`}
+   405→              onClick={onToggleCart}
+   406→              aria-label={inCart ? "حذف زوج‌تیپ از سبد" : "افزودن زوج‌تیپ به سبد روزانه"}
+   407→            >
+   408→              {inCart ? <Check className="size-3.5" /> : <ShoppingCart className="size-3.5" />}
+   409→              {inCart ? "در سبد" : "افزودن به سبد"}
+   410→            </Button>
+   411→            <Button size="sm" variant="outline" className="h-8 w-9 border-white/15 p-0 text-muted-foreground" onClick={handleCopy} aria-label="کپی سریع تیپ">
+   412→              {copied ? <Check className="size-3.5 text-emerald-400" /> : <Copy className="size-3.5" />}
+   413→            </Button>
+   414→          </div>
+   415→
+   416→          {pair.structure.doubleWin && (
+   417→            <p className="flex shrink-0 items-center justify-center gap-1 text-[10px] font-semibold text-amber-300">
+   418→              <Sparkles className="size-3" /> فرصت Double-Win — هر دو تیپ می‌توانند همزمان ببرند
+   419→            </p>
+   420→          )}
+   421→        </div>
+   422→
+   423→        {/* ═══════════ پشت کارت ═══════════ */}
+   424→        <div
+   425→          aria-hidden={!flipped}
+   426→          className={`absolute inset-0 flex flex-col gap-3 overflow-y-auto rounded-2xl border border-white/10 bg-[rgba(8,12,22,0.96)] p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] ${flipped ? "pointer-events-auto" : "pointer-events-none"}`}
+   427→          onClick={(e) => e.stopPropagation()}
+   428→        >
+   429→          <p className="flex items-center gap-1.5 text-xs font-bold">
+   430→            <Scale className="size-4 text-cyan-400" /> کالبدشکافی تحلیلی — {match.homeTeam} × {match.awayTeam}
+   431→          </p>
+   432→
+   433→          {/* ═══ v8.0 — سناریوی تصمیم ایجنت سوپروایزر ارشد ═══ */}
+   434→          {sup && (
+   435→            <div className={`rounded-xl border p-2.5 text-[11px] leading-5 ${vetoed ? "border-rose-500/30 bg-rose-500/[0.06]" : "border-amber-500/30 bg-amber-500/[0.06]"}`}>
+   436→              <p className={`mb-1.5 flex items-center gap-1.5 font-bold ${vetoed ? "text-rose-300" : "text-amber-300"}`}>
+   437→                <SupervisorSeal size={26} approved={!vetoed} score={sup.score100} />
+   438→                {vetoed ? "وتو ایجنت سوپروایزر — عدم پیشنهاد شرط" : "چرا سوپروایزر این الگو را برگزید؟"}
+   439→              </p>
+   440→              <p className="text-muted-foreground">
+   441→                از میان <b className="text-foreground">{faNum(sup.rejected.length + 1, 0)}</b> کاندید بازرسی‌شده روی{" "}
+   442→                <b className="font-num text-foreground" dir="ltr">۱۰,۰۰۰</b> شبیه‌سازی مونت‌کارلو، این الگو بالاترین امتیاز کیفیت را گرفت:
+   443→              </p>
+   444→              <p className="mt-1 rounded-lg bg-black/30 p-1.5 text-[10px] leading-4">
+   445→                <b className="text-foreground">UtilityScore</b> = (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۴) + (شانس دو-برد{" "}
+   446→                {faNum(sup.doubleWinProbPct, 1)}٪ × ۱.۸) − (ریسک باخت همزمان {faNum(sup.jointLossRiskPct, 1)}٪ × ۲.۵) ={" "}
+   447→                <b className={vetoed ? "text-rose-300" : "text-emerald-300"} dir="ltr">
+   448→                  {sup.raw}
+   449→                </b>{" "}
+   450→                → امتیاز نهایی <b className="text-amber-300" dir="ltr">{sup.score100}/100</b>
+   451→              </p>
+   452→              {sup.vetoReason && (
+   453→                <p className="mt-1 flex items-start gap-1 text-[10px] text-rose-300">
+   454→                  <AlertTriangle className="mt-0.5 size-3 shrink-0" /> {sup.vetoReason}
+   455→                </p>
+   456→              )}
+   457→              {sup.rejected.length > 0 && (
+   458→                <div className="mt-1.5">
+   459→                  <p className="mb-1 text-[10px] font-semibold text-muted-foreground">الگوهای رد‌شده:</p>
+   460→                  <ul className="space-y-0.5 text-[10px]">
+   461→                    {sup.rejected.slice(0, 6).map((r) => (
+   462→                      <li key={r.id} className="flex items-center justify-between gap-2 rounded-md bg-white/[0.03] px-1.5 py-0.5">
+   463→                        <span className="min-w-0 truncate text-muted-foreground">✕ {r.short}</span>
+   464→                        <span className="flex shrink-0 items-center gap-1">
+   465→                          <b className={r.veto ? "text-rose-300" : "text-zinc-400"} dir="ltr">{r.score100}/100</b>
+   466→                          <span className="text-[9px] text-muted-foreground/70">{r.veto ? "وتو" : "پایین‌تر"}</span>
+   467→                        </span>
+   468→                      </li>
+   469→                    ))}
+   470→                  </ul>
+   471→                </div>
+   472→              )}
+   473→            </div>
+   474→          )}
+   475→
+   476→          {/* ═══ v9.0 — موتور مهندسی معکوس ضرایب: شفافیت کامل λ ═══ */}
+   477→          <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.05] p-2.5 text-[11px] leading-5">
+   478→            <p className="flex items-center gap-1 font-semibold text-sky-300">
+   479→              🎯 امید گل ترکیبی نهایی: میزبان{" "}
+   480→              <b className="font-num" dir="ltr">{faNum(view.lambdaHome, 2)}</b> — میهمان{" "}
+   481→              <b className="font-num" dir="ltr">{faNum(view.lambdaAway, 2)}</b>
+   482→            </p>
+   483→            {view.lambdaMarketHome !== null && view.lambdaMarketAway !== null ? (
+   484→              <p className="mt-1 text-[10px] text-muted-foreground">
+   485→                استخراج‌شده از الگوی Odds بازار: <b className="font-num text-sky-200" dir="ltr">{faNum(view.lambdaMarketHome, 2)}-{faNum(view.lambdaMarketAway, 2)}</b> | آمار فصل:{" "}
+   486→                <b className="font-num text-emerald-300" dir="ltr">{faNum(view.lambdaStatsHome, 2)}-{faNum(view.lambdaStatsAway, 2)}</b> · فرمول ترکیبی:{" "}
+   487→                <b className="text-foreground">۶۵٪ بازار + ۳۵٪ آمار</b>
+   488→                {view.lambdaFitError !== null && (
+   489→                  <> · خطای برازش بازار: <b className="font-num" dir="ltr">{view.lambdaFitError.toExponential(1)}</b></>
+   490→                )}
+   491→              </p>
+   492→            ) : (
+   493→              <p className="mt-1 text-[10px] text-muted-foreground">
+   494→                خط بازار واقعی در دسترس نبود — λ از مدل آماری جدول و فرم فصل:{" "}
+   495→                <b className="font-num text-emerald-300" dir="ltr">{faNum(view.lambdaStatsHome, 2)}-{faNum(view.lambdaStatsAway, 2)}</b> (مسیر STATS_ONLY)
+   496→              </p>
+   497→            )}
+   498→          </div>
+   499→
+   500→          {/* ═══ v9.0 — درس کالیبراسیون اعمال‌شده روی این کارت (حلقه فعال) ═══ */}
+   501→          {view.calibrationRule.length > 0 && (
+   502→            <div className="rounded-xl border border-violet-500/30 bg-violet-500/[0.07] p-2.5 text-[11px] leading-5">
+   503→              <p className="flex items-center gap-1 font-semibold text-violet-300">
+   504→                🧠 درس کالیبراسیون اعمال‌شده روی این کارت: <Badge variant="outline" className="gap-0.5 border-violet-400/40 px-1 py-0 text-[8px] text-violet-200">⚡ اعمال‌شده در فرمول سوپروایزر</Badge>
+   505→              </p>
+   506→              <ul className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+   507→                {view.calibrationRule.slice(0, 3).map((r, i) => (
+   508→                  <li key={i}>• {r}</li>
+   509→                ))}
+   510→              </ul>
+   511→            </div>
+   512→          )}
+   513→
+   514→          {/* v5.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه + صف ۱۵ ثانیه) */}
+   515→          {onDeepLlm && (
+   516→            <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.06] p-2.5" onClick={(e) => e.stopPropagation()}>
+   517→              <div className="flex items-center justify-between gap-2">
+   518→                <p className="flex items-center gap-1 text-[11px] font-semibold text-cyan-300">
+   519→                  <BrainCircuit className="size-3.5" /> تحلیل عمیق LLM برای این بازی
+   520→                </p>
+   521→                <Button
+   522→                  size="sm"
+   523→                  variant="outline"
+   524→                  className="h-7 gap-1 border-cyan-500/40 px-2 text-[10px] text-cyan-300 hover:bg-cyan-500/10"
+   525→                  onClick={onDeepLlm}
+   526→                  disabled={deepLlmState === "RUNNING"}
+   527→                  aria-label="اجرای تحلیل عمیق LLM برای این بازی"
+   528→                >
+   529→                  {deepLlmState === "RUNNING" ? <Loader2 className="size-3 animate-spin" /> : <Zap className="size-3" />}
+   530→                  {deepLlmState === "RUNNING" ? "در حال تحلیل…" : deepLlmState === "CACHED" ? "اجرای مجدد" : "اجرای LLM"}
+   531→                </Button>
+   532→              </div>
+   533→              <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+   534→                فقط با کلیک شما اجرا می‌شود — صف حداکثر ۱ درخواست در ۱۵ ثانیه + کش ۶۰ دقیقه‌ای (سپر Rate-Limit)
+   535→              </p>
+   536→              {deepLlmState === "CACHED" && (
+   537→                <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-emerald-300">⚡ بارگذاری از کش هوشمند (صرفه‌جویی در نرخ API)</p>
+   538→              )}
+   539→            </div>
+   540→          )}
+   541→
+   542→          {/* روایت الگوی متعامد جاری */}
+   543→          {pair.archetype && (
+   544→            <div className="rounded-xl border border-fuchsia-500/25 bg-fuchsia-500/[0.05] p-2.5 text-[11px] leading-5">
+   545→              <p className="mb-1 flex items-center gap-1 font-semibold text-fuchsia-300">
+   546→                <Sparkles className="size-3.5" /> {pair.archetype.name}
+   547→              </p>
+   548→              <p className="text-muted-foreground">{pair.archetype.rationale}</p>
+   549→              <p className="mt-1 text-[10px] text-fuchsia-200/80">
+   550→                زاویه تمایز: <b>۱۰۰٪ متعامد — بدون شرط تکراری</b> · پوشش سناریوها: <b dir="ltr">{faNum(pair.archetype.coveragePct * 100, 0)}%</b>
+   551→                {pair.archetype.overlapPct > 0.02 && (
+   552→                  <> · دو برد همزمان: <b dir="ltr">{faPct(pair.archetype.overlapPct, 1)}</b></>
+   553→                )}
+   554→              </p>
+   555→            </div>
+   556→          )}
+   557→
+   558→          {/* خلاصه مناظره در ۳ خط */}
+   559→          <div className="space-y-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-2.5 text-[11px] leading-5">
+   560→            <p className="flex gap-1.5">
+   561→              <span className="shrink-0" aria-hidden>🐂</span>
+   562→              <span><b className="text-rose-300">برهان گاو:</b> {view.bullLine}</span>
+   563→            </p>
+   564→            <p className="flex gap-1.5">
+   565→              <span className="shrink-0" aria-hidden>🐻</span>
+   566→              <span><b className="text-amber-300">برهان خرس:</b> {view.bearLine}</span>
+   567→            </p>
+   568→            <p className="flex gap-1.5">
+   569→              <span className="shrink-0" aria-hidden>⚖️</span>
+   570→              <span><b className="text-cyan-300">حکم قاضی کمّی:</b> {view.judgeLine}</span>
+   571→            </p>
+   572→          </div>
+   573→
+   574→          {/* مینی‌مپ پوشش ۶×۶ */}
+   575→          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+   576→            <div className="mb-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+   577→              <span>مینی‌مپ پوشش نتیجه ۶×۶ (میزبان ↓ × میهمان →)</span>
+   578→              <span className="flex items-center gap-2">
+   579→                <span className="flex items-center gap-1"><span className="size-2 rounded-sm bg-sky-500" /> تیپ A</span>
+   580→                <span className="flex items-center gap-1"><span className="size-2 rounded-sm bg-emerald-500" /> تیپ B</span>
+   581→                <span className="flex items-center gap-1"><span className="size-2 rounded-sm bg-amber-400" /> دو برد</span>
+   582→              </span>
+   583→            </div>
+   584→            <div className="grid grid-cols-6 gap-0.5" aria-label="نقشه پوشش نتایج">
+   585→              {coverage.cells.flat().map((c) => (
+   586→                <div
+   587→                  key={`${c.h}-${c.a}`}
+   588→                  title={`نتیجه ${c.h}-${c.a} · احتمال ${faPct(c.p)}`}
+   589→                  className={`flex h-6 items-center justify-center rounded-[3px] text-[8px] ${coverColor(c.kind)}`}
+   590→                >
+   591→                  <span className={c.kind === "NONE" ? "" : "font-num"} dir="ltr">
+   592→                    {c.h}-{c.a}
+   593→                  </span>
+   594→                </div>
+   595→              ))}
+   596→            </div>
+   597→            <p className="mt-1.5 text-[10px] text-muted-foreground">
+   598→              پوشش کل نتایج: <b className="text-foreground" dir="ltr">{faNum(coverage.stats.coveredPct, 0)}%</b>
+   599→              {coverage.stats.bothCells > 0 && (
+   600→                <> · ناحیه طلایی: <b className="text-amber-300" dir="ltr">{faNum(coverage.stats.bothWinProb * 100, 1)}%</b> شانس دو برد همزمان</>
+   601→              )}
+   602→              {coverage.isConditional && <span className="text-amber-300"> · پوشش مشروط (پایه مشترک روی این بازی)</span>}
+   603→              {coverage.hasOffMatrixLegs && <span className="text-fuchsia-300"> · شامل بازار خارج ماتریس (کرنر/کارت/نیمه اول) — پوشش تخمینی</span>}
+   604→            </p>
+   605→          </div>
+   606→
+   607→          {/* وضعیت ترکیب T-60 (v6.0 — فقط ESPN واقعی) */}
+   608→          <div className="rounded-xl border border-violet-500/25 bg-violet-500/5 p-2.5 text-[11px] leading-5">
+   609→            <p className="mb-1 flex items-center gap-1 font-semibold text-violet-300">
+   610→              <Sparkles className="size-3.5" /> وضعیت ترکیب T-60 (VAEP واقعی ESPN)
+   611→            </p>
+   612→            {view.lineup?.success ? (
+   613→              <>
+   614→                <p className="text-muted-foreground">
+   615→                  {view.lineup.mode === "OFFICIAL" ? "ترکیب رسمی اعلام‌شده" : "آمار فصل واقعی (پیش از اعلام)"} · شوک میزبان:{" "}
+   616→                  <b className={view.lineup.home.shockDelta < 0 ? "text-rose-300" : "text-emerald-300"} dir="ltr">
+   617→                    {faNum(view.lineup.home.shockDelta * 100, 1)}%
+   618→                  </b>{" "}
+   619→                  · شوک میهمان:{" "}
+   620→                  <b className={view.lineup.away.shockDelta < 0 ? "text-rose-300" : "text-emerald-300"} dir="ltr">
+   621→                    {faNum(view.lineup.away.shockDelta * 100, 1)}%
+   622→                  </b>
+   623→                </p>
+   624→                {view.lineup.isShock && (
+   625→                  <p className="mt-1 flex items-center gap-1 text-violet-200">
+   626→                    <AlertTriangle className="size-3 shrink-0 text-violet-400" />
+   627→                    {view.lineup.message}
+   628→                  </p>
+   629→                )}
+   630→              </>
+   631→            ) : (
+   632→              <p className="text-muted-foreground">فهرست بازیکنان واقعی ESPN هنوز واکشی نشده — ضریب بر پایه آمار فصل جدول رسمی است.</p>
+   633→            )}
+   634→          </div>
+   635→
+   636→          {/* ═══ v6.0 — سند راستی‌آزمایی داده (Data Verification Inspector) ═══ */}
+   637→          {verificationEventId && (
+   638→            <details className="group rounded-xl border border-cyan-500/25 bg-cyan-500/[0.05] p-2.5 text-[11px] leading-5" onClick={(e) => e.stopPropagation()}>
+   639→              <summary className="flex cursor-pointer list-none items-center gap-1.5 font-semibold text-cyan-300" aria-label="راستی‌آزمایی منبع داده">
+   640→                <SearchCheck className="size-3.5" />
+   641→                راستی‌آزمایی منبع داده (Zero-Mock)
+   642→                <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
+   643→              </summary>
+   644→              <div className="mt-2 space-y-1.5 text-[10px]">
+   645→                <p className="flex flex-wrap items-center gap-1">
+   646→                  <span className="text-muted-foreground">شناسه رسمی مسابقه در ESPN (Event ID):</span>
+   647→                  <b className="font-num" dir="ltr">{verificationEventId}</b>
+   648→                  <a
+   649→                    href={`https://www.espn.com/soccer/match/_/gameId/${verificationEventId}`}
+   650→                    target="_blank"
+   651→                    rel="noreferrer"
+   652→                    className="flex items-center gap-0.5 text-cyan-300 hover:underline"
+   653→                    title="باز کردن صفحه رسمی مسابقه در ESPN"
+   654→                  >
+   655→                    espn.com/soccer/match <ExternalLink className="size-2.5" />
+   656→                  </a>
+   657→                </p>
+   658→                {view.match.statsSource === "ESPN_STANDINGS" && (
+   659→                  <>
+   660→                    <p>
+   661→                      <span className="text-muted-foreground">آمار واقعی فصل میزبان:</span> رتبه <b className="font-num" dir="ltr">{faNum(view.match.homeRank ?? 0, 0)}</b> ·{" "}
+   662→                      <b className="font-num" dir="ltr">{faNum(view.match.homeGF ?? 0, 0)}</b> گل زده و <b className="font-num" dir="ltr">{faNum(view.match.homeGA ?? 0, 0)}</b> گل خورده در{" "}
+   663→                      <b className="font-num" dir="ltr">{faNum(view.match.homeGP ?? 0, 0)}</b> بازی
+   664→                    </p>
+   665→                    <p>
+   666→                      <span className="text-muted-foreground">آمار واقعی فصل میهمان:</span> رتبه <b className="font-num" dir="ltr">{faNum(view.match.awayRank ?? 0, 0)}</b> ·{" "}
+   667→                      <b className="font-num" dir="ltr">{faNum(view.match.awayGF ?? 0, 0)}</b> گل زده و <b className="font-num" dir="ltr">{faNum(view.match.awayGA ?? 0, 0)}</b> گل خورده در{" "}
+   668→                      <b className="font-num" dir="ltr">{faNum(view.match.awayGP ?? 0, 0)}</b> بازی
+   669→                    </p>
+   670→                    <p>
+   671→                      <span className="text-muted-foreground">میانگین واقعی لیگ:</span>{" "}
+   672→                      <b className="font-num" dir="ltr">{faNum((view.match.leagueTeamAvg ?? 0) * 2, 2)}</b> گل در هر بازی · λ = α×β×میانگین×۱.۱۲
+   673→                    </p>
+   674→                  </>
+   675→                )}
+   676→                {view.match.statsSource && (
+   677→                  <p>
+   678→                    <span className="text-muted-foreground">منبع لامبدا:</span>{" "}
+   679→                    {view.match.statsSource === "ESPN_STANDINGS" ? "جدول رسمی رده‌بندی ESPN Standings (بدون کلید)" : "رکورد/فرم واقعی ESPN (جدول رده‌بندی در دسترس نبود)"}
+   680→                  </p>
+   681→                )}
+   682→                {view.match.statsFetchedAt && (
+   683→                  <p>
+   684→                    <span className="text-muted-foreground">زمان دقیق آخرین واکشی از سرور زنده:</span>{" "}
+   685→                    <b className="font-num" dir="ltr">{new Date(view.match.statsFetchedAt).toLocaleString("fa-IR")}</b>
+   686→                  </p>
+   687→                )}
+   688→                {view.match.oddsSource && (
+   689→                  <p>
+   690→                    <span className="text-muted-foreground">منبع ضرایب:</span>{" "}
+   691→                    {view.match.oddsSource === "ODDS_API"
+   692→                      ? "بوک‌میکرهای واقعی The Odds API v4"
+   693→                      : view.match.oddsSource === "ESPN_DRAFTKINGS"
+   694→                        ? "خط رسمی ESPN/DraftKings"
+   695→                        : "ضریب عادلانه مدل کمّی (پیش از بازگشایی خط بوک‌میکر)"}
+   696→                  </p>
+   697→                )}
+   698→                <p className="text-emerald-300">✅ هیچ بازیکن فرضی، بوک‌میکر ساختگی یا عدد شبیه‌سازی‌شده در این کارت وجود ندارد.</p>
+   699→              </div>
+   700→            </details>
+   701→          )}
+   702→
+   703→          <Button
+   704→            size="sm"
+   705→            variant="outline"
+   706→            className="mt-auto h-8 gap-1.5 border-white/15 text-[11px]"
+   707→            onClick={() => setFlipped(false)}
+   708→            aria-label="بازگشت به روی کارت"
+   709→          >
+   710→            <RefreshCw className="size-3.5" /> بازگشت به روی کارت
+   711→          </Button>
+   712→        </div>
+   713→      </div>
+   714→    </div>
+   715→  );
+   716→}
+   717→

@@ -181,7 +181,7 @@ function EquitySparkline({ curve, roi, finalBank }: { curve: number[]; roi: numb
 }
 
 /** ویجت کارایی سوپروایزر */
-function VetoEfficiency({ approved, vetoed, scanned }: { approved: number; vetoed: number; scanned: number }) {
+function VetoEfficiency({ approved, vetoed, scanned, savedByVeto }: { approved: number; vetoed: number; scanned: number; savedByVeto: number }) {
   const total = approved + vetoed;
   const pct = total > 0 ? Math.round((approved / total) * 100) : 0;
   return (
@@ -201,8 +201,19 @@ function VetoEfficiency({ approved, vetoed, scanned }: { approved: number; vetoe
         <div className="h-1.5 flex-1 bg-rose-500/50" />
       </div>
       <p className="text-[10px] leading-4 text-muted-foreground">
-        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با آستانه باخت همزمان ۱۲٪ وتو شده‌اند.
+        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با آستانه باخت همزمان ۹.۸٪ وتو شده‌اند.
       </p>
+      {savedByVeto > 0 && (
+        <p
+          className="flex items-center gap-1 rounded-lg border border-amber-500/40 bg-gradient-to-l from-amber-500/[0.12] to-emerald-500/[0.06] px-2 py-1 text-[10px] font-bold text-amber-200"
+          role="status"
+          aria-label="سرمایه نجات‌یافته توسط وتوی سوپروایزر"
+        >
+          <ShieldCheck className="size-3.5 shrink-0 text-amber-300" />
+          🛡️ سرمایه نجات‌یافته توسط وتو:
+          <b className="font-num text-amber-300" dir="ltr">+{faNum(savedByVeto, 1)} واحد</b>
+        </p>
+      )}
     </div>
   );
 }
@@ -363,6 +374,8 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
   const [ledger, setLedger] = useState<LedgerDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const { approved, vetoed, scanned } = useSupervisorStats();
+  // v11.0-④ — سرمایه نجات‌یافته توسط وتو (زیان کاغذی سایه که واقعی نشد)
+  const savedByVeto = Math.max(0, -(ledger?.shadow?.netProfit ?? 0));
 
   useEffect(() => {
     let alive = true;
@@ -444,7 +457,7 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           <EquitySparkline curve={curve} roi={roi} finalBank={finalBank} />
         </div>
         <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
-          <VetoEfficiency approved={approved} vetoed={vetoed} scanned={scanned} />
+          <VetoEfficiency approved={approved} vetoed={vetoed} scanned={scanned} savedByVeto={savedByVeto} />
         </div>
         <div className="flex flex-col justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
           <TierSwitch />
