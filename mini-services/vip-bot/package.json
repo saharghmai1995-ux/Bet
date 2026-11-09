@@ -1,0 +1,10 @@
+{
+  "name": "aineobet-vip-subscription-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NeoBet @aineobet_bot — Bilingual (FA/EN) VIP Subscription Engine with Auto USDT (TRC20/Polygon) + Semi-Auto Iranian Card-to-Card Gateway",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  }
+}

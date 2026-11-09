@@ -90,18 +90,6 @@ export function FlashcardDeck({
     }
   }, [cards, filter]);
 
-  const counts = useMemo(
-    () => ({
-      APPROVED: approvedCount,
-      ALL: cards.length,
-      VETOED: vetoedCount,
-      PROFIT15: cards.filter((c) => c.pair.guaranteedMarginPct > 15).length,
-      RISK10: cards.filter((c) => c.pair.jointStates.bothLose < 0.1).length,
-      BOOSTER: cards.filter((c) => c.pair.jointStates.bothLose < 0.1 && boosterProfitPct(c.pair.totalOddsA, c.pair.totalOddsB) > 25).length,
-      FORTRESS: cards.filter((c) => !(c.supervisor?.veto ?? false) && c.pair.jointStates.bothLose < 0.07).length,
-    }),
-    [cards, approvedCount, vetoedCount]
-  );
 
   // ═══ v8.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه‌ای + صف سرور ۱۵ ثانیه‌ای) ═══
   const deepLlmFor = useCallback(
@@ -330,7 +318,6 @@ export function FlashcardDeck({
           >
             <f.icon className="size-3" />
             {f.label}
-            <span className="rounded-full bg-white/10 px-1 text-[9px]" dir="ltr">{faNum(counts[f.key], 0)}</span>
           </Button>
         ))}
       </div>

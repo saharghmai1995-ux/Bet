@@ -32,6 +32,7 @@ import { RiskTab } from "@/components/app/risk-tab";
 import { LiveTab } from "@/components/app/live-tab";
 import { SettlementTab } from "@/components/app/settlement-tab";
 import { ChannelDirectorTab } from "@/components/app/channel-director";
+import { VipBotTab } from "@/components/app/vip-bot-tab";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
 import { HeroPerformance } from "@/components/app/hero-performance";
@@ -59,6 +60,7 @@ const PRO_TABS = [
   { value: "live", label: "زنده و T-60", icon: Radio },
   { value: "settlement", label: "کارنامه و تسویه", icon: ClipboardCheck },
   { value: "channel", label: "📣 مدیر کانال و قیف VIP", icon: Megaphone },
+  { value: "vipbot", label: "🤖 ربات اشتراک VIP", icon: Bot },
   { value: "news", label: "رادار اخبار زنده", icon: Newspaper },
   { value: "calibration", label: "کالیبراسیون", icon: Gauge },
   { value: "engine", label: "موتور احتمالات", icon: Calculator },
@@ -368,6 +370,10 @@ export default function Home() {
 
             <TabsContent value="channel">
               <ChannelDirectorTab />
+            </TabsContent>
+
+            <TabsContent value="vipbot">
+              <VipBotTab />
             </TabsContent>
 
             <TabsContent value="news">
