@@ -67,6 +67,8 @@ export interface AutopilotConfig {
   /** v7.0 — تلگرام VIP: توکن بات و شناسه کانال (نسخه سروری در Setting ذخیره می‌شود) */
   telegramBotToken: string;
   telegramChannelId: string;
+  /** v13.0 — شناسه کانال عمومی ویترین (Public Showcase Chat ID) — قیف دوکاناله */
+  telegramPublicChannelId: string;
   /** v8.0 — سوییچ استراتژی اجرایی ضد گوبینگ (Anti-Gubbing Compliance) */
   executionMode: ExecutionMode;
   /** v8.0 — شبیه‌ساز سطح اشتراک: Free تار می‌کند / Pro و VIP کاملاً باز */
@@ -86,6 +88,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   zeroTokenScan: true,
   telegramBotToken: "",
   telegramChannelId: "",
+  telegramPublicChannelId: "@aineobet",
   executionMode: "DUAL_BOOK",
   tier: "FREE",
 };

@@ -18,6 +18,10 @@ import { setSetting } from "./telegram-service";
 const TICK_INTERVAL_MS = 90_000;
 const DAILY_REPORT_HOUR_TEHRAN = 21;
 const DAILY_REPORT_MINUTE_WINDOW = 5; // پنجره ۵ دقیقه‌ای پس از ساعت هدف
+// v13.0 — ساعت‌های قیف کانال عمومی
+const FUNNEL_RADAR_HOUR = 11; // رادار شفافیت صبح
+const FUNNEL_PNL_HOUR = 23;   // برآیند واقعی شب
+const FUNNEL_PNL_MINUTE = 30;
 
 interface SchedulerState {
   timer: ReturnType<typeof setInterval> | null;
@@ -76,7 +80,7 @@ async function runTick(): Promise<void> {
       try {
         const { sendWinRateReport, sendDailyDigest } = await import("./telegram-service");
         const ok = await sendWinRateReport(true);
-        // v12.0 — پوستر برآیند روزانه روی قالب استادیومی DAILY_REPORT (فقط نتایج واقعی)
+        // پوستر برآیند روزانه (فقط نتایج واقعی)
         await sendDailyDigest(true).catch((e: unknown) => console.warn("[scheduler] daily digest failed:", e));
         if (ok) {
           patchSchedulerStatus({ lastDailyReportAt: Date.now() });
@@ -86,6 +90,29 @@ async function runTick(): Promise<void> {
       } catch (err) {
         console.warn("[scheduler] daily report failed:", err instanceof Error ? err.message : err);
       }
+    }
+
+    // ═══ v13.0 — ۴) ایجنت مدیر کانال عمومی و VIP (قیف تبدیل @aineobet) ═══
+    try {
+      const funnel = await import("./telegram-service");
+      // پست ۱ — رادار شفافیت ۱۱:۰۰ تهران (Dedupe روزانه داخلی)
+      if (th.hour === FUNNEL_RADAR_HOUR && th.minute < 10) {
+        const ok = await funnel.sendPublicRadar(false);
+        if (ok) console.log("[scheduler] funnel morning radar sent to public channel");
+      }
+      // پست ۲ — گیفت + تیزرهای قفل‌شده در پنجره T-60 (Dedupe با outbox)
+      const tq = await funnel.sendFunnelTeasers(false);
+      if (tq.gift || tq.teasers > 0) console.log(`[scheduler] funnel T-60 dispatched: gift=${tq.gift} teasers=${tq.teasers}`);
+      // پست ۳ — بازگشایی قفل + اثبات SHA-256 پس از FT (Dedupe با outbox)
+      const unblurred = await funnel.sendPublicUnblur();
+      if (unblurred > 0) console.log(`[scheduler] funnel unblur proof sent: ${unblurred}`);
+      // پست ۴ — برآیند واقعی شب ۲۳:۳۰ تهران با افراز مجزا (Dedupe روزانه داخلی)
+      if (th.hour === FUNNEL_PNL_HOUR && th.minute >= FUNNEL_PNL_MINUTE && th.minute < FUNNEL_PNL_MINUTE + 10) {
+        const ok = await funnel.sendNightlyPnl(false);
+        if (ok) console.log("[scheduler] funnel nightly disjoint PnL sent to public channel");
+      }
+    } catch (err) {
+      console.warn("[scheduler] funnel director failed:", err instanceof Error ? err.message : err);
     }
 
     patchSchedulerStatus({ lastTickAt: Date.now(), tickCount: st.tickCount + 1 });

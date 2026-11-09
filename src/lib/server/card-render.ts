@@ -17,7 +17,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import sharp from "sharp";
-import { getStadiumBackground, type StadiumKind } from "./stadium-store";
 
 // ═════════════════════ برندینگ رسمی v12.0 ═════════════════════
 
@@ -151,31 +150,153 @@ export function englishSelectionLabel(keys: string[], archetypeShort?: string | 
 const W = 1080;
 const H = 1440;
 
-/** پس‌زمینه برداری استادیوم شب‌هنگام — فالبک وقتی قالب عکس آپلود نشده */
-function pitchBackground(w: number, h: number, accent: string): string {
+/** v13.0 — انواع پوسترهای خودساز (بدون هیچ آپلود خارجی) */
+export type StadiumKind = "PRE_MATCH" | "WIN" | "LOSS" | "DOUBLE_WIN" | "DAILY_REPORT" | "COMBO" | "SNIPER" | "TEASER" | "RADAR";
+
+/** LCG قطعی — هر پوستر همیشه با همان ذرات رندر می‌شود (Deterministic) */
+function seeded(seed: number): () => number {
+  let s = (seed >>> 0) || 1;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0xffffffff;
+  };
+}
+
+/**
+ * ═══ v13.0 — موتور خودساز گرافیک استادیوم و موشن (Zero-Upload Procedural Stadium Engine) ═══
+ * بدون هیچ فایل خارجی — نورافکن‌های radialGradient، چمن با پرسپکتیو یک‌سوم پایینی،
+ * محوطه جریمه و دایره وسط، ذرات بوکه، آتش‌بازی طلایی/زمردی، باران (LOSS)، تور دروازه (WIN)،
+ * نمای هوایی چمن (DAILY_REPORT) و تم بنفش/طلایی (SNIPER).
+ */
+function proceduralStadium(w: number, h: number, kind: StadiumKind, accent: string): string {
+  const rnd = seeded(kind.length * 7919 + 41);
+  const theme =
+    kind === "DOUBLE_WIN" ? "gold" : kind === "LOSS" ? "rain" : kind === "SNIPER" ? "sniper" : kind === "DAILY_REPORT" ? "aerial" : kind === "WIN" ? "win" : kind === "TEASER" ? "teaser" : "night";
+
+  const skyTop = theme === "gold" ? "#0d0a04" : theme === "rain" ? "#0a0d14" : theme === "sniper" ? "#0d0716" : theme === "aerial" ? "#0c1a10" : "#070d18";
+  const skyBottom = theme === "gold" ? "#1a1206" : theme === "rain" ? "#101623" : theme === "sniper" ? "#170b28" : theme === "aerial" ? "#0f2b18" : "#0b1526";
+  const pitchTop = theme === "aerial" ? "#1c7a3d" : "#157a38";
+  const pitchBottom = theme === "aerial" ? "#0d5426" : "#0a4a20";
+
+  // ─── چمن با پرسپکتیو (یک‌سوم پایینی؛ در حالت aerial تمام بوم) ───
+  const pitchY0 = theme === "aerial" ? 0 : Math.round(h * 0.52);
+  const stripes: string[] = [];
+  const N = 9;
+  for (let i = 0; i < N; i++) {
+    const y0 = pitchY0 + ((h - pitchY0) / N) * i;
+    const y1 = pitchY0 + ((h - pitchY0) / N) * (i + 1);
+    stripes.push(`<rect x="0" y="${y0.toFixed(1)}" width="${w}" height="${(y1 - y0).toFixed(1)}" fill="${i % 2 === 0 ? "rgba(255,255,255,0.045)" : "rgba(0,0,0,0.05)"}"/>`);
+  }
+
+  // ─── خطوط زمین با پرسپکتیو (محوطه جریمه + دایره وسط) ───
   const cx = w / 2;
+  const markings = theme === "aerial"
+    ? `
+  <g stroke="rgba(255,255,255,0.30)" stroke-width="4" fill="none">
+    <rect x="${cx - 330}" y="${h * 0.20}" width="660" height="${h * 0.60}" rx="6"/>
+    <rect x="${cx - 130}" y="${h * 0.20}" width="260" height="${h * 0.22}"/>
+    <circle cx="${cx}" cy="${h * 0.5}" r="120"/>
+    <line x1="0" y1="${h * 0.5}" x2="${w}" y2="${h * 0.5}"/>
+  </g>`
+    : `
+  <g stroke="rgba(255,255,255,0.26)" stroke-width="3.5" fill="none">
+    <path d="M${cx - 330} ${h - 60} L${cx - 235} ${pitchY0 + 26} L${cx + 235} ${pitchY0 + 26} L${cx + 330} ${h - 60}"/>
+    <path d="M${cx - 150} ${h - 60} L${cx - 112} ${pitchY0 + 26} M${cx + 150} ${h - 60} L${cx + 112} ${pitchY0 + 26}"/>
+    <ellipse cx="${cx}" cy="${h * 0.80}" rx="190" ry="62"/>
+    <path d="M40 ${pitchY0 + 26} L${w - 40} ${pitchY0 + 26}"/>
+  </g>`;
+
+  // ─── نورافکن‌ها (radialGradient چهارگوشه بالایی) ───
+  const beam = (x: number, y: number, r: number, op: number) =>
+    `<radialGradient id="fl-${x}-${y}" cx="50%" cy="50%" r="50%">
+       <stop offset="0%" stop-color="${accent}" stop-opacity="${op}"/>
+       <stop offset="45%" stop-color="${accent}" stop-opacity="${op * 0.28}"/>
+       <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+     </radialGradient>
+     <circle cx="${x}" cy="${y}" r="${r}" fill="url(#fl-${x}-${y})"/>`;
+  const floodlights = `
+  <defs>${beam(120, 110, 430, 0.34)}${beam(w - 120, 110, 430, 0.34)}${beam(cx, 40, 520, 0.16)}</defs>
+  ${beam(120, 110, 430, 0.34)}${beam(w - 120, 110, 430, 0.34)}${beam(cx, 40, 520, 0.16)}
+  <g stroke="rgba(255,255,255,0.30)" stroke-width="3">${[-1, 1].map((s) => `<line x1="${s < 0 ? 120 : w - 120}" y1="96" x2="${s < 0 ? 150 : w - 150}" y2="${pitchY0 + 10}"/>`).join("")}</g>`;
+
+  // ─── سکوهای تماشاگر + نقاط جمعیت ───
+  const crowd = Array.from({ length: 240 }, () => {
+    const x = rnd() * w;
+    const y = pitchY0 * (0.30 + rnd() * 0.55);
+    const o = 0.05 + rnd() * 0.14;
+    return `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${(0.8 + rnd() * 1.6).toFixed(1)}" fill="rgba(255,255,255,${o.toFixed(2)})"/>`;
+  }).join("");
+
+  // ─── ذرات بوکه ───
+  const bokehColors = [accent, "#f5c542", "#3ddc97", "#38d6f5"];
+  const bokeh = Array.from({ length: 30 }, () => {
+    const x = rnd() * w;
+    const y = rnd() * h * 0.55;
+    const r = 2 + rnd() * 7;
+    const c = bokehColors[Math.floor(rnd() * bokehColors.length)];
+    return `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${r.toFixed(1)}" fill="${c}" opacity="${(0.05 + rnd() * 0.16).toFixed(2)}"/>`;
+  }).join("");
+
+  // ─── آتش‌بازی (DOUBLE_WIN / WIN) ───
+  const fireworks =
+    theme === "gold" || theme === "win"
+      ? Array.from({ length: 2 }, (_, k) => {
+          const fx = k === 0 ? w * 0.2 : w * 0.8;
+          const fy = 150 + k * 60;
+          const rays = Array.from({ length: 14 }, (_, i) => {
+            const a = (i / 14) * Math.PI * 2 + k;
+            const len = 55 + rnd() * 65;
+            const x2 = fx + Math.cos(a) * len;
+            const y2 = fy + Math.sin(a) * len * 0.9;
+            return `<line x1="${fx}" y1="${fy}" x2="${x2.toFixed(0)}" y2="${y2.toFixed(0)}" stroke="${theme === "gold" ? "#f5c542" : "#3ddc97"}" stroke-width="2.6" stroke-linecap="round" opacity="${(0.35 + rnd() * 0.4).toFixed(2)}"/>`;
+          }).join("");
+          return `<g>${rays}<circle cx="${fx}" cy="${fy}" r="6" fill="${theme === "gold" ? "#f5c542" : "#3ddc97"}" opacity="0.85"/></g>`;
+        }).join("")
+      : "";
+
+  // ─── باران (LOSS) ───
+  const rain =
+    theme === "rain"
+      ? Array.from({ length: 90 }, () => {
+          const x = rnd() * w;
+          const y = rnd() * h;
+          const len = 26 + rnd() * 44;
+          return `<line x1="${x.toFixed(0)}" y1="${y.toFixed(0)}" x2="${(x - len * 0.22).toFixed(0)}" y2="${(y + len).toFixed(0)}" stroke="rgba(180,205,255,0.20)" stroke-width="1.6" stroke-linecap="round"/>`;
+        }).join("")
+      : "";
+
+  // ─── تور دروازه (WIN) ───
+  const net =
+    theme === "win"
+      ? `<g stroke="rgba(255,255,255,0.13)" stroke-width="1.7" fill="none">
+      ${Array.from({ length: 13 }, (_, i) => `<line x1="${(90 + i * 75).toFixed(0)}" y1="${(pitchY0 + 8).toFixed(0)}" x2="${(60 + i * 80).toFixed(0)}" y2="${h - 56}"/>`).join("")}
+      ${Array.from({ length: 9 }, (_, i) => { const y = pitchY0 + 20 + ((h - 76 - pitchY0) / 9) * i; return `<path d="M85 ${y.toFixed(0)} Q${cx} ${(y - 26).toFixed(0)} ${w - 85} ${y.toFixed(0)}"/>`; }).join("")}
+    </g>`
+      : "";
+
   return `
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${C.bgTop}"/>
-      <stop offset="1" stop-color="${C.bgBottom}"/>
+      <stop offset="0" stop-color="${skyTop}"/>
+      <stop offset="${theme === "aerial" ? 30 : 52}" stop-color="${skyBottom}"/>
+      <stop offset="1" stop-color="${theme === "aerial" ? skyBottom : pitchBottom}"/>
     </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="0%" r="80%">
-      <stop offset="0" stop-color="${accent}" stop-opacity="0.15"/>
-      <stop offset="1" stop-color="${accent}" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="pitch" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="${pitchTop}"/>
+      <stop offset="1" stop-color="${pitchBottom}"/>
+    </linearGradient>
   </defs>
   <rect width="${w}" height="${h}" fill="url(#bg)"/>
-  <rect width="${w}" height="${h}" fill="url(#glow)"/>
-  <g stroke="rgba(255,255,255,0.05)" stroke-width="2.5" fill="none">
-    <circle cx="${cx}" cy="${h * 0.52}" r="200"/>
-    <line x1="60" y1="${h * 0.52}" x2="${w - 60}" y2="${h * 0.52}"/>
-    <rect x="${cx - 170}" y="${h - 8}" width="340" height="170"/>
-    <rect x="40" y="${h * 0.52 - 330}" width="${w - 80}" height="660" rx="8"/>
-  </g>
-  <g stroke="rgba(255,255,255,0.028)" stroke-width="22" fill="none">
-    ${[0, 1, 2, 3, 4, 5, 6].map((i) => `<line x1="0" y1="${(h / 7) * i}" x2="${w}" y2="${(h / 7) * i}"/>`).join("")}
-  </g>`;
+  ${floodlights}
+  ${crowd}
+  ${theme === "aerial" ? "" : `<rect x="0" y="${pitchY0}" width="${w}" height="${h - pitchY0}" fill="url(#pitch)" opacity="0.94"/>`}
+  ${stripes.join("")}
+  ${markings}
+  ${net}
+  ${bokeh}
+  ${fireworks}
+  ${rain}
+  <rect width="${w}" height="${h}" fill="rgba(2,6,14,0.30)"/>`;
 }
 
 /** هدر رسمی برند — NEOBET QUANT PRO • @AINEOBET */
@@ -268,17 +389,9 @@ function crestInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-/** کامپوز نهایی: قالب عکس استادیوم (اگر هست) + لایه برداری — خروجی PNG 1080×1440 */
-async function compose(kind: StadiumKind, overlaySvg: string, fallbackBg: string): Promise<Buffer> {
-  const bg = await getStadiumBackground(kind);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${bg ? "" : fallbackBg}${overlaySvg}</svg>`;
-  if (bg) {
-    return sharp(bg)
-      .resize(W, H, { fit: "cover", position: "centre" })
-      .composite([{ input: Buffer.from(svg) }])
-      .png()
-      .toBuffer();
-  }
+/** کامپوز نهایی v13.0: پس‌زمینه پروسیجرال خودساز + لایه برداری — خروجی PNG 1080×1440 (صفر آپلود) */
+function compose(kind: StadiumKind, overlaySvg: string, accent: string): Promise<Buffer> {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${proceduralStadium(W, H, kind, accent)}${overlaySvg}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
@@ -415,8 +528,7 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
 
   ${footer(W, H, "NEOBET QUANT PRO · auto-graded on official ESPN scoreboard · not financial advice")}`;
 
-  const fallback = pitchBackground(W, H, accent);
-  return compose("PRE_MATCH", overlay, fallback);
+  return compose("PRE_MATCH", overlay, accent);
 }
 
 export async function renderTeaserPNG(input: Omit<MatchCardInput, "teaser">): Promise<Buffer> {
@@ -581,8 +693,7 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
 
   ${footer(W, H, "NEOBET QUANT PRO · every settlement graded on the official ESPN final score — zero simulation")}`;
 
-  const fallback = pitchBackground(W, H, meta.accent);
-  return compose(kind, overlay, fallback);
+  return compose(kind, overlay, meta.accent);
 }
 
 // ═════════════════════ ۵) قالب DAILY_REPORT — گزارش برآیند روزانه (1080×1440) ═════════════════════
@@ -660,8 +771,7 @@ export async function renderDailyReportPNG(input: DailyReportInput): Promise<Buf
 
   ${footer(W, H, "NEOBET QUANT PRO · daily real settlement digest · not financial advice")}`;
 
-  const fallback = pitchBackground(W, H, accent);
-  return compose("DAILY_REPORT", overlay, fallback);
+  return compose("DAILY_REPORT", overlay, accent);
 }
 
 /** اعداد انگلیسی ساده برای پوستر */
@@ -717,8 +827,7 @@ export async function renderRolloverLadderPNG(input: RolloverLadderInput): Promi
 
   ${footer(W, H, "NEOBET QUANT PRO · rollover planner on verified sub-10% risk cards · not financial advice")}`;
 
-  const fallback = pitchBackground(W, H, C.gold);
-  return compose("DAILY_REPORT", overlay, fallback);
+  return compose("DAILY_REPORT", overlay, C.gold);
 }
 
 /** بانک ورودی هر پله (برای متن داخل باکس‌ها) */
@@ -770,7 +879,7 @@ export async function renderWinRateReportPNG(input: WinRateReportInput): Promise
   const boxW = (S - 96 - 3 * 18) / 4;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">
-  ${pitchBackground(S, S, good ? C.emerald : C.rose)}
+  ${proceduralStadium(S, S, "WIN", good ? C.emerald : C.rose)}
   ${brandHeader(S, good ? C.emerald : C.rose)}
 
   <text x="${S / 2}" y="164" text-anchor="middle" font-family="${C.sans}" font-size="30" font-weight="bold" fill="${C.ink}" letter-spacing="3">VERIFIED WIN-RATE REPORT</text>
@@ -807,4 +916,275 @@ export async function renderWinRateReportPNG(input: WinRateReportInput): Promise
 </svg>`;
 
   return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+// ═════════════════════ v13.0 — پوستر میکس ۲/۳ تایی (COMBO_2_3_LEG) ═════════════════════
+
+export interface ComboPosterLeg {
+  teams: string;
+  league: string;
+  kickoffEn: string;
+  legLabel: string;
+  odds: number;
+  probPct: number;
+  logoUrl: string | null;
+}
+
+export interface ComboPosterInput {
+  kind: "2-LEG SAFE DOUBLE" | "3-LEG GOLDEN TREBLE";
+  legs: ComboPosterLeg[];
+  totalOdds: number;
+  jointProbPct: number;
+  stake: number;
+  coverLine: string;
+  hashShort: string;
+}
+
+export async function renderComboPosterPNG(input: ComboPosterInput): Promise<Buffer> {
+  const accent = C.emerald;
+  const rows = input.legs.slice(0, 3);
+  const rowH = 196;
+  const startY = 372;
+
+  const legRows = rows
+    .map((l, i) => {
+      const y = startY + i * (rowH + 26);
+      const teamSize = fitSize(l.teams, 500, 26, 15, 700);
+      const legSize = fitSize(l.legLabel, 330, 20, 13, 700);
+      return `
+    ${glassBox(90, y, 900, rowH, C.emerald, 20)}
+    <circle cx="150" cy="${y + rowH / 2}" r="34" fill="rgba(61,220,151,0.12)" stroke="${C.emerald}" stroke-width="2.5"/>
+    <text x="150" y="${y + rowH / 2 + 10}" text-anchor="middle" font-family="${C.sans}" font-size="24" font-weight="bold" fill="${C.emerald}">L${i + 1}</text>
+    <text x="206" y="${y + 58}" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(l.teams)}</text>
+    <text x="206" y="${y + 90}" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">${esc(l.league)} · ${esc(l.kickoffEn)} Tehran</text>
+    <text x="206" y="${y + 148}" font-family="${C.sans}" font-size="${legSize}" font-weight="bold" fill="${C.cyan}">${esc(l.legLabel)}</text>
+    <text x="206" y="${y + 176}" font-family="${C.sans}" font-size="14" fill="${C.inkDim}">model confidence ${l.probPct.toFixed(1)}%</text>
+    <rect x="806" y="${y + 58}" width="156" height="80" rx="14" fill="rgba(0,0,0,0.5)" stroke="rgba(61,220,151,0.5)" stroke-width="2"/>
+    <text x="884" y="${y + 108}" text-anchor="middle" font-family="${C.mono}" font-size="30" font-weight="bold" fill="${C.emerald}">${l.odds.toFixed(2)}</text>`;
+    })
+    .join("");
+
+  const overlay = `
+  ${brandHeader(W, accent)}
+
+  <text x="${W / 2}" y="196" text-anchor="middle" font-family="${C.sans}" font-size="38" font-weight="bold" fill="${C.emerald}" letter-spacing="3">SMART COMBO ENGINE</text>
+  <text x="${W / 2}" y="236" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">independent anchor legs · Monte-Carlo joint confidence</text>
+  <rect x="${W / 2 - 260}" y="258" width="520" height="46" rx="23" fill="rgba(61,220,151,0.14)" stroke="rgba(61,220,151,0.55)" stroke-width="1.8"/>
+  <text x="${W / 2}" y="289" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${C.emerald}" letter-spacing="2">${esc(input.kind)}</text>
+
+  ${legRows}
+
+  <rect x="90" y="${startY + rows.length * (rowH + 26) + 6}" width="900" height="150" rx="20" fill="rgba(6,10,20,0.85)" stroke="${C.gold}" stroke-opacity="0.65" stroke-width="2.5"/>
+  <text x="118" y="${startY + rows.length * (rowH + 26) + 46}" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.gold}" letter-spacing="2">TOTAL COMBO ODDS</text>
+  <text x="118" y="${startY + rows.length * (rowH + 26) + 100}" font-family="${C.mono}" font-size="46" font-weight="bold" fill="${C.gold}">${input.totalOdds.toFixed(2)}x</text>
+  <text x="560" y="${startY + rows.length * (rowH + 26) + 46}" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.cyan}" letter-spacing="1.5">MONTE-CARLO CONFIDENCE</text>
+  <text x="560" y="${startY + rows.length * (rowH + 26) + 100}" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${C.cyan}">${input.jointProbPct.toFixed(1)}%</text>
+  <text x="962" y="${startY + rows.length * (rowH + 26) + 46}" text-anchor="end" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">STAKE</text>
+  <text x="962" y="${startY + rows.length * (rowH + 26) + 100}" text-anchor="end" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${C.ink}">${input.stake.toFixed(0)} u</text>
+  <text x="${W / 2}" y="${startY + rows.length * (rowH + 26) + 134}" text-anchor="middle" font-family="${C.sans}" font-size="14.5" fill="${C.inkDim}">${esc(input.coverLine)}</text>
+
+  <rect x="90" y="${startY + rows.length * (rowH + 26) + 172}" width="900" height="52" rx="12" fill="rgba(0,0,0,0.55)" stroke="${C.line}"/>
+  <text x="118" y="${startY + rows.length * (rowH + 26) + 206}" font-family="${C.mono}" font-size="19" fill="${C.gold}">SHA-256</text>
+  <text x="238" y="${startY + rows.length * (rowH + 26) + 206}" font-family="${C.mono}" font-size="19" fill="${C.inkDim}">${esc(input.hashShort)}…</text>
+  <text x="${W - 118}" y="${startY + rows.length * (rowH + 26) + 206}" text-anchor="end" font-family="${C.mono}" font-size="18" fill="${C.cyan}">ESPN-GRADED LEGS · ${BRAND_HANDLE}</text>
+
+  ${footer(W, H, "NEOBET QUANT PRO · disjoint combo product line · not financial advice")}`;
+
+  return compose("COMBO", overlay, accent);
+}
+
+// ═════════════════════ v13.0 — پوستر تک‌تیرانداز ضریب بالا (HIGH_ODDS_SNIPER) ═════════════════════
+
+export interface SniperPosterInput {
+  teams: string;
+  league: string;
+  kickoffEn: string;
+  marketLabel: string;
+  odds: number;
+  modelProbPct: number;
+  impliedProbPct: number;
+  edgePct: number;
+  stake: number;
+  kellyNote: string;
+  hashShort: string;
+}
+
+export async function renderSniperPosterPNG(input: SniperPosterInput): Promise<Buffer> {
+  const accent = "#a78bfa"; // بنفش نئونی
+  const radarR = 132;
+  const rcx = W / 2;
+  const rcy = 620;
+  const sweep = -90 + (Math.min(95, input.modelProbPct) / 100) * 300;
+  const rad = (deg: number) => (deg * Math.PI) / 180;
+  const sx = rcx + radarR * Math.cos(rad(sweep));
+  const sy = rcy + radarR * Math.sin(rad(sweep));
+  const teamSize = fitSize(input.teams, 780, 40, 20, 700);
+  const mktSize = fitSize(input.marketLabel, 820, 30, 16, 700);
+
+  const overlay = `
+  ${brandHeader(W, accent)}
+
+  <text x="${W / 2}" y="210" text-anchor="middle" font-family="${C.sans}" font-size="42" font-weight="bold" fill="${accent}" letter-spacing="5">HIGH-ODDS SNIPER</text>
+  <text x="${W / 2}" y="250" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">reverse-poisson value hunt · single shot · small stake</text>
+
+  <text x="${W / 2}" y="356" text-anchor="middle" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(input.teams)}</text>
+  <text x="${W / 2}" y="396" text-anchor="middle" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">${esc(input.league)} · ${esc(input.kickoffEn)} Tehran</text>
+
+  <!-- رادار هدف‌گیری -->
+  <g>
+    <circle cx="${rcx}" cy="${rcy}" r="${radarR}" fill="rgba(13,7,22,0.6)" stroke="${accent}" stroke-opacity="0.6" stroke-width="2.5"/>
+    <circle cx="${rcx}" cy="${rcy}" r="${Math.round(radarR * 0.66)}" fill="none" stroke="${accent}" stroke-opacity="0.3" stroke-width="1.5"/>
+    <circle cx="${rcx}" cy="${rcy}" r="${Math.round(radarR * 0.33)}" fill="none" stroke="${accent}" stroke-opacity="0.25" stroke-width="1.5"/>
+    ${[0, 45, 90, 135].map((d) => { const a = rad(d - 90); return `<line x1="${(rcx + radarR * Math.cos(a)).toFixed(0)}" y1="${(rcy + radarR * Math.sin(a)).toFixed(0)}" x2="${(rcx - radarR * Math.cos(a)).toFixed(0)}" y2="${(rcy - radarR * Math.sin(a)).toFixed(0)}" stroke="rgba(167,139,250,0.22)" stroke-width="1.2"/>`; }).join("")}
+    <path d="M${rcx} ${rcy} L${sx.toFixed(0)} ${sy.toFixed(0)} L${(rcx + radarR * Math.cos(rad(sweep + 26))).toFixed(0)} ${(rcy + radarR * Math.sin(rad(sweep + 26))).toFixed(0)} Z" fill="rgba(167,139,250,0.22)"/>
+    <circle cx="${sx.toFixed(0)}" cy="${sy.toFixed(0)}" r="7" fill="#f5c542"><animate attributeName="r" values="5;9;5" dur="1.4s" repeatCount="indefinite"/></circle>
+    <text x="${rcx}" y="${rcy - 12}" text-anchor="middle" font-family="${C.mono}" font-size="30" font-weight="bold" fill="${C.ink}">${input.modelProbPct.toFixed(1)}%</text>
+    <text x="${rcx}" y="${rcy + 16}" text-anchor="middle" font-family="${C.sans}" font-size="13" fill="${C.inkDim}">MODEL PROB</text>
+  </g>
+
+  ${glassBox(90, 810, 900, 168, accent, 22)}
+  <text x="${W / 2}" y="856" text-anchor="middle" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${accent}" letter-spacing="2.5">SNIPER TARGET</text>
+  <text x="${W / 2}" y="906" text-anchor="middle" font-family="${C.sans}" font-size="${mktSize}" font-weight="bold" fill="${C.ink}">${esc(input.marketLabel)}</text>
+  <text x="${W / 2}" y="950" text-anchor="middle" font-family="${C.mono}" font-size="26" font-weight="bold" fill="#f5c542">SNIPER ODDS: ${input.odds.toFixed(2)}x · +EV EDGE: ${input.edgePct >= 0 ? "+" : ""}${input.edgePct.toFixed(1)}%</text>
+
+  <rect x="90" y="1000" width="900" height="120" rx="18" fill="rgba(6,10,20,0.8)" stroke="rgba(167,139,250,0.5)" stroke-width="2"/>
+  <text x="118" y="1044" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">IMPLIED (BOOK) vs MODEL</text>
+  <text x="118" y="1092" font-family="${C.mono}" font-size="30" font-weight="bold" fill="${C.inkDim}">${input.impliedProbPct.toFixed(1)}%</text>
+  <text x="560" y="1044" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">FRACTIONAL KELLY STAKE (0.15x)</text>
+  <text x="560" y="1092" font-family="${C.mono}" font-size="30" font-weight="bold" fill="#f5c542">${input.stake.toFixed(0)} u</text>
+  <text x="962" y="1044" text-anchor="end" font-family="${C.sans}" font-size="15" fill="${C.inkDim}">EV-PROTECTED SINGLE SHOT</text>
+  <text x="962" y="1092" text-anchor="end" font-family="${C.mono}" font-size="20" font-weight="bold" fill="${C.emerald}">CAP 10-15u</text>
+  <text x="118" y="1112" font-family="${C.sans}" font-size="12.5" fill="${C.inkFaint}">${esc(input.kellyNote)}</text>
+
+  <rect x="90" y="1140" width="900" height="52" rx="12" fill="rgba(0,0,0,0.55)" stroke="${C.line}"/>
+  <text x="118" y="1174" font-family="${C.mono}" font-size="19" fill="#f5c542">SHA-256</text>
+  <text x="238" y="1174" font-family="${C.mono}" font-size="19" fill="${C.inkDim}">${esc(input.hashShort)}…</text>
+  <text x="${W - 118}" y="1174" text-anchor="end" font-family="${C.mono}" font-size="18" fill="${C.cyan}">VERIFY: espn.com/soccer · ${BRAND_HANDLE}</text>
+
+  ${footer(W, H, "NEOBET QUANT PRO · value longshots capped at 0.5-1.0% bankroll · not financial advice")}`;
+
+  return compose("SNIPER", overlay, accent);
+}
+
+// ═════════════════════ v13.0 — پوستر تیزر قفل‌شده قیف کانال (Blurred VIP Teaser) ═════════════════════
+
+const rad = (deg: number) => (deg * Math.PI) / 180;
+
+export interface LockedTeaserInput {
+  homeTeam: string;
+  awayTeam: string;
+  league: string;
+  kickoffEn: string;
+  guaranteedPct: number;
+  labelAEn: string;
+  oddsA: number;
+  hashShort: string;
+  freeGift: boolean; // پست ۲ قیف: ۱ کارت کاملاً رایگان در روز
+}
+
+export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<Buffer> {
+  const accent = input.freeGift ? C.emerald : C.gold;
+  const homeSize = fitSize(input.homeTeam, 380, 30, 15, 700);
+  const awaySize = fitSize(input.awayTeam, 380, 30, 15, 700);
+  const aLines = wrapText(input.labelAEn, 820, 24, 400, 2);
+
+  const overlay = `
+  ${brandHeader(W, accent)}
+
+  <rect x="${W / 2 - 220}" y="150" width="440" height="46" rx="23" fill="${input.freeGift ? "rgba(61,220,151,0.16)" : "rgba(245,197,66,0.16)"}" stroke="${accent}" stroke-opacity="0.7" stroke-width="1.8"/>
+  <text x="${W / 2}" y="181" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${accent}" letter-spacing="3">${input.freeGift ? "FREE GIFT CARD · TODAY" : "VIP TEASER · LOCKED"}</text>
+
+  ${clubBadge(260, 330, 105, input.homeTeam, C.cyan, null)}
+  ${clubBadge(820, 330, 105, input.awayTeam, C.emerald, null)}
+  <text x="260" y="486" text-anchor="middle" font-family="${C.sans}" font-size="${homeSize}" font-weight="bold" fill="${C.ink}">${esc(input.homeTeam)}</text>
+  <text x="820" y="486" text-anchor="middle" font-family="${C.sans}" font-size="${awaySize}" font-weight="bold" fill="${C.ink}">${esc(input.awayTeam)}</text>
+  <rect x="${W / 2 - 52}" y="302" width="104" height="56" rx="14" fill="rgba(4,8,16,0.78)" stroke="rgba(255,255,255,0.2)"/>
+  <text x="${W / 2}" y="340" text-anchor="middle" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}">VS</text>
+
+  <text x="${W / 2}" y="540" text-anchor="middle" font-family="${C.sans}" font-size="20" fill="${C.inkDim}">${esc(input.league)} · ${esc(input.kickoffEn)} Tehran</text>
+
+  <!-- تیپ A همیشه باز -->
+  ${glassBox(90, 580, 900, 220, C.cyan, 22)}
+  <text x="118" y="626" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.cyan}" letter-spacing="2.5">TIP A · JUDGE SIDE ${input.freeGift ? "· 100% FREE" : "· REVEALED"}</text>
+  <text x="118" y="676" font-family="${C.sans}" font-size="25" fill="${C.ink}">${tspans(aLines, 118, 676, 34)}</text>
+  <text x="962" y="676" text-anchor="end" font-family="${C.mono}" font-size="38" font-weight="bold" fill="${C.cyan}">@${input.oddsA.toFixed(2)}</text>
+  <text x="118" y="760" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">GUARANTEED DUTCH PROFIT</text>
+  <text x="118" y="786" font-family="${C.mono}" font-size="26" font-weight="bold" fill="${C.emerald}">+${input.guaranteedPct.toFixed(1)}%</text>
+
+  <!-- تیپ B پوشانده‌شده با شیشه تار + مهر طلایی -->
+  <g>
+    <defs><filter id="teaser-blur" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="13"/></filter></defs>
+    ${glassBox(90, 830, 900, 260, C.gold, 22)}
+    <text x="118" y="878" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">TIP B · COMPLEMENT</text>
+    <text x="118" y="930" font-family="${C.sans}" font-size="24" fill="${C.inkDim}" filter="url(#teaser-blur)">Complementary cover selection</text>
+    <text x="118" y="972" font-family="${C.sans}" font-size="24" fill="${C.inkDim}" filter="url(#teaser-blur)">locked behind VIP membership</text>
+    <text x="962" y="930" text-anchor="end" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${C.gold}" filter="url(#teaser-blur)">@?.??</text>
+    <rect x="${W / 2 - 330}" y="986" width="660" height="72" rx="16" fill="rgba(20,14,2,0.92)" stroke="#f5c542" stroke-width="3"/>
+    <text x="${W / 2}" y="1032" text-anchor="middle" font-family="${C.sans}" font-size="24" font-weight="bold" fill="#f5c542" letter-spacing="2">🔒 LOCKED FOR ${BRAND_HANDLE} VIP MEMBERS</text>
+  </g>
+
+  <rect x="90" y="1118" width="900" height="88" rx="16" fill="rgba(6,10,20,0.82)" stroke="${C.line}"/>
+  <text x="118" y="1156" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">PRE-MATCH PROOF HASH (SHA-256) — UNBLURRED AFTER FT</text>
+  <text x="118" y="1188" font-family="${C.mono}" font-size="21" fill="${C.gold}">${esc(input.hashShort)}…</text>
+  <text x="${W - 118}" y="1188" text-anchor="end" font-family="${C.sans}" font-size="16" fill="${C.cyan}">POST-MATCH UNBLUR PROOF · ${BRAND_HANDLE}</text>
+
+  ${footer(W, H, "NEOBET QUANT PRO · public funnel teaser — same hash opens after FT · not financial advice")}`;
+
+  return compose("TEASER", overlay, accent);
+}
+
+// ═════════════════════ v13.0 — پوستر رادار شفافیت روزانه (Morning Radar) ═════════════════════
+
+export interface DailyRadarInput {
+  dateLabelEn: string;
+  scanned: number;
+  vetoed: number;
+  goldenSignals: number;
+  topPickLine: string;
+}
+
+export async function renderDailyRadarPNG(input: DailyRadarInput): Promise<Buffer> {
+  const accent = C.cyan;
+  const rcx = W / 2;
+  const rcy = 520;
+  const R = 200;
+
+  const kpi = (x: number, value: string, label: string, color: string) => `
+    ${glassBox(x, 810, 210, 200, color, 18)}
+    <text x="${x + 105}" y="${810 + 96}" text-anchor="middle" font-family="${C.mono}" font-size="${fitSize(value, 174, 48, 22, 700)}" font-weight="bold" fill="${color}">${esc(value)}</text>
+    <text x="${x + 105}" y="${810 + 150}" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${C.inkDim}">${esc(label)}</text>`;
+
+  const overlay = `
+  ${brandHeader(W, accent)}
+
+  <text x="${W / 2}" y="200" text-anchor="middle" font-family="${C.sans}" font-size="40" font-weight="bold" fill="${accent}" letter-spacing="4">DAILY MATCHDAY RADAR</text>
+  <text x="${W / 2}" y="242" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">${esc(input.dateLabelEn)} · full transparency report</text>
+
+  <g>
+    <circle cx="${rcx}" cy="${rcy}" r="${R}" fill="rgba(7,13,24,0.55)" stroke="${accent}" stroke-opacity="0.55" stroke-width="2.5"/>
+    ${[0.72, 0.44].map((f) => `<circle cx="${rcx}" cy="${rcy}" r="${(R * f).toFixed(0)}" fill="none" stroke="${accent}" stroke-opacity="0.25" stroke-width="1.6"/>`).join("")}
+    ${[0, 30, 60, 90, 120, 150].map((d) => { const a = rad(d - 90); return `<line x1="${rcx}" y1="${rcy}" x2="${(rcx + R * Math.cos(a)).toFixed(0)}" y2="${(rcy + R * Math.sin(a)).toFixed(0)}" stroke="rgba(56,214,245,0.16)" stroke-width="1.2"/>`; }).join("")}
+    <g>
+      <path d="M${rcx} ${rcy} L${(rcx + R).toFixed(0)} ${rcy} A${R} ${R} 0 0 0 ${(rcx + R * Math.cos(rad(-38))).toFixed(0)} ${(rcy + R * Math.sin(rad(-38))).toFixed(0)} Z" fill="rgba(56,214,245,0.14)">
+        <animateTransform attributeName="transform" type="rotate" from="0 ${rcx} ${rcy}" to="360 ${rcx} ${rcy}" dur="7s" repeatCount="indefinite"/>
+      </path>
+    </g>
+    <circle cx="${rcx}" cy="${rcy}" r="7" fill="${accent}"/>
+    <text x="${rcx}" y="${rcy - 46}" text-anchor="middle" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${C.inkDim}" letter-spacing="2">LIVE SCAN</text>
+    <text x="${rcx}" y="${rcy + 44}" text-anchor="middle" font-family="${C.sans}" font-size="14" fill="${C.inkDim}">ESPN FEED · SUPERVISOR GATE 9.8%</text>
+  </g>
+
+  ${kpi(90, String(input.scanned), "MATCHES SCANNED", C.cyan)}
+  ${kpi(320, String(input.vetoed), "RISKY VETOED", C.rose)}
+  ${kpi(550, String(input.goldenSignals), "GOLDEN SIGNALS", C.gold)}
+  ${kpi(780, "100%", "ESPN-GRADED", C.emerald)}
+
+  ${glassBox(90, 1060, 900, 128, C.gold, 20)}
+  <text x="118" y="1104" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.gold}" letter-spacing="2">TODAY'S FREE GIFT + VIP TEASERS DROP AT T-60</text>
+  <text x="118" y="1150" font-family="${C.sans}" font-size="17" fill="${C.ink}">${esc(input.topPickLine)}</text>
+  <text x="${W - 118}" y="1150" text-anchor="end" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.cyan}">${BRAND_HANDLE}</text>
+
+  ${footer(W, H, "NEOBET QUANT PRO · morning transparency radar · not financial advice")}`;
+
+  return compose("RADAR", overlay, accent);
 }

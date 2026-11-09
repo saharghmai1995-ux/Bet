@@ -72,7 +72,8 @@ export function AutopilotStatusBar({ onOpenConfig }: { onOpenConfig: () => void 
     return st && Object.values(st.stages).includes("ERROR");
   }).length;
 
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const pct = total > 0 ? Math.round((done / total) * 100) : scanning ? 0 : 100;
+  const idle = !scanning && (total === 0 || done >= total); // v13.0-③ — اسکنِ قبلی تکمیل است
 
   return (
     <div
@@ -81,7 +82,8 @@ export function AutopilotStatusBar({ onOpenConfig }: { onOpenConfig: () => void 
       aria-live="polite"
       aria-label="وضعیت خلبان خودکار"
     >
-      <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
+      {/* v13.0-③ — چیدمان justify-between + gap-4: درصد پیشرفت هرگز روی دکمه‌ها نمی‌افتد */}
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 gap-4 px-4 py-2">
         {/* نشان موتور */}
         <span className="flex items-center gap-2 text-xs font-semibold sm:text-sm">
           <span className="relative flex size-2.5">
@@ -144,7 +146,9 @@ export function AutopilotStatusBar({ onOpenConfig }: { onOpenConfig: () => void 
           <div className="h-1.5 w-full min-w-24 overflow-hidden rounded-full bg-white/10 sm:w-40">
             <div className="h-1.5 rounded-full bg-gradient-to-l from-emerald-500 to-cyan-400 transition-all duration-500" style={{ width: `${pct}%` }} />
           </div>
-          <span className="font-num text-[10px] text-muted-foreground" dir="ltr">{pct}%</span>
+          <span className="font-num whitespace-nowrap text-[10px] text-muted-foreground" dir="ltr">
+            {pct}%{idle ? " · اسکن تکمیل شد" : ""}
+          </span>
         </div>
 
         {/* دکمه‌های کنترل */}

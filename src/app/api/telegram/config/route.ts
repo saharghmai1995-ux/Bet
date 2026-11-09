@@ -6,6 +6,7 @@ import {
   setAutoDispatch,
   getAutoDispatch,
   autoDispatchApprovedSlips,
+  KEY_PUBLIC_CHANNEL,
 } from "@/lib/server/telegram-service";
 
 export const dynamic = "force-dynamic";
@@ -13,15 +14,13 @@ export const maxDuration = 120;
 
 /**
  * POST /api/telegram/config
- * ذخیره توکن بات و شناسه کانال VIP (سمت سرور در Setting) + پیام آزمون اختیاری
- * v9.0: سوییچ ارسال خودکار کارت‌های تایید سوپروایزر (پیش‌فرض روشن) —
- * به محض ذخیره توکن، صف ارسال خودکار (کارت‌های تایید + نتایج FT) اجرا می‌شود.
- * بدنه: { botToken?, channelId?, test?, autoDispatch?, dispatchNow? }
+ * ذخیره توکن بات و شناسه کانال VIP + کانال عمومی ویترین v13.0 (سمت سرور در Setting)
+ * بدنه: { botToken?, channelId?, publicChannelId?, test?, autoDispatch?, dispatchNow? }
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { botToken?: string; channelId?: string; test?: boolean; autoDispatch?: boolean; dispatchNow?: boolean };
-    const saved = { token: false, channel: false, autoDispatch: false };
+    const body = (await req.json()) as { botToken?: string; channelId?: string; publicChannelId?: string; test?: boolean; autoDispatch?: boolean; dispatchNow?: boolean };
+    const saved = { token: false, channel: false, publicChannel: false, autoDispatch: false };
 
     if (typeof body.botToken === "string") {
       await setSetting("telegram_bot_token", body.botToken.trim());
@@ -30,6 +29,10 @@ export async function POST(req: NextRequest) {
     if (typeof body.channelId === "string") {
       await setSetting("telegram_channel_id", body.channelId.trim());
       saved.channel = true;
+    }
+    if (typeof body.publicChannelId === "string") {
+      await setSetting(KEY_PUBLIC_CHANNEL, body.publicChannelId.trim());
+      saved.publicChannel = true;
     }
     if (typeof body.autoDispatch === "boolean") {
       await setAutoDispatch(body.autoDispatch);

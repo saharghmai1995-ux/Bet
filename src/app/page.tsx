@@ -13,6 +13,7 @@ import {
   LineChart,
   Newspaper,
   Radio,
+  Megaphone,
   Settings,
   ClipboardCheck,
   Sparkles,
@@ -30,6 +31,7 @@ import { DebateTab } from "@/components/app/debate-tab";
 import { RiskTab } from "@/components/app/risk-tab";
 import { LiveTab } from "@/components/app/live-tab";
 import { SettlementTab } from "@/components/app/settlement-tab";
+import { ChannelDirectorTab } from "@/components/app/channel-director";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
 import { HeroPerformance } from "@/components/app/hero-performance";
@@ -38,8 +40,9 @@ import { SupervisorRadar } from "@/components/app/fx/supervisor-radar";
 import { useQuantStore } from "@/lib/store";
 import { useAutopilot } from "@/lib/use-autopilot";
 import { AutopilotConfigModal } from "@/components/app/autopilot/config-modal";
-import { AutopilotStatusBar, LlmShieldBadge } from "@/components/app/autopilot/status-bar";
+import { AutopilotStatusBar } from "@/components/app/autopilot/status-bar";
 import { FlashcardDeck } from "@/components/app/autopilot/flashcard-deck";
+import { ProductionLines } from "@/components/app/production-lines";
 import { PipelineRadar } from "@/components/app/autopilot/radar";
 import { SmartCartDrawer } from "@/components/app/autopilot/cart-drawer";
 import { LiveHedgeToasts } from "@/components/app/autopilot/live-toasts";
@@ -55,6 +58,7 @@ const PRO_TABS = [
   { value: "risk", label: "پرتفوی مکمل", icon: Layers },
   { value: "live", label: "زنده و T-60", icon: Radio },
   { value: "settlement", label: "کارنامه و تسویه", icon: ClipboardCheck },
+  { value: "channel", label: "📣 مدیر کانال و قیف VIP", icon: Megaphone },
   { value: "news", label: "رادار اخبار زنده", icon: Newspaper },
   { value: "calibration", label: "کالیبراسیون", icon: Gauge },
   { value: "engine", label: "موتور احتمالات", icon: Calculator },
@@ -173,15 +177,15 @@ export default function Home() {
               <Target className="size-5 text-emerald-400" />
               <span className="agent-live-dot absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-emerald-500" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v12.0 @AINEOBET
+                  <Sparkles className="size-2.5" /> v13.0 @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی — گیت سخت ریسک ۹.۸٪ + انطباق ضد گوبینگ · کانال رسمی <span dir="ltr">@aineobet</span>
+                سوپروایزر ارشد + ۳ خط تولید مجزا (تک‌بازی · میکس ۲/۳ تایی · تک‌تیرانداز) + گیت ریسک ۹.۸٪ + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -192,8 +196,7 @@ export default function Home() {
             {/* نشانگر زنده فید چند-API + دکمه همگام‌سازی */}
             <LiveSyncBadge />
 
-            {/* v5.0 — نشانگر سپر ضد Rate-Limit (در هدر) */}
-            <LlmShieldBadge />
+            {/* v13.0-② — بج Rate-Limit فقط در نوار وضعیت (حذف تکرار از هدر) */}
 
             {/* سوییچ دو حالته: Smart Autopilot ↔ Pro Quant Terminal */}
             <div
@@ -245,7 +248,8 @@ export default function Home() {
                 onValueChange={setActiveMatchId}
               >
                 <SelectTrigger
-                  className="w-[190px] gap-2 border-cyan-500/30 bg-cyan-500/5 text-xs sm:w-[300px]"
+                  // v13.0-④ — عرض منو افزایش یافت تا «...بازی فعال» بریده نشود
+                  className="w-[260px] max-w-[340px] min-w-[260px] gap-2 border-cyan-500/30 bg-cyan-500/5 text-xs sm:w-[340px]"
                   aria-label="انتخابگر سراسری مسابقه فعال"
                 >
                   <Activity className="size-3.5 shrink-0 text-cyan-400" />
@@ -277,6 +281,8 @@ export default function Home() {
           /* ═══ حالت ۱: داشبورد سریع و فلش‌کارت‌ها (Smart Autopilot) ═══ */
           <div className="space-y-4">
             <HeroPerformance onOpenSha={openShaTable} />
+            {/* 🏭 v13.0 — ۳ خط تولید مجزا: تک‌بازی / میکس ۲/۳ تایی / تک‌تیرانداز */}
+            <ProductionLines />
             <FlashcardDeck />
             {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (بالای داشبورد سریع) */}
             <RolloverLadder startBank={100} />
@@ -294,7 +300,8 @@ export default function Home() {
                 <TabsTrigger
                   key={t.value}
                   value={t.value}
-                  className="gap-1.5 px-3 py-2 text-xs sm:text-sm data-[state=active]:border-emerald-500/40 data-[state=active]:bg-emerald-500/15 data-[state=active]:text-emerald-300"
+                  // v13.0-① — رفع بریدگی متن تب: whitespace-nowrap + flex-none (بدون overflow-hidden/truncate)
+                  className="w-auto flex-none gap-1.5 whitespace-nowrap px-3 py-2 text-xs sm:text-sm data-[state=active]:border-emerald-500/40 data-[state=active]:bg-emerald-500/15 data-[state=active]:text-emerald-300"
                 >
                   <t.icon className="size-4" />
                   {t.label}
@@ -305,6 +312,8 @@ export default function Home() {
             <TabsContent value="dashboard">
               <div className="space-y-4">
                 <HeroPerformance onOpenSha={openShaTable} />
+                {/* 🏭 v13.0 — ۳ خط تولید مجزا */}
+                <ProductionLines />
                 <DashboardTab
                 loading={loading}
                 analyzedCount={analyzedCount}
@@ -357,6 +366,10 @@ export default function Home() {
               <SettlementTab />
             </TabsContent>
 
+            <TabsContent value="channel">
+              <ChannelDirectorTab />
+            </TabsContent>
+
             <TabsContent value="news">
               <NewsRadar />
             </TabsContent>
@@ -381,7 +394,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v12.0 Official Broadcast Edition · Reverse-Poisson λ Solver (۶۵٪ بازار + ۳۵٪ آمار × درس کالیبراسیون) + گیت سخت ریسک ۹.۸٪ + تسویه خودکار ۳ روز ESPN (Zero-Click) + قالب‌های استادیومی ۱۰۸۰×۱۴۴۰ (فقط کارت‌های تایید سوپروایزر + گزارش روزانه) + حلقه فعال درس‌های کالیبراسیون ← ایجنت سوپروایزر ← دیکسون-کولز ← کلِی همزمان ← پوشش زنده
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v13.0 Autonomous Procedural Graphics Edition · موتور خودساز گرافیک استادیوم (صفر آپلود) + ۳ خط تولید مجزا (Single / Combo / Sniper) + قیف کانال عمومی↔VIP (@aineobet) + افراز مجزا کارنامه + گیت سخت ریسک ۹.۸٪ + تسویه خودکار ESPN + حلقه فعال درس‌های کالیبراسیون
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

@@ -42,8 +42,10 @@ function WinRateGauge({ winPct, breakdown }: { winPct: number; breakdown: { aWin
   const tone = winPct >= 60 ? "#34d399" : winPct >= 45 ? "#fbbf24" : winPct > 0 ? "#fb7185" : "#64748b";
 
   return (
-    <div className="flex items-center gap-3">
-      <svg viewBox="0 0 180 100" className="h-[86px] w-[150px] shrink-0" role="img" aria-label={`گیج وین‌ریت ترکیبی: ${faNum(winPct, 1)} درصد`}>
+    // v13.0-⑨ — flex-wrap + عرض ثابت راهنما: متن‌های «برد طلایی همزمان» و «باخت همزمان» هرگز قطع نمی‌شوند
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="min-w-[150px] shrink-0">
+        <svg viewBox="0 0 180 100" className="h-[86px] w-[150px]" role="img" aria-label={`گیج وین‌ریت ترکیبی: ${faNum(winPct, 1)} درصد`}>
         <defs>
           <linearGradient id="gauge-grad" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0%" stopColor="#22d3ee" />
@@ -71,13 +73,14 @@ function WinRateGauge({ winPct, breakdown }: { winPct: number; breakdown: { aWin
           Combined Win Rate
         </text>
       </svg>
-      <div className="min-w-0 flex-1 space-y-1 text-[10px] leading-4">
+      </div>
+      <div className="min-w-[240px] shrink-0 flex-1 space-y-1 text-[10px] leading-4">
         {breakdown ? (
           <>
             <LegendRow color="bg-sky-400" label="برد تیپ A" value={`${faNum(breakdown.aWin, 1)}٪`} />
             <LegendRow color="bg-emerald-400" label="برد تیپ B" value={`${faNum(breakdown.bWin, 1)}٪`} />
-            <LegendRow color="bg-amber-400" label="برد طلایی همزمان (Double-Win)" value={`${faNum(breakdown.double, 1)}٪`} />
-            <LegendRow color="bg-rose-400" label="باخت (تله میانی)" value={`${faNum(breakdown.loss, 1)}٪`} />
+            <LegendRow color="bg-amber-400" label={<span>برد طلایی همزمان <b dir="ltr">(Double-Win)</b></span>} value={`${faNum(breakdown.double, 1)}٪`} />
+            <LegendRow color="bg-rose-400" label="باخت همزمان (تله میانی)" value={`${faNum(breakdown.loss, 1)}٪`} />
           </>
         ) : (
           <p className="text-muted-foreground">
@@ -89,12 +92,12 @@ function WinRateGauge({ winPct, breakdown }: { winPct: number; breakdown: { aWin
   );
 }
 
-function LegendRow({ color, label, value }: { color: string; label: string; value: string }) {
+function LegendRow({ color, label, value }: { color: string; label: React.ReactNode; value: string }) {
   return (
     <p className="flex items-center justify-between gap-2">
       <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
         <span className={cn("inline-block size-2 shrink-0 rounded-sm", color)} />
-        <span className="truncate">{label}</span>
+        <span className="whitespace-nowrap">{label}</span>
       </span>
       <b className="font-num shrink-0 text-foreground" dir="ltr">{value}</b>
     </p>
@@ -264,7 +267,8 @@ function TierSwitch() {
             role="tab"
             aria-selected={tier === t}
             className={cn(
-              "h-7 px-2.5 text-[10px] font-bold sm:text-[11px]",
+              // v13.0-⑤ — تاج VIP از کادر بیرون نمی‌زند
+              "h-7 whitespace-nowrap px-3 py-1.5 text-[10px] font-bold sm:text-[11px]",
               tier === t
                 ? t === "VIP"
                   ? "bg-amber-500/20 text-amber-300"

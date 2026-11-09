@@ -849,7 +849,7 @@ export interface IssueSlipItemDTO {
 
 /** v11.0 — آمار عملکرد یک دسته فلش‌کارت (تایید/وتو/سود۱۵/ریسک۱۰/دوبل‌وین) */
 export interface CategoryPerformanceDTO {
-  key: "APPROVED" | "VETOED" | "PROFIT15" | "RISK10" | "DOUBLE";
+  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER"; // v13.0 — افراز مجزا (هر کارت فقط یک دسته)
   label: string;
   description: string;
   total: number;

@@ -175,9 +175,13 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
               </Button>
             </div>
             {sources === null ? (
-              <p className="text-[10px] text-muted-foreground">در حال پروب منابع…</p>
+              <p className="text-[10px] text-muted-foreground">در حال بررسی منابع…</p>
             ) : (
               <ul className="space-y-1.5">
+                <li className="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.07] px-2 py-1.5 text-[10.5px] font-bold text-emerald-300" role="status">
+                  <CheckCircle2 className="size-3.5 shrink-0" />
+                  ✅ تمامی منابع زنده آماده به کار هستند
+                </li>
                 {sources.map((s) => (
                   <li key={s.key} className="flex items-start gap-2 rounded-lg border border-white/8 bg-black/20 px-2 py-1.5">
                     {s.ok ? (
@@ -264,10 +268,10 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
             </div>
           </div>
 
-          {/* ─── v7.0 — کانال تلگرام VIP ─── */}
-          <div className="space-y-3 rounded-xl border border-cyan-500/25 bg-cyan-500/[0.05] p-4">
-            <p className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
-              <Send className="size-3.5" /> کانال تلگرام VIP (انتشار کارت، تیزر و نتایج)
+          {/* ─── v13.0 — قیف دوکاناله: ویترین عمومی + کانال VIP ─── */}
+          <div className="space-y-3 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-4">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-violet-300">
+              <Send className="size-3.5" /> قیف دوکاناله @aineobet — ویترین عمومی + کانال VIP (v13.0)
             </p>
             <div className="space-y-1.5">
               <Label htmlFor="tg-token-modal" className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -284,13 +288,27 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
               />
             </div>
             <div className="space-y-1.5">
+              <Label htmlFor="tg-public-modal" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <KeyRound className="size-3" /> شناسه کانال عمومی ویترین (Public Showcase Chat ID)
+              </Label>
+              <Input
+                id="tg-public-modal"
+                dir="ltr"
+                placeholder="@aineobet (پیش‌فرض) یا -1001234567890"
+                value={config.telegramPublicChannelId}
+                onChange={(e) => patchConfig({ telegramPublicChannelId: e.target.value })}
+                className="h-9 border-white/10 bg-black/30 text-xs"
+                autoComplete="off"
+              />
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="tg-channel-modal" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <KeyRound className="size-3" /> شناسه کانال VIP
+                <KeyRound className="size-3" /> شناسه کانال VIP (مثال: @aineobet_vip یا -1001234567890)
               </Label>
               <Input
                 id="tg-channel-modal"
                 dir="ltr"
-                placeholder="@aineobet (پیش‌فرض) یا -1001234567890"
+                placeholder="@aineobet_vip یا -1001234567890"
                 value={config.telegramChannelId}
                 onChange={(e) => patchConfig({ telegramChannelId: e.target.value })}
                 className="h-9 border-white/10 bg-black/30 text-xs"
@@ -299,8 +317,7 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
               <p className="flex items-start gap-1 text-[10px] leading-4 text-muted-foreground">
                 <span aria-hidden>📤</span>
                 <span>
-                  ذخیره و پیام آزمون از تب «کارنامه و تسویه» انجام می‌شود — تیزر VIP تیپ B را سانسور (🔒) می‌کند و
-                  نتایج FT با تصویر جام پیروزی/رختکن بهم‌ریخته به‌صورت خودکار منتشر می‌شوند.
+                  ذخیره نهایی از تب «کارنامه و تسویه» انجام می‌شود. قیف v13.0: رادار صبح (۱۱:۰۰) + گیفت رایگان و تیزر قفل‌شده (T-60) + بازگشایی اثبات SHA-256 پس از FT + برآیند شبانه (۲۳:۳۰) — کنسول کامل در تب «مدیر کانال و قیف VIP».
                 </span>
               </p>
             </div>

@@ -21,8 +21,9 @@ import {
   Copy,
   Crown,
   ExternalLink,
-  Eye,
   EyeOff,
+  Film,
+  Link2,
   Loader2,
   Lock,
   MonitorSmartphone,
@@ -36,10 +37,9 @@ import {
   ShieldCheck,
   ShieldOff,
   Sparkles,
-  Trash2,
+  Target,
   TriangleAlert,
   Trophy,
-  Upload,
   Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -53,6 +53,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useQuantStore } from "@/lib/store";
 import { useCartItems } from "@/lib/autopilot-derive";
 import { principalLockSettledPnl } from "@/lib/engine/asymmetric";
+import { MotionPosterPreview } from "@/components/app/motion-poster";
 import { faNum } from "@/lib/format";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -93,6 +94,8 @@ export function SettlementTab() {
   const [tgToken, setTgToken] = useState(config.telegramBotToken ?? "");
   // v8.0 — کانال پیش‌فرض رسمی @aineobet (در صورت خالی بودن تنظیمات کاربر)
   const [tgChannel, setTgChannel] = useState(config.telegramChannelId || "@aineobet");
+  // v13.0 — کانال عمومی ویترین (قیف دوکاناله)
+  const [tgPublic, setTgPublic] = useState(config.telegramPublicChannelId || "@aineobet");
   const [preview, setPreview] = useState<string | null>(null);
   // ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر + شبیه‌ساز فید کانال ═══
   const [autoDispatch, setAutoDispatch] = useState(true);
@@ -103,73 +106,6 @@ export function SettlementTab() {
   const [bankrollUsd, setBankrollUsd] = useState(10);
   const [riskPct, setRiskPct] = useState(5);
   const [doctrineFilter, setDoctrineFilter] = useState<string>("ALL");
-
-  // ═══ v12.0 — قالب‌های استادیومی کانال (آپلود در سرور — بدون وابستگی به مرورگر) ═══
-  const [stadiumTpls, setStadiumTpls] = useState<Record<string, { exists: boolean; updatedAt: string | null; bytes: number | null }>>({});
-  const [uploadingKind, setUploadingKind] = useState<string | null>(null);
-
-  const loadStadium = useCallback(async () => {
-    try {
-      const res = await fetch("/api/telegram/stadium", { cache: "no-store" });
-      const data = (await res.json()) as { success: boolean; templates?: { kind: string; exists: boolean; updatedAt: string | null; bytes: number | null }[] };
-      if (data.success && data.templates) {
-        setStadiumTpls(Object.fromEntries(data.templates.map((t) => [t.kind, t])));
-      }
-    } catch {
-      /* پنل قالب‌ها اختیاری است */
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadStadium();
-  }, [loadStadium]);
-
-  const uploadStadium = useCallback(
-    async (kind: string, file: File) => {
-      setUploadingKind(kind);
-      try {
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const fr = new FileReader();
-          fr.onload = () => resolve(String(fr.result));
-          fr.onerror = () => reject(new Error("read-failed"));
-          fr.readAsDataURL(file);
-        });
-        const res = await fetch("/api/telegram/stadium", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind, dataUrl }),
-        });
-        const data = (await res.json()) as { success: boolean; error?: string };
-        if (data.success) {
-          toast.success(`قالب استادیومی «${kind}» ذخیره شد — پست‌های کانال اکنون Broadcast می‌شوند`, {
-            description: "از این پس کارت‌های @aineobet روی این پس‌زمینه چاپ و بدون کپشن متنی ارسال می‌شوند",
-          });
-          await loadStadium();
-        } else {
-          toast.error(`آپلود قالب ناموفق: ${data.error ?? "?"}`);
-        }
-      } catch {
-        toast.error("خطای خواندن فایل تصویر");
-      } finally {
-        setUploadingKind(null);
-      }
-    },
-    [loadStadium]
-  );
-
-  const deleteStadium = useCallback(
-    async (kind: string) => {
-      setUploadingKind(kind);
-      try {
-        await fetch(`/api/telegram/stadium?kind=${kind}`, { method: "DELETE" });
-        toast.info(`قالب «${kind}» حذف شد — بازگشت به پس‌زمینه برداری`);
-        await loadStadium();
-      } finally {
-        setUploadingKind(null);
-      }
-    },
-    [loadStadium]
-  );
 
   const loadFeed = useCallback(async () => {
     try {
@@ -418,10 +354,10 @@ export function SettlementTab() {
         const res = await fetch("/api/telegram/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ botToken: tgToken, channelId: tgChannel, test }),
+          body: JSON.stringify({ botToken: tgToken, channelId: tgChannel, publicChannelId: tgPublic, test }),
         });
         const data = (await res.json()) as { success: boolean; test?: { ok: boolean; detail: string } | null };
-        patchConfig({ telegramBotToken: tgToken, telegramChannelId: tgChannel });
+        patchConfig({ telegramBotToken: tgToken, telegramChannelId: tgChannel, telegramPublicChannelId: tgPublic });
         if (test) {
           if (data.test?.ok) toast.success("✅ پیام آزمون به کانال VIP ارسال شد — اتصال برقرار است");
           else toast.error(`پیام آزمون ناموفق: ${data.test?.detail ?? "?"}`, { description: "توکن بات و شناسه کانال (مثل @channel یا -100...) را بررسی کنید" });
@@ -435,7 +371,7 @@ export function SettlementTab() {
         setSavingTg(false);
       }
     },
-    [tgToken, tgChannel, patchConfig, loadLedger]
+    [tgToken, tgChannel, tgPublic, patchConfig, loadLedger]
   );
 
   const stats = ledger?.stats;
@@ -519,7 +455,7 @@ export function SettlementTab() {
           <StatCard label="🟢 برد تیپ A" value={stats.wonA} tone="text-sky-300" />
           <StatCard label="🟢 برد تیپ B" value={stats.wonB} tone="text-emerald-300" />
           <StatCard label="🏆 جکپات دو برد" value={stats.doubleWin} tone="text-amber-300" />
-          <StatCard label="🔴 تله میانی" value={stats.middleTrap} tone="text-rose-300" />
+          <StatCard label="تله میانی (باخت همزمان)" value={stats.middleTrap} tone="text-rose-300" />
           <StatCard
             label="سود خالص مجموع"
             value={`${stats.netProfit >= 0 ? "+" : ""}${faNum(stats.netProfit, 1)}`}
@@ -565,10 +501,11 @@ export function SettlementTab() {
             <b className="text-foreground/90"> بدون سوگیری بازماندگی </b>
             قابل ارزیابی باشد. کارت‌های سایه هرگز به تلگرام نمی‌روند و در سود واقعی کارنامه هم لحاظ نمی‌شوند.
           </p>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
             {categories.categories.map((c) => {
+              // v13.0-③ — افراز مجزا: الف/ب/ج/د — هر کارت فقط یک‌بار شمرده می‌شود
               const icon =
-                c.key === "APPROVED" ? ShieldCheck : c.key === "VETOED" ? ShieldOff : c.key === "PROFIT15" ? Wallet : c.key === "RISK10" ? TriangleAlert : Sparkles;
+                c.key === "APPROVED" ? ShieldCheck : c.key === "VETOED" ? ShieldOff : c.key === "COMBO" ? Link2 : Target;
               const Icon = icon;
               return (
                 <div
@@ -580,7 +517,10 @@ export function SettlementTab() {
                 >
                   <div className="flex items-center gap-1.5">
                     <Icon className={cn("size-3.5 shrink-0", c.paper ? "text-rose-300" : "text-emerald-300")} aria-hidden />
-                    <p className="truncate text-[10px] font-bold text-foreground/90" title={c.label}>{c.label}</p>
+                    {/* v13.0-⑦ — ترتیب صحیح فارسی-انگلیسی با dir صریح */}
+                    <p className="min-w-0 truncate text-[10px] font-bold text-foreground/90" title={c.label}>
+                      <span dir="rtl">{c.label}</span>
+                    </p>
                     {c.paper && (
                       <span className="ms-auto shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1 py-px text-[8px] font-bold text-rose-300">
                         کاغذی
@@ -618,9 +558,9 @@ export function SettlementTab() {
             <div className="flex flex-wrap items-center justify-center gap-2 rounded-lg border border-amber-500/35 bg-amber-500/[0.06] px-3 py-2 text-[11px]" role="note">
               <Rocket className="size-3.5 shrink-0 text-amber-300" />
               <p className="text-amber-200/90">
-                🚀 اثر «شتاب‌دهنده نامتقارن» روی {faNum(boosterSim.settled, 0)} کارت دسته ریسک زیر ۱۰٪: سود خالص از{" "}
+                🚀 «اثر شتاب‌دهنده نامتقارن (پرتاب سود روی تیپ A + بیمه تیپ B)» روی {faNum(boosterSim.settled, 0)} کارت دسته ریسک زیر ۱۰٪: سود خالص از{" "}
                 <b className="font-num text-emerald-300" dir="ltr">+{faNum(boosterSim.equalNet, 1)}</b> به{" "}
-                <b className="font-num text-amber-300" dir="ltr">+{faNum(boosterSim.boosterNet, 1)} واحد</b> ارتقا می‌یافت — قفل اصل سرمایه روی تیپ B + پرتاب سود روی تیپ A
+                <b className="font-num text-amber-300" dir="ltr">+{faNum(boosterSim.boosterNet, 1)} واحد</b> ارتقا می‌یافت — شبیه‌سازی کاغذی v11.0-②
               </p>
             </div>
           )}
@@ -783,14 +723,29 @@ export function SettlementTab() {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="tg-channel" className="text-[10px] text-muted-foreground">
-              شناسه کانال VIP (مثل ‎@my_vip_channel یا ‎-1001234567890)
+              {/* v13.0-⑫ — لیبل کامل و بدون بریدگی */}
+              شناسه کانال VIP (مثال: @aineobet_vip یا -1001234567890)
             </Label>
             <Input
               id="tg-channel"
               dir="ltr"
-              placeholder="@my_vip_channel"
+              placeholder="@aineobet_vip"
               value={tgChannel}
               onChange={(e) => setTgChannel(e.target.value)}
+              className="h-9 border-white/10 bg-black/30 text-xs"
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="tg-public" className="text-[10px] text-muted-foreground">
+              شناسه کانال عمومی ویترین (Public Showcase Chat ID) — قیف v13.0: رادار صبح + گیفت/تیزر T-60 + اثبات FT + برآیند شبانه
+            </Label>
+            <Input
+              id="tg-public"
+              dir="ltr"
+              placeholder="@aineobet"
+              value={tgPublic}
+              onChange={(e) => setTgPublic(e.target.value)}
               className="h-9 border-white/10 bg-black/30 text-xs"
               autoComplete="off"
             />
@@ -800,96 +755,20 @@ export function SettlementTab() {
           <Button size="sm" variant="outline" className="h-8 gap-1 border-cyan-500/40 text-[11px] text-cyan-300 hover:bg-cyan-500/10" onClick={() => void saveTelegram(false)} disabled={savingTg}>
             {savingTg ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} ذخیره اتصال
           </Button>
-          <Button size="sm" variant="outline" className="h-8 gap-1 border-white/15 text-[11px] text-foreground/80" onClick={() => void saveTelegram(true)} disabled={savingTg}>
-            <SendHorizonal className="size-3" /> ارسال پیام آزمون به کانال
+          <Button
+            size="sm"
+            variant="outline"
+            // v13.0-⑬ — متن دکمه هرگز با «...» بریده نمی‌شود
+            className="h-8 gap-1 whitespace-nowrap border-white/15 px-4 py-2.5 text-[11px] text-foreground/80"
+            onClick={() => void saveTelegram(true)}
+            disabled={savingTg}
+          >
+            <SendHorizonal className="size-3" /> ارسال پیام آزمون
           </Button>
         </div>
 
-        {/* ═══ v12.0 — ۵ قالب استادیومی @aineobet (آپلود مستقیم — چاپ Broadcast بدون کپشن) ═══ */}
-        <div className="space-y-2.5 rounded-xl border border-violet-500/30 bg-violet-500/[0.05] p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-violet-300">
-              🏟️ ۵ قالب استادیومی NeoBet — پس‌زمینه رسمی پست‌های کانال (۱۰۸۰×۱۴۴۰ · نسبت ۳:۴)
-            </p>
-            <Badge variant="outline" className="gap-1 border-violet-500/40 bg-violet-500/10 text-[9px] text-violet-300">
-              {Object.values(stadiumTpls).filter((t) => t.exists).length > 0
-                ? `حالت Broadcast فعال — ${faNum(Object.values(stadiumTpls).filter((t) => t.exists).length, 0)} از ۵ قالب`
-                : "فالبک: پس‌زمینه برداری (بدون قالب)"}
-            </Badge>
-          </div>
-          <p className="text-[10px] leading-4 text-muted-foreground">
-            هر قالب را آپلود کنید تا موتور رندر سرور، لوگوی باشگاه‌ها (از فید زنده ESPN) و متن‌های انگلیسی را دقیقاً روی مختصات رسمی همین عکس‌ها چاپ کند و پست‌ها با
-            <b className="text-violet-300"> sendPhoto بدون هیچ کپشن متنی </b>
-            مخابره شوند. قالب‌ها روی دیسک سرور ذخیره می‌شوند — بدون وابستگی به مرورگر و برای تسویه خودکار شبانه هم فعال است.
-          </p>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {[
-              { kind: "PRE_MATCH", label: "۱. کارت تیپ بازی", hint: "لوگوها بالا · باکس تیپ A آبی / تیپ B سبز" },
-              { kind: "WIN", label: "۲. کارت برنده", hint: "باکس مرکزی نتیجه جلوی تور دروازه" },
-              { kind: "LOSS", label: "۳. کارت باخت", hint: "استادیوم بارانی · هش SHA-256" },
-              { kind: "DOUBLE_WIN", label: "۴. کارت دابل برد", hint: "دو باکس طلایی تیپ A و B" },
-              { kind: "DAILY_REPORT", label: "۵. گزارش برآیند روزانه", hint: "۴ باکس KPI + ۴ ردیف بازی تسویه‌شده" },
-            ].map((tpl) => {
-              const info = stadiumTpls[tpl.kind];
-              const busy = uploadingKind === tpl.kind;
-              return (
-                <div key={tpl.kind} className={cn("space-y-1.5 rounded-lg border p-2.5", info?.exists ? "border-emerald-500/35 bg-emerald-500/[0.05]" : "border-white/10 bg-black/25")}>
-                  <p className="truncate text-[10.5px] font-bold text-foreground/90">{tpl.label}</p>
-                  <p className="truncate text-[9px] text-muted-foreground" title={tpl.hint}>{tpl.hint}</p>
-                  <div className="flex items-center gap-1.5">
-                    <label className="min-w-0 flex-1 cursor-pointer">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="sr-only"
-                        aria-label={`آپلود تصویر قالب ${tpl.label}`}
-                        disabled={busy}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          if (f) void uploadStadium(tpl.kind, f);
-                          e.currentTarget.value = "";
-                        }}
-                      />
-                      <span className={cn("flex h-7 items-center justify-center gap-1 rounded-md border border-violet-500/40 bg-violet-500/10 text-[10px] font-bold text-violet-300 transition hover:bg-violet-500/20", busy && "opacity-60")}>
-                        {busy ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}
-                        {info?.exists ? "تعویض تصویر" : "آپلود تصویر"}
-                      </span>
-                    </label>
-                    {info?.exists && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                          onClick={() => window.open(`/api/telegram/stadium?kind=${tpl.kind}&raw=1`, "_blank")}
-                          aria-label={`پیش‌نمایش قالب ${tpl.label}`}
-                        >
-                          <Eye className="size-3.5" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 w-7 p-0 text-rose-300/80 hover:text-rose-300"
-                          onClick={() => void deleteStadium(tpl.kind)}
-                          disabled={busy}
-                          aria-label={`حذف قالب ${tpl.label}`}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                  {info?.exists && (
-                    <p className="text-[9px] text-emerald-300/80" dir="ltr">
-                      ✓ {info.bytes ? `${Math.round(info.bytes / 1024)} KB` : ""} {info.updatedAt ? `· ${new Date(info.updatedAt).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" })}` : ""}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
+        {/* ═══ v13.0-① — موتور خودساز گرافیک استادیوم: صفر آپلود + پیش‌نمایش موشن ۶۰fps ═══ */}
+        <MotionPosterPreview />
         {/* ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر ═══ */}
         <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1324,11 +1203,20 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
         )}
       </TableCell>
 
-      <TableCell className="py-2.5">
-        <button type="button" className="flex items-center gap-1 font-mono text-[9px] text-cyan-300/90 hover:text-cyan-200" onClick={copyHash} title={`کپی هش کامل: ${slip.hash}`} aria-label="کپی هش SHA-256 کارت">
+      <TableCell className="py-2.5 align-middle">
+        {/* v13.0-⑪ — هش در کادر تمیز مونو + دکمه کپی */}
+        <span className="inline-flex items-center gap-1 rounded bg-slate-800/80 px-2 py-0.5 font-mono text-xs text-cyan-300">
           <span dir="ltr">{slip.hash.slice(0, 14)}…</span>
-          {copied ? <Check className="size-2.5 text-emerald-400" /> : <Copy className="size-2.5" />}
-        </button>
+          <button
+            type="button"
+            onClick={copyHash}
+            title={`کپی هش کامل: ${slip.hash}`}
+            aria-label="کپی هش SHA-256 کارت"
+            className="text-cyan-200 hover:text-white"
+          >
+            {copied ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+          </button>
+        </span>
         {slip.espnUrl && (
           <a href={slip.espnUrl} target="_blank" rel="noreferrer" className="mt-1 flex items-center gap-0.5 text-[9px] text-cyan-400 hover:underline">
             راستی‌آزمایی ESPN <ExternalLink className="size-2.5" />
@@ -1336,8 +1224,9 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
         )}
       </TableCell>
 
-      <TableCell className="py-2.5">
-        <div className="flex items-center justify-center gap-1" aria-label="وضعیت انتشار تلگرام">
+      <TableCell className="py-2.5 align-middle">
+        {/* v13.0-⑪ — آیکون‌های عملیات: inline-flex + gap-۲ + تراز عمودی */}
+        <div className="inline-flex items-center justify-center gap-2" aria-label="وضعیت انتشار تلگرام">
           <TgDot on={slip.telegramCard} title="کارت کامل" icon="📤" />
           <TgDot on={slip.telegramTeaser} title="تیزر VIP (تیپ B سانسور)" icon="🔒" />
           <TgDot on={slip.telegramResult} title="نتیجه پس از FT (جام/رختکن)" icon={slip.status === "MIDDLE_TRAP" ? "🧹" : "🏆"} />

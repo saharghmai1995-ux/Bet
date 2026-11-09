@@ -301,6 +301,11 @@ model IssuedSlip {
   modelProbA Float?      // احتمال مدل برای تیپ A در لحظه صدور
   modelProbB Float?
 
+  // ─── v13.0 — افراز مجزا خطوط تولید (Disjoint Product-Line Partition) ───
+  // SINGLE = تک‌بازی دوهج (خط ۱) | COMBO = میکس ۲/۳ تایی (خط ۲) | SNIPER = تک‌تیرانداز (خط ۳)
+  // هر کارت فقط و فقط در یکی از سه خط تولید شمرده می‌شود — دوباره‌شماری صفر.
+  productLine String @default("SINGLE")
+
   // ─── v10.0 — پنجره زمانی طلایی ثبت ضریب (Optimal Odds Timing Window) ───
   tipKindA String?       // FAVORITE | TOTALS | UNDERDOG
   tipKindB String?

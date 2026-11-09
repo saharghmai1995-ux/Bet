@@ -3,7 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v12.0 Official Broadcast — ۱۰۰٪ ESPN Verified",
+  title: "NEOBET QUANT PRO • @AINEOBET | v13.0 Procedural Graphics & 3 Slip Tiers — ۱۰۰٪ ESPN Verified",
   description:
     "ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی، دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
   icons: {

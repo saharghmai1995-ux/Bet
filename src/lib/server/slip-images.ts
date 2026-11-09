@@ -16,6 +16,10 @@ import {
   renderWinRateReportPNG,
   renderDailyReportPNG,
   renderRolloverLadderPNG,
+  renderComboPosterPNG,
+  renderSniperPosterPNG,
+  renderLockedTeaserPNG,
+  renderDailyRadarPNG,
   englishSelectionLabel,
   type ResultKind,
 } from "./card-render";
@@ -204,3 +208,11 @@ export async function renderSlipResultPNG(slip: IssuedSlip): Promise<Buffer> {
 
 export { renderWinRateReportPNG, renderDailyReportPNG, renderRolloverLadderPNG };
 export type { WinRateReportInput, DailyReportInput, RolloverLadderInput } from "./card-render";
+// v13.0 — پوسترهای خودساز خطوط تولید جدید + قیف کانال (بدون هیچ آپلود)
+export {
+  renderComboPosterPNG,
+  renderSniperPosterPNG,
+  renderLockedTeaserPNG,
+  renderDailyRadarPNG,
+};
+export type { ComboPosterInput, ComboPosterLeg, SniperPosterInput, LockedTeaserInput, DailyRadarInput } from "./card-render";

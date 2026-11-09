@@ -24,11 +24,11 @@ import { cn } from "@/lib/utils";
 
 type FilterKey = "APPROVED" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "ALL" | "VETOED";
 
-// v11.0 — ۴ دکمه طلایی طبق سند ارتقا + فیلتر دژ نفوذناپذیر + شفافیت همه/وتو
+// v13.0 — ۴ دکمه طلایی بدون هیچ آمار تاریخی (رفع باگ نمایشی) + فیلتر دژ نفوذناپذیر + شفافیت همه/وتو
 const FILTERS: { key: FilterKey; label: string; icon: typeof Layers; golden?: boolean }[] = [
-  { key: "APPROVED", label: "👑 تاییدشده سوپروایزر — وین‌ریت ۱۰۰٪", icon: ShieldCheck, golden: true },
-  { key: "RISK10", label: "🛡️ ریسک باخت همزمان زیر ۱۰٪ (۳۹/۳۹ برد)", icon: TriangleAlert, golden: true },
-  { key: "BOOSTER", label: "🚀 شتاب‌دهنده نامتقارن (بیمه اصل پول + سود بالای ۲۵٪)", icon: Zap, golden: true },
+  { key: "APPROVED", label: "👑 تاییدشده سوپروایزر", icon: ShieldCheck, golden: true },
+  { key: "RISK10", label: "🛡️ ریسک باخت همزمان زیر ۱۰٪", icon: TriangleAlert, golden: true },
+  { key: "BOOSTER", label: "🚀 شتاب‌دهنده نامتقارن", icon: Zap, golden: true },
   { key: "PROFIT15", label: "💰 سود تضمینی بالای ۱۵٪", icon: Wallet, golden: true },
   { key: "FORTRESS", label: "🏰 دژ نفوذناپذیر (زیر ۷٪ + تایید)", icon: Shield },
   { key: "ALL", label: "همه بازی‌ها", icon: Layers },

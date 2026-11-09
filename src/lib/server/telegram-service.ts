@@ -14,19 +14,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from "@/lib/db";
-import { renderSlipCardPNG, renderSlipResultPNG, renderSlipTeaserPNG, renderWinRateReportPNG, renderDailyReportPNG } from "./slip-images";
-import { getStadiumBackground, type StadiumKind } from "./stadium-store";
+import {
+  renderSlipCardPNG,
+  renderSlipResultPNG,
+  renderSlipTeaserPNG,
+  renderWinRateReportPNG,
+  renderDailyReportPNG,
+  renderDailyRadarPNG,
+  renderLockedTeaserPNG,
+} from "./slip-images";
 import type { IssuedSlip } from "@prisma/client";
 
 // ═════════════════════ تنظیمات (Setting + env) ═════════════════════
 
 const KEY_TOKEN = "telegram_bot_token";
 const KEY_CHANNEL = "telegram_channel_id";
+/** v13.0 — کانال عمومی ویترین (Public Showcase) — جدا از کانال VIP */
+export const KEY_PUBLIC_CHANNEL = "telegram_public_channel_id";
 /** v9.0 — کلید سوییچ ارسال خودکار کارت‌های تایید سوپروایزر (پیش‌فرض: روشن) */
 const KEY_AUTODISPATCH = "telegram_autodispatch";
 
 /** v8.0 — کانال پیش‌فرض رسمی کانال VIP کارفرما (در صورت خالی بودن تنظیمات) */
 export const DEFAULT_VIP_CHANNEL = "@aineobet";
+/** v13.0 — کانال عمومی پیش‌فرض ویترین */
+export const DEFAULT_PUBLIC_CHANNEL = "@aineobet_public";
 
 export async function getSetting(key: string): Promise<string | null> {
   try {
@@ -53,9 +64,16 @@ async function channelId(): Promise<string | null> {
   return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_VIP_CHANNEL;
 }
 
-export async function telegramStatus(): Promise<{ configured: boolean; channelSet: boolean }> {
-  const [token, channel] = await Promise.all([botToken(), channelId()]);
-  return { configured: Boolean(token), channelSet: Boolean(channel) };
+/** v13.0 — کانال عمومی ویترین (Public Showcase Chat ID) — پیش‌فرض @aineobet_public */
+export async function publicChannelId(): Promise<string | null> {
+  const stored = await getSetting(KEY_PUBLIC_CHANNEL);
+  const fromEnv = process.env.TELEGRAM_PUBLIC_CHANNEL_ID;
+  return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_PUBLIC_CHANNEL;
+}
+
+export async function telegramStatus(): Promise<{ configured: boolean; channelSet: boolean; publicSet: boolean }> {
+  const [token, channel, pub] = await Promise.all([botToken(), channelId(), publicChannelId()]);
+  return { configured: Boolean(token), channelSet: Boolean(channel), publicSet: Boolean(pub) };
 }
 
 // ═══════════ v9.0 — سوییچ ارسال خودکار (پیش‌فرض روشن) ═══════════
@@ -89,21 +107,20 @@ async function tgCall(method: string, body: Record<string, unknown>): Promise<{ 
   }
 }
 
-async function tgSendPhoto(
+async function tgSendPhotoTo(
+  chatId: string | null,
   photo: Buffer,
   caption: string,
   filename = "slip-card.png",
   captionless = false
 ): Promise<{ ok: boolean; detail: string }> {
   const token = await botToken();
-  const chatId = await channelId();
   if (!token) return { ok: false, detail: "NO_TOKEN" };
   if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
   try {
     const form = new FormData();
     form.append("chat_id", chatId);
     if (!captionless) {
-      // v12.0 — در حالت Broadcast (قالب استادیومی آپلودشده) پوستر بدون هیچ کپشن متنی می‌رود
       form.append("caption", caption.slice(0, 1024));
       form.append("parse_mode", "HTML");
     }
@@ -117,13 +134,13 @@ async function tgSendPhoto(
   }
 }
 
-/** v12.0 — آیا قالب استادیومی برای این نوع کارت آپلود شده؟ (حالت Broadcast بدون کپشن) */
-async function stadiumActive(kind: StadiumKind): Promise<boolean> {
-  try {
-    return (await getStadiumBackground(kind)) !== null;
-  } catch {
-    return false;
-  }
+async function tgSendPhoto(
+  photo: Buffer,
+  caption: string,
+  filename = "slip-card.png",
+  captionless = false
+): Promise<{ ok: boolean; detail: string }> {
+  return tgSendPhotoTo(await channelId(), photo, caption, filename, captionless);
 }
 
 /** v12.0 — ارسال مستقیم پوسترهای تولیدی سرور (نردبان مرکب/گزارش‌ها) با پشتیبانی Broadcast */
@@ -303,12 +320,9 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
 
   const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
 
-  // v12.0 — Broadcast mode: قالب استادیومی آپلودشده → sendPhoto بدون هیچ کپشن متنی
-  const broadcast = await stadiumActive("PRE_MATCH");
-
   let result: { ok: boolean; detail: string };
   if (photo) {
-    result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`, broadcast);
+    result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
   } else {
     // تصویر تولید نشد — پیام متنی HTML همچنان کامل ارسال می‌شود
     result = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
@@ -340,13 +354,9 @@ export async function sendSettlementNotification(slip: IssuedSlip): Promise<bool
   // v10.0 — تصویربرداری قطعی: برد طلایی همزمان (Double-Win) طراحی طلایی اختصاصی دارد
   const photo = await renderSlipResultPNG(slip);
 
-  // v12.0 — Broadcast mode: قالب استادیومی متناظر → sendPhoto بدون کپشن
-  const templateKind: StadiumKind = slip.status === "DOUBLE_WIN" ? "DOUBLE_WIN" : slip.status === "MIDDLE_TRAP" ? "LOSS" : "WIN";
-  const broadcast = await stadiumActive(templateKind);
-
   let ok = false;
   if (photo) {
-    ok = (await tgSendPhoto(photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`, broadcast)).ok;
+    ok = (await tgSendPhoto(photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`)).ok;
   } else {
     ok = (await tgCall("sendMessage", { chat_id: await channelId(), text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   }
@@ -690,17 +700,16 @@ export async function sendDailyDigest(force = false): Promise<boolean> {
     `${settled} کارت امروز روی اسکوربورد رسمی ESPN تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد\n` +
     `🔒 هیچ شبیه‌سازی و هیچ کارت کاغذی در این گزارش نیست.`;
 
-  const broadcast = await stadiumActive("DAILY_REPORT");
   let res: { ok: boolean; detail: string };
   try {
-    res = await tgSendPhoto(photo, caption, `daily-digest-${today}.png`, broadcast);
+    res = await tgSendPhoto(photo, caption, `daily-digest-${today}.png`);
   } catch (err) {
     console.warn("daily digest render failed:", err);
     res = await tgCall("sendMessage", { chat_id: await channelId(), text: caption, parse_mode: "HTML", disable_web_page_preview: true });
   }
   if (res.ok) {
     await setSetting(KEY_LAST_DIGEST_DAY, today);
-    await logOutbox(null, "DAILY_DIGEST", true, broadcast ? "broadcast" : "sent");
+    await logOutbox(null, "DAILY_DIGEST", true, "sent");
   }
   return res.ok;
 }
@@ -710,3 +719,286 @@ const C_cyan = "#38d6f5";
 const C_emerald = "#3ddc97";
 const C_gold = "#f5c542";
 const C_rose = "#ff6b7a";
+
+// ═══════════════════════════════════════════════════════════════
+// v13.0 — ایجنت مدیر کانال عمومی و VIP (@aineobet Channel Director Agent)
+// قیف تبدیل مخاطب عمومی به VIP — کاملاً سمت سرور:
+//   پست ۱ (۱۱:۰۰ تهران): رادار شفافیت روزانه → کانال عمومی
+//   پست ۲ (T-60m): ۱ کارت رایگان کامل + تیزرهای قفل‌شده → کانال عمومی
+//   پست ۳ (FT+5m): بازگشایی قفل همان کارت + پوستر WIN CONFIRMED → کانال عمومی
+//   پست ۴ (۲۳:۳۰ تهران): برآیند واقعی روز با افراز مجزا → کانال عمومی
+// Dedupe کامل با TelegramOutbox (kind = FUNNEL_*) و Setting روزانه.
+// ═══════════════════════════════════════════════════════════════
+
+const KEY_FUNNEL_RADAR_DAY = "funnel_last_radar_day";
+const KEY_FUNNEL_PNL_DAY = "funnel_last_pnl_day";
+const KEY_FUNNEL_GIFT_DAY = "funnel_last_gift_day";
+
+/** آمار رادار شفافیت — از دیتابیس کارنامه (بدون هیچ عدد جعلی) */
+export async function funnelRadarStats(): Promise<{ scanned: number; vetoed: number; golden: number }> {
+  const [all, vetoed] = await Promise.all([
+    db.issuedSlip.findMany({ select: { externalId: true, supervisorApproved: true } }),
+    db.issuedSlip.count({ where: { supervisorApproved: false } }),
+  ]);
+  const scanned = new Set(all.map((s) => s.externalId ?? s.id)).size;
+  const golden = await db.issuedSlip.count({ where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } } });
+  return { scanned, vetoed, golden };
+}
+
+/** پست ۱ — رادار شفافیت روزانه به کانال عمومی (ساعت ۱۱:۰۰ تهران، یک‌بار در روز) */
+export async function sendPublicRadar(force = false): Promise<boolean> {
+  const token = await botToken();
+  if (!token) return false;
+  const chatId = await publicChannelId();
+  if (!chatId) return false;
+
+  const today = tehranDayKey();
+  if (!force) {
+    const last = await getSetting(KEY_FUNNEL_RADAR_DAY);
+    if (last === today) return false;
+  }
+
+  const st = await funnelRadarStats();
+  const next = await db.issuedSlip.findFirst({
+    where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } },
+    orderBy: { kickoff: "asc" },
+  });
+  const topLine = next
+    ? `${next.homeTeam} vs ${next.awayTeam} · guaranteed +${next.marginPct.toFixed(1)}% dutch cover`
+    : "Scanner is waiting for the next ESPN matchday window";
+
+  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", timeZone: "Asia/Tehran" }).format(new Date());
+  const photo = await renderDailyRadarPNG({
+    dateLabelEn,
+    scanned: st.scanned,
+    vetoed: st.vetoed,
+    goldenSignals: st.golden,
+    topPickLine: topLine,
+  });
+
+  const caption =
+    `📡 <b>NEOBET QUANT PRO • ${esc(DEFAULT_PUBLIC_CHANNEL.replace("@", "@"))} — Daily Matchday Radar</b>\n` +
+    `🔍 ${st.scanned} matches scanned · 🛡️ ${st.vetoed} high-risk vetoed by the Supervisor · 👑 ${st.golden} golden signals issued for VIP.\n` +
+    `Free gift card + locked VIP teasers drop at T-60 before kickoff. Same SHA-256, unblurred after FT.`;
+
+  let res = await tgSendPhotoTo(chatId, photo, caption, `daily-radar-${today}.png`);
+  if (!res.ok) {
+    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
+  }
+  if (res.ok) {
+    await setSetting(KEY_FUNNEL_RADAR_DAY, today);
+    await logOutbox(null, "FUNNEL_RADAR", true, `public:${chatId}`);
+  }
+  return res.ok;
+}
+
+/** پست ۲ — قیف T-60m: ۱ کارت رایگان کامل + تیزرهای قفل‌شده به کانال عمومی */
+export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean; teasers: number }> {
+  const token = await botToken();
+  if (!token) return { gift: false, teasers: 0 };
+  const chatId = await publicChannelId();
+  if (!chatId) return { gift: false, teasers: 0 };
+
+  const now = Date.now();
+  const window = await db.issuedSlip.findMany({
+    where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: new Date(now + 25 * 60_000), lte: new Date(now + 95 * 60_000) } },
+    orderBy: { kickoff: "asc" },
+    take: 6,
+  });
+
+  const alreadySent = new Set(
+    (await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null } }, select: { slipId: true } })).map((r) => r.slipId)
+  );
+  const candidates = window.filter((s) => !alreadySent.has(s.id));
+  if (candidates.length === 0 && !force) return { gift: false, teasers: 0 };
+
+  const today = tehranDayKey();
+  const giftDay = await getSetting(KEY_FUNNEL_GIFT_DAY);
+
+  let gift = false;
+  let teasers = 0;
+
+  for (const slip of candidates) {
+    const isGift = giftDay !== today; // هر روز فقط ۱ کارت کامل رایگان
+    try {
+      if (isGift) {
+        const photo = await renderSlipCardPNG(slip);
+        const caption =
+          `🎁 <b>FREE GIFT CARD — 100% OPEN, NO LOCK</b>\n` +
+          `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
+          `🔹 Tip A @${slip.oddsA.toFixed(2)}: ${esc(slip.labelA)} · stake ${slip.stakeA.toFixed(1)}u\n` +
+          `🟢 Tip B @${slip.oddsB.toFixed(2)}: ${esc(slip.labelB)} · stake ${slip.stakeB.toFixed(1)}u\n` +
+          `💰 Guaranteed dutch profit: <b>+${slip.marginPct.toFixed(1)}%</b>\n` +
+          `🔐 SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
+          `Every settlement is auto-graded on the official ESPN final score.`;
+        const ok = (await tgSendPhotoTo(chatId, photo, caption, `gift-${slip.hash.slice(0, 10)}.png`)).ok;
+        if (ok) {
+          gift = true;
+          await setSetting(KEY_FUNNEL_GIFT_DAY, today);
+          await logOutbox(slip.id, "FUNNEL_GIFT", true, `public:${chatId}`);
+        }
+      } else {
+        const photo = await renderLockedTeaserPNG(slip);
+        const caption =
+          `🔒 <b>VIP TEASER — UNBLURRED AFTER FT</b>\n` +
+          `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
+          `💰 Guaranteed cover profit: <b>+${slip.marginPct.toFixed(1)}%</b> · Tip A @${slip.oddsA.toFixed(2)} revealed — Tip B locked.\n` +
+          `🔐 Pre-match SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
+          `Join VIP to unlock the complementary leg before kickoff.`;
+        const ok = (await tgSendPhotoTo(chatId, photo, caption, `teaser-${slip.hash.slice(0, 10)}.png`)).ok;
+        if (ok) {
+          teasers += 1;
+          await logOutbox(slip.id, "FUNNEL_TEASER", true, `public:${chatId}`);
+        }
+      }
+    } catch (err) {
+      console.warn("funnel teaser failed:", err instanceof Error ? err.message : err);
+    }
+  }
+  return { gift, teasers };
+}
+
+/** پست ۳ — FT+5m: بازگشایی قفل همان کارت + پوستر نتیجه در کانال عمومی (اثبات SHA-256) */
+export async function sendPublicUnblur(): Promise<number> {
+  const token = await botToken();
+  if (!token) return 0;
+  const chatId = await publicChannelId();
+  if (!chatId) return 0;
+
+  // کارت‌های تسویه‌شده که تیزر/گیفت عمومی دارند ولی اثبات عمومی نگرفته‌اند
+  const teased = (
+    await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null } }, select: { slipId: true } })
+  ).map((r) => r.slipId as string);
+  const proven = new Set(
+    (await db.telegramOutbox.findMany({ where: { kind: "FUNNEL_UNBLUR", slipId: { not: null } }, select: { slipId: true } })).map((r) => r.slipId)
+  );
+  const ids = teased.filter((id) => !proven.has(id));
+  if (ids.length === 0) return 0;
+
+  const slips = await db.issuedSlip.findMany({
+    where: { id: { in: ids }, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    orderBy: { settledAt: "asc" },
+    take: 4,
+  });
+
+  let sent = 0;
+  for (const slip of slips) {
+    try {
+      const unblurred = await renderSlipCardPNG(slip);
+      const result = await renderSlipResultPNG(slip);
+      const r = slipResultLabel(slip.status);
+      const caption =
+        `🔓 <b>UNBLURRED — SAME SHA-256, NOW OPEN</b>\n` +
+        `🏆 <b>${esc(slip.homeTeam)} ${slip.homeGoals ?? 0}−${slip.awayGoals ?? 0} ${esc(slip.awayTeam)}</b> · FT (official ESPN)\n` +
+        `${r.emoji} Result: <b>${esc(r.label)}</b> · net ${((slip.netProfit ?? 0) >= 0 ? "+" : "")}${(slip.netProfit ?? 0).toFixed(1)}u\n` +
+        `🔐 Pre-match hash: <code>${slip.hash.slice(0, 24)}</code> — identical to the locked teaser posted before kickoff.\n` +
+        `The VIP leg that was blurred is now fully visible. Zero edits, zero deletions — full transparency.`;
+      const okPhoto = (await tgSendPhotoTo(chatId, unblurred, caption, `unblur-${slip.hash.slice(0, 10)}.png`)).ok;
+      if (okPhoto) {
+        await tgSendPhotoTo(chatId, result, caption, `proof-${slip.hash.slice(0, 10)}.png`);
+        sent += 1;
+        await logOutbox(slip.id, "FUNNEL_UNBLUR", true, `public:${chatId}`);
+      }
+    } catch (err) {
+      console.warn("funnel unblur failed:", err instanceof Error ? err.message : err);
+    }
+  }
+  return sent;
+}
+
+/**
+ * پست ۴ — برآیند واقعی شب (۲۳:۳۰ تهران) به کانال عمومی:
+ * سود خالص واقعی روز با «افراز مجزا» — دسته الف تک‌بازی / ب میکس / ج تیپ‌های ضریب بالا.
+ * صفر دوباره‌شماری: هر کارت فقط در خط تولید خودش شمرده می‌شود.
+ */
+export async function sendNightlyPnl(force = false): Promise<boolean> {
+  const token = await botToken();
+  if (!token) return false;
+  const chatId = await publicChannelId();
+  if (!chatId) return false;
+
+  const today = tehranDayKey();
+  if (!force) {
+    const last = await getSetting(KEY_FUNNEL_PNL_DAY);
+    if (last === today) return false;
+  }
+
+  const rows = await db.issuedSlip.findMany({
+    where: { supervisorApproved: true, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, settledAt: { not: null } },
+    orderBy: { settledAt: "desc" },
+    take: 80,
+  });
+  const todayRows = rows.filter((r) => tehranDayKey(r.settledAt as Date) === today);
+
+  const tierNet = (line: string) => todayRows.filter((r) => (r.productLine ?? "SINGLE") === line).reduce((a, r) => a + (r.netProfit ?? 0), 0);
+  const netA = tierNet("SINGLE");
+  const netB = tierNet("COMBO");
+  const netC = tierNet("SNIPER");
+  const total = netA + netB + netC;
+  const settled = todayRows.length;
+  const wins = todayRows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+
+  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+  const timeEn = (d: Date) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d);
+
+  const photo = await renderDailyReportPNG({
+    dateLabelEn,
+    kpis: [
+      { label: "TIER 1 · DUAL-HEDGE NET", value: `${netA >= 0 ? "+" : "−"}${Math.abs(netA).toFixed(1)}`, color: netA >= 0 ? C_emerald : C_rose },
+      { label: "TIER 2 · COMBO NET", value: `${netB >= 0 ? "+" : "−"}${Math.abs(netB).toFixed(1)}`, color: netB >= 0 ? C_emerald : C_rose },
+      { label: "TIER 3 · SNIPER NET", value: `${netC >= 0 ? "+" : "−"}${Math.abs(netC).toFixed(1)}`, color: netC >= 0 ? C_emerald : C_rose },
+      { label: "CHANNEL WIN-RATE", value: `${winRate.toFixed(0)}%`, color: C_cyan },
+    ],
+    matches: todayRows.slice(0, 4).map((r) => ({
+      teams: `${r.homeTeam} vs ${r.awayTeam}`,
+      score: `${r.homeGoals ?? 0}-${r.awayGoals ?? 0}`,
+      verdict: `${r.status.replace("_", " ")} · settled ${r.settledAt ? timeEn(r.settledAt) : ""} Tehran`,
+      profit: r.netProfit ?? 0,
+    })),
+    dayNetProfit: Math.round(total * 100) / 100,
+    daySettled: settled,
+    dayStaked: Math.round(todayRows.reduce((a, r) => a + r.stakeA + r.stakeB, 0)),
+  });
+
+  const caption =
+    `🌙 <b>NEOBET QUANT PRO • Nightly Real PnL — Disjoint Product Lines</b>\n` +
+    `Tier 1 Dual-Hedge: <b>${netA >= 0 ? "+" : ""}${netA.toFixed(1)}u</b> · Tier 2 Combos: <b>${netB >= 0 ? "+" : ""}${netB.toFixed(1)}u</b> · Tier 3 Sniper: <b>${netC >= 0 ? "+" : ""}${netC.toFixed(1)}u</b>\n` +
+    `Day net: <b>${total >= 0 ? "+" : ""}${total.toFixed(1)} units</b> on ${settled} real ESPN-settled tickets · win-rate ${winRate.toFixed(1)}%.\n` +
+    `Strictly disjoint accounting — no ticket is ever counted in two lines. No simulation, no paper trades.`;
+
+  let res = await tgSendPhotoTo(chatId, photo, caption, `nightly-pnl-${today}.png`);
+  if (!res.ok) {
+    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
+  }
+  if (res.ok) {
+    await setSetting(KEY_FUNNEL_PNL_DAY, today);
+    await logOutbox(null, "FUNNEL_PNL", true, `public:${chatId}`);
+  }
+  return res.ok;
+}
+
+/** وضعیت قیف برای کنسول ایجنت مدیر کانال */
+export async function funnelStatus() {
+  const [pub, vip, radarDay, pnlDay, giftDay, stats] = await Promise.all([
+    publicChannelId(),
+    channelId(),
+    getSetting(KEY_FUNNEL_RADAR_DAY),
+    getSetting(KEY_FUNNEL_PNL_DAY),
+    getSetting(KEY_FUNNEL_GIFT_DAY),
+    funnelRadarStats(),
+  ]);
+  const counts = await db.telegramOutbox.groupBy({ by: ["kind"], where: { kind: { startsWith: "FUNNEL" } }, _count: { kind: true } });
+  const recent = await db.telegramOutbox.findMany({ where: { kind: { startsWith: "FUNNEL" } }, orderBy: { createdAt: "desc" }, take: 12, select: { kind: true, ok: true, detail: true, createdAt: true } });
+  return {
+    publicChannel: pub,
+    vipChannel: vip,
+    today: tehranDayKey(),
+    radarSentToday: radarDay === tehranDayKey(),
+    pnlSentToday: pnlDay === tehranDayKey(),
+    giftSentToday: giftDay === tehranDayKey(),
+    stats,
+    sentCounts: Object.fromEntries(counts.map((c) => [c.kind, c._count.kind])),
+    recent,
+  };
+}

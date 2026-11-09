@@ -12,15 +12,16 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
 /**
- * GET /api/settlement/categories
- * عملکرد هر دسته فلش‌کارت روی کارنامه واقعی + دفتر سایه:
- *   APPROVED — کارت‌های تایید سوپروایزر (پول واقعی، تلگرام)
- *   VETOED   — کارت‌های سایه (تسویه کاغذی — پاسخ مستقیم به «وتوها چه نتیجه‌ای گرفتند؟»)
- *   PROFIT15 — کارت‌های با سود تضمینی بالای ۱۵٪
- *   RISK10   — کارت‌های با ریسک باخت همزمان زیر ۱۰٪
- *   DOUBLE   — کارت‌های دارای فرصت Double-Win (احتمال برد همزمان > ۲٪) + بردهای واقعی
+ * GET /api/settlement/categories — v13.0
+ * ═══ افراز ۱۰۰٪ مجزا (Disjoint Partitioning) — صفر دوباره‌شماری ═══
+ * هر کارت صادرشده فقط و فقط در یکی از ۴ دسته زیر شمرده می‌شود:
+ *   الف — LINE_A: تک‌بازی‌های تاییدشده سوپروایزر (productLine=SINGLE، پول واقعی)
+ *   ب — LINE_B: میکس‌های ۲ و ۳ تایی هوشمند (productLine=COMBO، محاسبه مستقل)
+ *   ج — LINE_C: شکارچی ضرایب بالا (productLine=SNIPER، محاسبه مستقل)
+ *   د — LINE_D: وتوشده‌های دفتر سایه (supervisorApproved=false — تسویه کاغذی، ۰ اشتراک با الف)
  *
- * دسته‌ها متقابلاً منحصربه‌فرد نیستند — یک کارت می‌تواند هم‌زمان PROFIT15 و RISK10 باشد.
+ * v12 قدیمی دسته‌های همپوشان (RISK10/PROFIT15/DOUBLE) داشت که یک کارت می‌توانست
+ * هم‌زمان در چند دسته شمرده شود (+۳۵۱.۸ و +۳۱۶.۱ جمع‌پذیر نبودند) — حذف شد.
  */
 export async function GET() {
   try {
@@ -28,9 +29,9 @@ export async function GET() {
       select: {
         status: true,
         supervisorApproved: true,
+        productLine: true,
         netProfit: true,
         marginPct: true,
-        guaranteedProfit: true,
         jointLossRiskPct: true,
         doubleWinProbPct: true,
       },
@@ -66,25 +67,13 @@ export async function GET() {
       c.label = label;
       c.description = description;
       c.paper = paper;
-      let marginSum = 0;
-      let marginN = 0;
       let riskSum = 0;
       let riskN = 0;
-      let dwSum = 0;
-      let dwN = 0;
       for (const s of rows) {
         c.total += 1;
-        if (typeof s.marginPct === "number") {
-          marginSum += s.marginPct;
-          marginN += 1;
-        }
         if (typeof s.jointLossRiskPct === "number") {
           riskSum += s.jointLossRiskPct;
           riskN += 1;
-        }
-        if (typeof s.doubleWinProbPct === "number") {
-          dwSum += s.doubleWinProbPct;
-          dwN += 1;
         }
         if (!SETTLED.includes(s.status)) {
           c.pending += 1;
@@ -98,45 +87,48 @@ export async function GET() {
       }
       c.winRate = c.settled > 0 ? r1((c.wins / c.settled) * 100) : null;
       c.netProfit = r2(c.netProfit);
-      c.avgGuaranteedProfitPct = marginN > 0 ? r1(marginSum / marginN) : null;
       c.avgJointLossRiskPct = riskN > 0 ? r1(riskSum / riskN) : null;
-      c.avgDoubleWinProbPct = dwN > 0 ? r1(dwSum / dwN) : null;
       return c;
     };
 
-    // ─── تفکیک پایه: واقعی در برابر سایه ───
+    // ─── افراز مجزا بر اساس productLine + وضعیت تایید سوپروایزر ───
     const approved = slips.filter((s) => s.supervisorApproved);
-    const vetoed = slips.filter((s) => !s.supervisorApproved);
+    const partitionA = approved.filter((s) => (s.productLine ?? "SINGLE") === "SINGLE");
+    const partitionB = approved.filter((s) => s.productLine === "COMBO");
+    const partitionC = approved.filter((s) => s.productLine === "SNIPER");
+    const partitionD = slips.filter((s) => !s.supervisorApproved);
+
+    // کنترل افراز: مجموع ۴ دسته = کل کارت‌ها (هر کارت دقیقاً یک‌بار)
+    const sumTotal = partitionA.length + partitionB.length + partitionC.length + partitionD.length;
 
     const categories: CategoryPerformanceDTO[] = [
-      agg(approved, "APPROVED", "تاییدشده سوپروایزر", "کارت‌های دارای مهر 👑 — پول واقعی و اعلام تلگرام", false),
       agg(
-        vetoed,
+        partitionA,
+        "APPROVED",
+        "👑 دسته الف — تک‌بازی‌های تاییدشده سوپروایزر",
+        "خط تولید ۱ (Single Dual-Hedge) — پول واقعی و اعلام تلگرام؛ بدون هیچ اشتراکی با دسته‌های دیگر",
+        false
+      ),
+      agg(
+        partitionB,
+        "COMBO",
+        "🔗 دسته ب — میکس‌های ۲ و ۳ تایی هوشمند",
+        "خط تولید ۲ (Smart Combos) — محاسبه مستقل؛ با اولین صدور میکس‌ها پر می‌شود",
+        false
+      ),
+      agg(
+        partitionC,
+        "SNIPER",
+        "🎯 دسته ج — شکارچی ضرایب بالا",
+        "خط تولید ۳ (High-Odds Sniper) — محاسبه مستقل؛ با اولین صدور شکارها پر می‌شود",
+        false
+      ),
+      agg(
+        partitionD,
         "VETOED",
-        "وتوشده (دفتر سایه)",
-        "کارت‌های وتو شده — تسویه کاغذی counterfactual؛ پاسخ «اگر شرط می‌بستیم چه می‌شد؟»",
+        "🛡️ دسته د — وتوشده‌های دفتر سایه",
+        "تسویه کاغذی counterfactual — ۰ اشتراک با تاییدشده‌ها؛ اثبات نجات سرمایه (والنسیا–رئال مادرید −۱۰۰ واحد)",
         true
-      ),
-      agg(
-        slips.filter((s) => (s.marginPct ?? 0) > 15),
-        "PROFIT15",
-        "سود تضمینی بالای ۱۵٪",
-        "کارت‌هایی که حاشیه داچینگ تضمینی‌شان بالای ۱۵٪ بود (واقعی + سایه)",
-        false
-      ),
-      agg(
-        slips.filter((s) => (s.jointLossRiskPct ?? 100) < 10),
-        "RISK10",
-        "ریسک باخت همزمان زیر ۱۰٪",
-        "کارت‌هایی که ریسک باخت همزمان مونت‌کارلوی‌شان زیر ۱۰٪ بود",
-        false
-      ),
-      agg(
-        slips.filter((s) => (s.doubleWinProbPct ?? 0) > 2),
-        "DOUBLE",
-        "فرصت‌های Double-Win",
-        "کارت‌هایی با احتمال برد طلایی همزمان بالای ۲٪ — بردهای واقعی DOUBLE_WIN شمرده می‌شوند",
-        false
       ),
     ];
 
@@ -145,8 +137,11 @@ export async function GET() {
       categories,
       shadowLedger: {
         approvedSlips: approved.length,
-        shadowSlips: vetoed.length,
-        note: "از v11.0 وتوها دور ریخته نمی‌شوند؛ با همان موتور ESPN تسویه کاغذی می‌شوند تا وین‌ریت کارنامه بدون سوگیری بازماندگی قابل ارزیابی باشد.",
+        shadowSlips: partitionD.length,
+        note:
+          sumTotal === slips.length
+            ? "افراز مجزا v13.0 تأیید شد — مجموع ۴ دسته دقیقاً برابر کل کارت‌هاست؛ هیچ کارتی دوبار شمرده نمی‌شود."
+            : `هشدار افراز: مجموع دسته‌ها (${sumTotal}) با کل کارت‌ها (${slips.length}) نمی‌خواند.`,
       },
       generatedAt: new Date().toISOString(),
     };
