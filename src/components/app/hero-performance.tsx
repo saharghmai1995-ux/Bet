@@ -101,8 +101,19 @@ function LegendRow({ color, label, value }: { color: string; label: string; valu
   );
 }
 
+/** نمونه‌برداری یکنواخت — همیشه نقطه اول و آخر حفظ می‌شود (رفع اعوجاج منحنی) */
+function downsampleEvenly(arr: number[], maxPts: number): number[] {
+  if (arr.length <= maxPts) return arr;
+  const out: number[] = [];
+  for (let i = 0; i < maxPts - 1; i++) {
+    out.push(arr[Math.round((i * (arr.length - 1)) / (maxPts - 1))]);
+  }
+  out.push(arr[arr.length - 1]);
+  return out;
+}
+
 /** منحنی اسپارک‌لاین رشد سرمایه (SVG متحرک با draw-in) */
-function EquitySparkline({ curve, roi }: { curve: number[]; roi: number }) {
+function EquitySparkline({ curve, roi, finalBank }: { curve: number[]; roi: number; finalBank: number }) {
   const [drawn, setDrawn] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setDrawn(true), 200);
@@ -130,14 +141,17 @@ function EquitySparkline({ curve, roi }: { curve: number[]; roi: number }) {
         </p>
         <p className="font-num text-xs font-bold" dir="ltr">
           <span className={up ? "text-emerald-300" : "text-rose-300"}>
-            {faNum(Math.round(pts[pts.length - 1]), 0)}
+            {faNum(Math.round(finalBank), 0)}
           </span>{" "}
           <span className={up ? "text-emerald-400" : "text-rose-400"}>
             ({up ? "+" : ""}{faNum(roi, 1)}% ROI)
           </span>
         </p>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-[74px] w-full" role="img" aria-label="نمودار رشد سرمایه بر پایه سود واقعی کارت‌های تسویه‌شده">
+      <p className="mb-0.5 text-[9px] leading-3 text-muted-foreground/80">
+        مبنای منحنی: فقط کارت‌های تایید سوپروایزر (پول واقعی) — وتوهای دفتر سایه در این منحنی لحاظ نمی‌شوند.
+      </p>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-[70px] w-full" role="img" aria-label="نمودار رشد سرمایه بر پایه سود واقعی کارت‌های تاییدشده">
         <defs>
           <linearGradient id="eq-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="#34d399" stopOpacity="0.45" />
@@ -368,7 +382,7 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
     };
   }, []);
 
-  const { winPct, breakdown, curve, roi, settledCount } = useMemo(() => {
+  const { winPct, breakdown, curve, roi, settledCount, finalBank } = useMemo(() => {
     const stats = ledger?.stats;
     const settled = stats?.settled ?? 0;
     const wins = (stats?.wonA ?? 0) + (stats?.wonB ?? 0) + (stats?.doubleWin ?? 0);
@@ -383,9 +397,10 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           }
         : null;
 
-    // منحنی واقعی از کارت‌های تسویه‌شده (به ترتیب زمان تسویه)
+    // منحنی واقعی «فقط کارت‌های تایید سوپروایزر» (پول واقعی) — هم‌مبنا با «سود خالص مجموع» کارنامه
+    // وتوهای دفتر سایه (تسویه کاغذی) عمداً حذف شده‌اند تا انتهای منحنی با سود خالص تیتر برابر باشد
     const settledSlips = (ledger?.slips ?? [])
-      .filter((s) => s.netProfit !== null && s.settledAt)
+      .filter((s) => s.supervisorApproved && s.netProfit !== null && s.settledAt)
       .sort((a, b) => new Date(a.settledAt!).getTime() - new Date(b.settledAt!).getTime());
     let acc = START_BANK;
     const fullCurve = [acc];
@@ -393,9 +408,9 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
       acc += s.netProfit ?? 0;
       fullCurve.push(acc);
     }
-    const curve = fullCurve.length > 31 ? [fullCurve[0], ...fullCurve.slice(-30)] : fullCurve;
+    const curve = downsampleEvenly(fullCurve, 31);
     const roi = ((acc - START_BANK) / START_BANK) * 100;
-    return { winPct, breakdown, curve, roi, settledCount: settled };
+    return { winPct, breakdown, curve, roi, settledCount: settled, finalBank: acc };
   }, [ledger]);
 
   return (
@@ -426,7 +441,7 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           <WinRateGauge winPct={winPct} breakdown={breakdown} />
         </div>
         <div className="flex flex-col rounded-xl border border-white/8 bg-white/[0.02] p-3">
-          <EquitySparkline curve={curve} roi={roi} />
+          <EquitySparkline curve={curve} roi={roi} finalBank={finalBank} />
         </div>
         <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
           <VetoEfficiency approved={approved} vetoed={vetoed} scanned={scanned} />
