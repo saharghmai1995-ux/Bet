@@ -42,6 +42,29 @@ const pollState: PollingState = {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ─── امن‌سازی hot-reload: حلقه نسل‌دار — هر reload نسل قبلی را متوقف می‌کند ──
+type LoopHandle = { stop: boolean };
+const g = globalThis as typeof globalThis & { __vipBotLoop?: LoopHandle };
+if (g.__vipBotLoop) g.__vipBotLoop.stop = true;
+const loopHandle: LoopHandle = { stop: false };
+g.__vipBotLoop = loopHandle;
+
+// ─── منوی رسمی BotFather — هم‌گام با هندلرهای دستور در bot.ts ────────────
+async function registerBotMenu(c: BotConfig): Promise<void> {
+  await tgApiCall(c, "setMyCommands", {
+    commands: [
+      { command: "start", description: "🏁 شروع / منوی اصلی NeoBet" },
+      { command: "plans", description: "💎 پلن‌های اشتراک کانال VIP" },
+      { command: "free", description: "🎁 سیگنال رایگان امروز + تست ریسک" },
+      { command: "status", description: "👤 وضعیت اشتراک من" },
+      { command: "referral", description: "🚀 دعوت دوستان — VIP رایگان" },
+      { command: "pay", description: "💳 روش‌های پرداخت (تتر / کارت‌به‌کارت)" },
+      { command: "lang", description: "🌐 تغییر زبان / Switch Language" },
+    ],
+  });
+  console.log("[MENU] BotFather commands registered (7)");
+}
+
 // ─── حلقه polling تلگرام (معادل run_polling_loop پایتون + ری‌لود داغ کانفیگ) ──
 
 async function pollingLoop(): Promise<void> {
@@ -50,6 +73,10 @@ async function pollingLoop(): Promise<void> {
   let tokenInUse = "";
 
   for (;;) {
+    if (loopHandle.stop) {
+      console.log("[POLL] loop generation ended (hot-reload replaced it).");
+      return;
+    }
     cfg = loadConfig(db); // تغییرات پنل وب (توکن / توقف) بدون ری‌استارت اعمال می‌شود
     if (!isTokenConfigured(cfg) || !cfg.pollingEnabled) {
       if (pollState.running) {
@@ -65,10 +92,20 @@ async function pollingLoop(): Promise<void> {
       offset = 0; // توکن جدید → خواندن از صف تازه
       tokenInUse = cfg.botToken;
       console.log(`🤖 Starting @${cfg.botUsername} polling (USDT + Iranian Card-to-Card Gateway) on ${DB_PATH}...`);
+      void registerBotMenu(cfg);
     }
 
     try {
-      const res = await tgApiCall<{ update_id: number }[]>(cfg, "getUpdates", { offset, timeout: 25 });
+      const res = await tgApiCall<{ update_id: number }[]>(
+        cfg,
+        "getUpdates",
+        {
+          offset,
+          timeout: 25,
+          allowed_updates: ["message", "edited_message", "channel_post", "edited_channel_post", "callback_query", "my_chat_member"],
+        },
+        40_000 // long-poll 25s تلگرام + حاشیه — باید بزرگ‌تر از timeout تلگرام باشد
+      );
       pollState.lastPollAt = new Date().toISOString();
 
       // سوییپ ساعتی اعضای منقضی (معادل پایتون)

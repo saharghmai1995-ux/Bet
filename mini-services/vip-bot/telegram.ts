@@ -14,7 +14,8 @@ export interface TgResult<T = unknown> {
 export async function tgApiCall<T = unknown>(
   cfg: BotConfig,
   method: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  timeoutMs = 15_000
 ): Promise<TgResult<T> | null> {
   if (!cfg.botToken || cfg.botToken.includes("YOUR_")) return null;
   try {
@@ -22,7 +23,7 @@ export async function tgApiCall<T = unknown>(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     return (await res.json()) as TgResult<T>;
   } catch (exc) {

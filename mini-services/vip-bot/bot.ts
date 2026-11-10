@@ -9,6 +9,7 @@
 
 import type { Database } from "bun:sqlite";
 import type { BotConfig } from "./config";
+import { saveConfig } from "./config";
 import {
   computeStats,
   createCardReceipt,
@@ -32,21 +33,105 @@ import {
 } from "./telegram";
 import { verifyUsdtTxid } from "./verify";
 
+interface TgChat {
+  id: number;
+  type: string; // private | group | supergroup | channel
+  title?: string;
+  username?: string;
+}
+
 interface TgMessage {
-  chat: { id: number };
+  chat: TgChat;
   from?: { id: number; username?: string };
   text?: string;
   photo?: { file_id: string }[];
+  forward_from_chat?: TgChat;
+  sender_chat?: TgChat;
 }
 
 interface TgCallbackQuery {
   id: string;
   from: { id: number; username?: string };
-  message?: { chat: { id: number } };
+  message?: { chat: TgChat };
   data?: string;
 }
 
-type Update = { message?: TgMessage; callback_query?: TgCallbackQuery };
+interface TgMyChatMember {
+  chat: TgChat;
+  from?: { id: number; username?: string };
+  new_chat_member?: { status: string };
+}
+
+type Update = {
+  message?: TgMessage;
+  callback_query?: TgCallbackQuery;
+  channel_post?: TgMessage;
+  my_chat_member?: TgMyChatMember;
+};
+
+// ─── خودآموزی هوشمند شناسه‌ها (Auto-Learn) ────────────────────────────────
+// تا وقتی ادمین/کانال VIP مقدار پیش‌فرض پایتون باشند، ربات از رویدادهای واقعی
+// یاد می‌گیرد: /start خصوصی ← ادمین · فوروارد پست کانال یا channel_post یا
+// my_chat_member ← شناسه عددی کانال VIP. یک‌بار ثبت و در DB قفل می‌شود.
+
+const VIP_PLACEHOLDER = "-1001234567890";
+const ADMIN_PLACEHOLDER = 123456789;
+
+const isVipPlaceholder = (id: string) => !id || id === VIP_PLACEHOLDER;
+const isAdminPlaceholder = (id: number) => !id || id === ADMIN_PLACEHOLDER;
+
+async function learnIdsFromUpdate(db: Database, cfg: BotConfig, update: Update): Promise<void> {
+  const notes: string[] = [];
+
+  // ۱) my_chat_member — بات به کانال/سوپرگروه اضافه، حذف یا ارتقا یافت
+  const mcm = update.my_chat_member;
+  if (mcm?.chat && (mcm.chat.type === "channel" || mcm.chat.type === "supergroup")) {
+    if (isVipPlaceholder(cfg.vipChannelId)) {
+      cfg.vipChannelId = String(mcm.chat.id);
+      notes.push(`کانال VIP ← ${mcm.chat.id} (${mcm.chat.title ?? "بدون عنوان"})`);
+    }
+    if (mcm.from?.id && isAdminPlaceholder(cfg.adminUserId)) {
+      cfg.adminUserId = mcm.from.id;
+      notes.push(`ادمین ← ${mcm.from.id}`);
+    }
+  }
+
+  // ۲) channel_post — پستی از کانالی که بات ادمین آن است
+  const post = update.channel_post ?? (update.message && update.message.chat.type === "channel" ? update.message : undefined);
+  if (post?.chat.type === "channel" && isVipPlaceholder(cfg.vipChannelId)) {
+    cfg.vipChannelId = String(post.chat.id);
+    notes.push(`کانال VIP ← ${post.chat.id} (channel_post)`);
+  }
+
+  // ۳) پیام خصوصی — فوروارد از کانال VIP یا /start مالک
+  const msg = update.message;
+  if (msg && msg.chat.type === "private") {
+    const fwd = msg.forward_from_chat ?? msg.sender_chat;
+    if (fwd?.type === "channel" && isVipPlaceholder(cfg.vipChannelId)) {
+      cfg.vipChannelId = String(fwd.id);
+      notes.push(`کانال VIP ← ${fwd.id} (فوروارد)`);
+    }
+    if (msg.text?.startsWith("/start") && msg.from?.id && isAdminPlaceholder(cfg.adminUserId)) {
+      cfg.adminUserId = msg.from.id;
+      notes.push(`ادمین ← ${msg.from.id} (/start مالک)`);
+    }
+  }
+
+  if (notes.length === 0) return;
+  saveConfig(db, { vipChannelId: cfg.vipChannelId, adminUserId: cfg.adminUserId });
+  console.log(`[LEARN] auto-configured: ${notes.join(" | ")}`);
+  if (!isAdminPlaceholder(cfg.adminUserId)) {
+    await tgApiCall(cfg, "sendMessage", {
+      chat_id: cfg.adminUserId,
+      text: (
+        "⚙️ <b>پیکربندی خودکار @aineobet_bot ثبت شد</b>\n\n" +
+        notes.map((n) => `▫️ ${n}`).join("\n") +
+        "\n\n🔐 مقادیر در دیتابیس قفل شدند. برای تکمیل درگاه‌ها، کیف پول‌های USDT (TRC20/Polygon) و کارت بانکی را از پنل وب (تب ربات اشتراک VIP) ثبت کنید."
+      ),
+      parse_mode: "HTML",
+    });
+  }
+}
 
 // ─── کیبوردهای شیشه‌ای ───────────────────────────────────────────────────────
 
@@ -196,6 +281,9 @@ export async function sweepExpiredVipMembers(db: Database, cfg: BotConfig): Prom
 // ─── پردازشگر آپدیت‌های تلگرام (بخش ۷ پایتون) ───────────────────────────────
 
 export async function handleUpdate(db: Database, cfg: BotConfig, update: Update): Promise<void> {
+  // خودآموزی شناسه‌های مالک/کانال VIP — قبل از هر پردازشی
+  await learnIdsFromUpdate(db, cfg, update);
+
   const msgs = buildMessages(cfg.publicChannelUsername);
 
   if (update.message) {
@@ -227,6 +315,29 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
         text: m.welcome,
         parse_mode: "HTML",
         reply_markup: mainMenuKeyboard(lang, msgs),
+      });
+      return;
+    }
+
+    // ─── دستورات منوی BotFather — به همان مسیر دکمه‌های شیشه‌ای هدایت می‌شوند ───
+    const cmd = text.toLowerCase().split(/[\s@]/)[0];
+    const CMD_TO_CALLBACK: Record<string, string> = {
+      "/plans": "menu_plans",
+      "/free": "menu_free_signal",
+      "/status": "menu_status",
+      "/referral": "menu_referral",
+      "/lang": "toggle_lang",
+      "/vip": "menu_plans",
+      "/pay": "menu_plans",
+    };
+    if (CMD_TO_CALLBACK[cmd]) {
+      await handleUpdate(db, cfg, {
+        callback_query: {
+          id: "cmd-dispatch",
+          from: msg.from ?? { id: userId, username },
+          message: { chat: msg.chat },
+          data: CMD_TO_CALLBACK[cmd],
+        },
       });
       return;
     }
@@ -473,7 +584,10 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
       });
     }
 
-    await tgApiCall(cfg, "answerCallbackQuery", { callback_query_id: cbId });
+    // پاسخ کوتاه به تلگرام — برای dispatch دستورات متنی (id مصنوعی) لازم نیست
+    if (cbId !== "cmd-dispatch") {
+      await tgApiCall(cfg, "answerCallbackQuery", { callback_query_id: cbId });
+    }
   }
 }
 

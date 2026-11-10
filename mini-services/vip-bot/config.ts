@@ -63,7 +63,7 @@ export function loadConfig(db: Database): BotConfig {
   cfg.bankCardHolder = s("bankCardHolder", cfg.bankCardHolder);
   cfg.bankName = s("bankName", cfg.bankName);
   cfg.usdtToTomanRate = Number(map.get("usdtToTomanRate") ?? cfg.usdtToTomanRate) || cfg.usdtToTomanRate;
-  cfg.pollingEnabled = (map.get("pollingEnabled") ?? "1") === "1";
+  cfg.pollingEnabled = (map.get("pollingEnabled") ?? "1") === "1" || map.get("pollingEnabled") === "true";
   return cfg;
 }
 
