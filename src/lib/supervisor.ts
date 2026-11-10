@@ -68,8 +68,23 @@ function riskPenalty(jointLossRiskPct: number): number {
   return Math.pow(Math.max(0, jointLossRiskPct), 1.75);
 }
 
-/** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — دقیقاً طبق فرمول v11.0 */
-export function scorePair(p: PortfolioPairDTO, rule?: ActiveLeagueRule | null): SupervisorScore {
+/**
+ * v14.0 — پاداش الگوی اختصاصی دسته رقابت (اسکنر چهارفصل):
+ * بازی‌های ملی → +۱۵ به الگوی «قفل تدافعی / زیر ۲.۵ گل» (A1)
+ * لیگ قهرمانان زنان → +۱۸ به الگوی «فتح فاوریت با بالای ۲.۵» (A2)
+ */
+export interface CategoryBoost {
+  code: "A1" | "A2" | "A3" | "A4" | "A5";
+  points: number;
+  label: string;
+}
+
+/** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — دقیقاً طبق فرمول v11.0 + پاداش دسته v14.0 */
+export function scorePair(
+  p: PortfolioPairDTO,
+  rule?: ActiveLeagueRule | null,
+  categoryBoost?: CategoryBoost | null
+): SupervisorScore {
   const guaranteedProfitPct = p.guaranteedMarginPct; // ٪ سود تضمینی داچینگ
   const doubleWinProbPct = p.jointStates.bothWin * 100; // ٪ برد طلایی همزمان (فقط نمایش — بدون پاداش)
   const jointLossRiskPct = p.jointStates.bothLose * 100; // ٪ باخت همزمان
@@ -78,7 +93,10 @@ export function scorePair(p: PortfolioPairDTO, rule?: ActiveLeagueRule | null): 
 
   // v9.0 — بردار قانون فعال کالیبراسیون: پاداش/جریمه عددی الگو (A1..A5)
   const code = p.archetype?.code ?? null;
-  const boost = code && rule ? (rule.archetypeBoosts[code] ?? 0) : 0;
+  let boost = code && rule ? (rule.archetypeBoosts[code] ?? 0) : 0;
+  // v14.0 — پاداش قاعده دسته رقابت (NATIONAL/WOMEN_ELITE) روی الگوی هدف
+  const categoryBoostPts = code && categoryBoost && categoryBoost.code === code ? categoryBoost.points : 0;
+  boost += categoryBoostPts;
 
   // ═══ فرمول v11.0 — حذف کامل پاداش فریبنده Double-Win ═══
   const raw = coveragePct * 1.5 + guaranteedProfitPct * 1.3 - riskPenalty(jointLossRiskPct) + boost;
@@ -160,7 +178,8 @@ function shortOf(p: PortfolioPairDTO): string {
 export function pickCrownPair(
   pairs: PortfolioPairDTO[],
   executionMode: ExecutionMode,
-  rule?: ActiveLeagueRule | null
+  rule?: ActiveLeagueRule | null,
+  categoryBoost?: CategoryBoost | null
 ): SupervisorDecision | null {
   if (!pairs || pairs.length === 0) return null;
 
@@ -169,7 +188,7 @@ export function pickCrownPair(
   );
   const pool = modePool.length > 0 ? modePool : pairs;
 
-  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair, rule) }));
+  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair, rule, categoryBoost) }));
 
   // برنده = بالاترین امتیاز خام میان «غیر وتو شده»؛ تساوئی → ریسک کمتر.
   // اگر همه وتو شدند → کم‌ریسک‌ترین (بالاترین امتیاز) به‌عنوان کارت وتو شده نمایش داده می‌شود

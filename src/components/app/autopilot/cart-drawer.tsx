@@ -207,14 +207,14 @@ export function SmartCartDrawer() {
                       <Separator className="my-2 bg-white/8" />
                       <div className="grid grid-cols-2 gap-2 text-[11px]">
                         <div className="rounded-lg border border-sky-500/25 bg-sky-500/5 px-2 py-1.5">
-                          <p className="line-clamp-2 leading-4">{r.pair.labelA}</p>
+                          <p className="break-words leading-4">{r.pair.labelA}</p>
                           <p className="mt-1 flex justify-between">
                             <span className="text-muted-foreground" dir="ltr">×{r.pair.totalOddsA.toFixed(2)}</span>
                             <b className="text-sky-300" dir="ltr">{faNum(r.stakeA, 1)}</b>
                           </p>
                         </div>
                         <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-2 py-1.5">
-                          <p className="line-clamp-2 leading-4">{r.pair.labelB}</p>
+                          <p className="break-words leading-4">{r.pair.labelB}</p>
                           <p className="mt-1 flex justify-between">
                             <span className="text-muted-foreground" dir="ltr">×{r.pair.totalOddsB.toFixed(2)}</span>
                             <b className="text-emerald-300" dir="ltr">{faNum(r.stakeB, 1)}</b>

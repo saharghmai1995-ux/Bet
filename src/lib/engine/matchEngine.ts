@@ -7,6 +7,7 @@ import { runDixonColes, buildScoreMatrix, aggregateMatrix, type MarketProbabilit
 import { effectiveNpxg, refereeAdjustment, fatigueAdjustment, type RefereeProfile } from "./contextual";
 import { shinDevig, shinDevigPair } from "./devig";
 import { hybridLambda } from "./reverse-poisson";
+import { categoryForLeagueName, marketWeightForCategory, rhoForLeagueName } from "@/lib/leagues-catalog";
 import type { Match, Referee, OddsRecord } from "@prisma/client";
 
 export interface MatchContextNotes {
@@ -99,6 +100,13 @@ export function computeMatchEngine(match: MatchWithRefs, opts?: MatchEngineOptio
   const awayFoulProp = Math.min(1.3, Math.max(0.85, match.awayPpda / 12));
   const ref = refereeAdjustment(refProfile, homeFoulProp, awayFoulProp);
 
+  // ═══ v14.0 — قواعد کالیبراسیون اسکنر چهارفصل ═══
+  // ρ اختصاصی هر رقابت (مثلاً CONMEBOL / لیگ ملت‌ها = −۰.۱۳ کم‌گل) و وزن بازار
+  // اختصاصی دسته (بازی‌های ملی: ۷۵٪ مهندسی معکوس بوک‌میکر / ۲۵٪ فرم ملی)
+  const leagueCategory = categoryForLeagueName(match.league);
+  const leagueRho = rhoForLeagueName(match.league);
+  const marketWeight = marketWeightForCategory(leagueCategory);
+
   const dc = runDixonColes({
     homeAttack: homeAttackShock * fatigue.homeLambdaMultiplier,
     awayAttack: awayAttackShock * fatigue.awayLambdaMultiplier,
@@ -107,7 +115,7 @@ export function computeMatchEngine(match: MatchWithRefs, opts?: MatchEngineOptio
     // v6.0: میانگین واقعی لیگ از جدول رسمی رده‌بندی ESPN (fallback: ۱.۳۵)
     leagueAvg: match.leagueTeamAvg ?? 1.35,
     homeAdvantage: 1.12,
-    rho: -0.08,
+    rho: leagueRho,
     eloDiff: match.homeElo - match.awayElo,
     eloWeight: 0.35,
     homeAbsenceImpact: match.homeAbsence ? 0.08 : 0,
@@ -117,7 +125,8 @@ export function computeMatchEngine(match: MatchWithRefs, opts?: MatchEngineOptio
   });
 
   // ═══ v9.0 — فرمول ترکیبی طلایی λ ═══
-  // λ_Final = (0.65 × λ_Market + 0.35 × λ_Stats) × C_Calibration
+  // λ_Final = (W_Market × λ_Market + (1−W_Market) × λ_Stats) × C_Calibration
+  // v14.0 — W_Market بر اساس دسته رقابت (بازی‌های ملی ۰.۷۵، سایر ۰.۶۵) در breakdown می‌آید.
   // λ_Market از حل معکوس پواسون روی ضرایب واقعی بوک‌میکر (ذخیره‌شده در ingest)
   // و λ_Stats از مدل آماری جدول/فرم (خروجی dc بالا) می‌آید.
   let finalDc = dc;
@@ -130,10 +139,11 @@ export function computeMatchEngine(match: MatchWithRefs, opts?: MatchEngineOptio
     market: hasMarket ? { lambdaHome: marketH as number, lambdaAway: marketA as number, fitError: match.lambdaFitError ?? null } : null,
     calibrationHome: opts?.calibrationHome,
     calibrationAway: opts?.calibrationAway,
+    marketWeight,
   });
   if (hybrid.hasMarket && (hybrid.finalHome !== dc.lambdaHome || hybrid.finalAway !== dc.lambdaAway)) {
     // بازسازی ماتریس نمره روی λ ترکیبی نهایی — کل زنجیره (MC/پرتفوی/مناظره) از این ماتریس تغذیه می‌شود
-    const matrix = buildScoreMatrix(hybrid.finalHome, hybrid.finalAway, -0.08);
+    const matrix = buildScoreMatrix(hybrid.finalHome, hybrid.finalAway, leagueRho);
     finalDc = { ...dc, ...aggregateMatrix(matrix), pUnder25: 1 - aggregateMatrix(matrix).pOver25, lambdaHome: hybrid.finalHome, lambdaAway: hybrid.finalAway, matrix };
   }
   const lambdaBreakdown: LambdaBreakdown = {
@@ -143,7 +153,7 @@ export function computeMatchEngine(match: MatchWithRefs, opts?: MatchEngineOptio
     statsAway: hybrid.statsAway,
     finalHome: hybrid.finalHome,
     finalAway: hybrid.finalAway,
-    marketWeight: 0.65,
+    marketWeight: hybrid.marketWeight,
     calibrationHome: hybrid.calibrationHome,
     calibrationAway: hybrid.calibrationAway,
     fitError: hybrid.fitError,

@@ -618,7 +618,7 @@ export function DebateTab({ onDebated, onGoToTab }: Props) {
                       <TableCell className={`font-num text-xs ${margin !== null && margin < 2 ? "text-emerald-300" : margin !== null && margin > 7 ? "text-rose-300" : ""}`} dir="ltr">
                         {margin !== null ? `${margin.toFixed(1)}%` : "—"}
                       </TableCell>
-                      <TableCell className="max-w-[220px] truncate text-[10px] text-muted-foreground" title={row.note}>{row.note}</TableCell>
+                      <TableCell className="max-w-[220px] break-words text-[10px] leading-4 text-muted-foreground" title={row.note}>{row.note}</TableCell>
                     </TableRow>
                   );
                 })}

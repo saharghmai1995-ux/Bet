@@ -25,13 +25,13 @@ import {
   txidAlreadyUsed,
   type VipUser,
 } from "./db";
-import { buildMessages, fmt, SUBSCRIPTION_PLANS, type Lang } from "./messages";
+import { buildMessages, fmt, isLifetimePlan, SUBSCRIPTION_PLANS, validityLabel, type Lang } from "./messages";
 import {
   createSingleUseVipInviteLink,
   isUserInPublicChannel,
   tgApiCall,
 } from "./telegram";
-import { verifyUsdtTxid } from "./verify";
+import { isSolanaTxid, verifyUsdtTxid } from "./verify";
 
 interface TgChat {
   id: number;
@@ -154,17 +154,28 @@ function plansKeyboard(lang: Lang, msgs: ReturnType<typeof buildMessages>) {
   const rows: InlineButton[][] = [];
   for (const [key, p] of Object.entries(SUBSCRIPTION_PLANS)) {
     const title = lang === "fa" ? p.title_fa : p.title_en;
+    // v13.2 — منوی فارسی فقط قیمت تومانی را نشان می‌دهد (بدون قیمت دلاری)
     const priceLabel =
       lang === "fa"
-        ? `$${p.price_usdt.toFixed(0)} | ${(p.price_toman / 1000).toLocaleString("en-US")} هزار تومان`
-        : `$${p.price_usdt.toFixed(0)} USDT`;
+        ? isLifetimePlan(p)
+          ? "مادام‌العمر ♾️"
+          : `${p.price_toman.toLocaleString("en-US")} تومان`
+        : isLifetimePlan(p)
+          ? `$${p.price_usdt.toFixed(0)} USDT · Lifetime`
+          : `$${p.price_usdt.toFixed(0)} USDT`;
     rows.push([{ text: `${title} (${priceLabel})`, callback_data: `select_plan_${key}` }]);
   }
   rows.push([{ text: lang === "fa" ? "🔙 بازگشت به منوی اصلی" : "🔙 Back to Main Menu", callback_data: "back_main" }]);
   return { inline_keyboard: rows };
 }
 
-// ─── درگاه کارت‌به‌کارت: مبلغ یکتا با کد شناسایی ۳ رقمی ──────────────────────
+// ─── برچسب انقضای VIP — پلن مادام‌العمر برچسب ویژه دارد ──────────────────────
+
+function expiryLabel(planKey: string, expiresDisplay: string, lang: Lang): string {
+  const plan = SUBSCRIPTION_PLANS[planKey];
+  if (plan && isLifetimePlan(plan)) return lang === "fa" ? "♾️ مادام‌العمر (Lifetime)" : "♾️ Lifetime";
+  return expiresDisplay;
+}
 
 export function generateUniqueTomanAmount(baseToman: number): number {
   const uniqueSuffix = (11 + Math.floor(Math.random() * 79)) * 10; // 110..880 مثل پایتون
@@ -247,7 +258,7 @@ export async function processAdminReceiptDecision(
     const userMsg = fmt(m.card_approved_user, {
       receipt_id: receiptId,
       plan_title: planTitle,
-      expires_at: expStr,
+      expires_at: expiryLabel(rec.plan_key, expStr, lang),
       invite_link: inviteLink,
     });
     await tgApiCall(cfg, "sendMessage", { chat_id: rec.user_id, text: userMsg, parse_mode: "HTML" });
@@ -359,8 +370,14 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
       return;
     }
 
-    // ب) متن رسید (کد پیگیری / ۴ رقم آخر کارت) در حالت انتظار فیش
-    if (user.payment_mode === "AWAITING_CARD_RECEIPT" && text.length >= 4 && text.length !== 64 && text.length !== 66) {
+    // ب) متن رسید (کد پیگیری / ۴ رقم آخر کارت) در حالت انتظار فیش — رشته‌های شبیه TxID فیش محسوب نمی‌شوند
+    if (
+      user.payment_mode === "AWAITING_CARD_RECEIPT" &&
+      text.length >= 4 &&
+      text.length !== 64 &&
+      text.length !== 66 &&
+      !isSolanaTxid(text)
+    ) {
       const planKey = user.selected_plan || "pro_monthly";
       const expectedToman =
         user.pending_toman_amount ||
@@ -375,11 +392,11 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
       return;
     }
 
-    // ج) TxID تتر (۶۴ یا ۶۶ کاراکتر hex) → استعلام خودکار بلاکچین
-    if (
+    // ج) TxID تتر (ترون ۶۴ hex / EVM 66 با 0x / سولانا ~87 Base58) → استعلام خودکار بلاکچین
+    const isTronOrEvm =
       (text.length === 64 || text.length === 66) &&
-      [...text].every((c) => "0123456789abcdefABCDEFxX".includes(c))
-    ) {
+      [...text].every((c) => "0123456789abcdefABCDEFxX".includes(c));
+    if (isTronOrEvm || isSolanaTxid(text)) {
       await tgApiCall(cfg, "sendMessage", { chat_id: chatId, text: m.verifying_tx });
       const planKey = user.selected_plan || "pro_monthly";
       const plan = SUBSCRIPTION_PLANS[planKey] ?? SUBSCRIPTION_PLANS.pro_monthly;
@@ -389,7 +406,16 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
         return;
       }
 
-      const vr = await verifyUsdtTxid(text, cfg.walletUsdtTrc20, cfg.walletUsdtPolygon, plan.price_usdt);
+      const vr = await verifyUsdtTxid(
+        text,
+        {
+          trc20: cfg.walletUsdtTrc20,
+          polygon: cfg.walletUsdtPolygon,
+          bsc: cfg.walletUsdtBsc,
+          solana: cfg.walletUsdtSolana,
+        },
+        plan.price_usdt
+      );
       if (!vr.ok) {
         await tgApiCall(cfg, "sendMessage", {
           chat_id: chatId,
@@ -409,7 +435,7 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
           plan_title: planTitle,
           amount: vr.amount.toFixed(2),
           network: vr.network,
-          expires_at: expStr,
+          expires_at: expiryLabel(planKey, expStr, lang),
           invite_link: inviteLink,
         }),
         parse_mode: "HTML",
@@ -472,6 +498,7 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
         const planTitle = lang === "fa" ? plan.title_fa : plan.title_en;
         const txt = fmt(m.choose_payment_method, {
           plan_title: planTitle,
+          validity: validityLabel(plan, lang),
           days: plan.days,
           amount_usdt: plan.price_usdt.toFixed(2),
           amount_toman: plan.price_toman.toLocaleString("en-US"),
@@ -496,6 +523,8 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
           amount: plan.price_usdt.toFixed(2),
           wallet_trc20: cfg.walletUsdtTrc20,
           wallet_polygon: cfg.walletUsdtPolygon,
+          wallet_bsc: cfg.walletUsdtBsc,
+          wallet_solana: cfg.walletUsdtSolana,
         });
         await tgApiCall(cfg, "sendMessage", { chat_id: chatId, text: invoiceText, parse_mode: "HTML" });
       }
@@ -564,7 +593,11 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
         const pTitle = lang === "fa" ? pObj.title_fa : pObj.title_en;
         await tgApiCall(cfg, "sendMessage", {
           chat_id: chatId,
-          text: fmt(m.status_active, { plan: pTitle, expires_at: expDisplay, referrals: fresh.referral_count }),
+          text: fmt(m.status_active, {
+            plan: pTitle,
+            expires_at: expiryLabel(pKey, expDisplay, lang),
+            referrals: fresh.referral_count,
+          }),
           parse_mode: "HTML",
         });
       } else {
@@ -605,10 +638,22 @@ export async function runSelfTest(): Promise<{ ok: boolean; exactToman: number; 
   const result = await processAdminReceiptDecision(testDb, cfg, recId, true);
   const after = getUser(testDb, u.user_id);
   const vipOk = Boolean(after?.vip_expires_at);
+
+  // v13.2 — خودآزمایی پلن مادام‌العمر: فعال‌سازی quant_all باید انقضای ~۱۰۰ ساله بسازد
+  const u2 = getOrCreateUser(testDb, 888002, "lifetime_user");
+  const rec2 = createCardReceipt(testDb, u2.user_id, "lifetime_user", "quant_all", SUBSCRIPTION_PLANS.quant_all.price_toman, "TEXT", "تست مادام‌العمر");
+  const r2 = await processAdminReceiptDecision(testDb, cfg, rec2, true);
+  const after2 = getUser(testDb, u2.user_id);
+  const lifeOk =
+    r2.ok &&
+    Boolean(after2?.vip_expires_at) &&
+    new Date(after2!.vip_expires_at!).getUTCFullYear() >= new Date().getUTCFullYear() + 50;
+  const lifeLabel = lifeOk ? "Lifetime OK" : "Lifetime FAIL";
+
   const stats = computeStats(testDb);
   return {
-    ok: result.ok && vipOk && stats.activeVip === 1,
+    ok: result.ok && vipOk && lifeOk && stats.activeVip === 2,
     exactToman: uniqueToman,
-    message: `✅ Card-to-Card Self-Test Passed! Exact Toman: ${uniqueToman.toLocaleString("en-US")} | ${result.statusMessage}`,
+    message: `✅ Card-to-Card Self-Test Passed! Exact Toman: ${uniqueToman.toLocaleString("en-US")} | ${lifeLabel} | ${result.statusMessage}`,
   };
 }

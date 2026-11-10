@@ -143,12 +143,14 @@ export interface HybridLambdaResult {
   /** λ مدل آماری جدول و فرم فصل */
   statsHome: number;
   statsAway: number;
-  /** λ ترکیبی نهایی (۶۵٪ بازار + ۳۵٪ آمار) × ضریب درس کالیبراسیون */
+  /** λ ترکیبی نهایی (بازار × وزن + آمار) × ضریب درس کالیبراسیون */
   finalHome: number;
   finalAway: number;
   /** ضریب درس کالیبراسیون اعمال‌شده (۱ = بدون تعدیل) */
   calibrationHome: number;
   calibrationAway: number;
+  /** v14.0 — وزن بازار اعمال‌شده (۰.۶۵ پیش‌فرض / ۰.۷۵ بازی‌های ملی) */
+  marketWeight: number;
   fitError: number | null;
   hasMarket: boolean;
 }
@@ -164,7 +166,9 @@ const clampLambda = (v: number): number => Math.max(0.2, Math.min(4.0, Math.roun
 
 /**
  * فرمول ترکیبی طلایی سند ارتقا:
- *   λ_Final = (0.65 × λ_Market + 0.35 × λ_Stats) × C_Calibration
+ *   λ_Final = (W_Market × λ_Market + (1−W_Market) × λ_Stats) × C_Calibration
+ *   v14.0 — W_Market بر اساس دسته رقابت: بازی‌های ملی ۰.۷۵ (۷۵٪ مهندسی معکوس
+ *   بوک‌میکر / ۲۵٪ فرم ۵ بازی ملی)، سایر رقابت‌ها ۰.۶۵.
  * اگر بازار در دسترس نباشد، λ آمار با کالیبراسیون مسیر STATS_ONLY می‌رود.
  */
 export function hybridLambda(input: {
@@ -173,7 +177,10 @@ export function hybridLambda(input: {
   market: MarketHandle | null;
   calibrationHome?: number;
   calibrationAway?: number;
+  /** v14.0 — وزن بازار (پیش‌فرض ۰.۶۵؛ بازی‌های ملی ۰.۷۵) */
+  marketWeight?: number;
 }): HybridLambdaResult {
+  const w = Math.max(0, Math.min(1, input.marketWeight ?? MARKET_WEIGHT));
   const calH = Math.max(0.7, Math.min(1.3, input.calibrationHome ?? 1));
   const calA = Math.max(0.7, Math.min(1.3, input.calibrationAway ?? 1));
   if (!input.market) {
@@ -186,14 +193,15 @@ export function hybridLambda(input: {
       finalAway: clampLambda(input.statsAway * calA),
       calibrationHome: calH,
       calibrationAway: calA,
+      marketWeight: w,
       fitError: null,
       hasMarket: false,
     };
   }
   const mh = input.market.lambdaHome;
   const ma = input.market.lambdaAway;
-  const finalHome = clampLambda((MARKET_WEIGHT * mh + (1 - MARKET_WEIGHT) * input.statsHome) * calH);
-  const finalAway = clampLambda((MARKET_WEIGHT * ma + (1 - MARKET_WEIGHT) * input.statsAway) * calA);
+  const finalHome = clampLambda((w * mh + (1 - w) * input.statsHome) * calH);
+  const finalAway = clampLambda((w * ma + (1 - w) * input.statsAway) * calA);
   return {
     marketHome: mh,
     marketAway: ma,
@@ -203,6 +211,7 @@ export function hybridLambda(input: {
     finalAway,
     calibrationHome: calH,
     calibrationAway: calA,
+    marketWeight: w,
     fitError: input.market.fitError,
     hasMarket: true,
   };

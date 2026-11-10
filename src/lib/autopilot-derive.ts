@@ -12,6 +12,7 @@ import { useQuantStore } from "./store";
 import type { FlashcardView } from "./autopilot-types";
 import type { ActiveRuleDTO } from "./types";
 import { pickCrownPair, type SupervisorDecision } from "./supervisor";
+import { categoryForLeagueName, patternBoostForCategory } from "./leagues-catalog";
 import type { DebateResultDTO, LineupShockDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "./types";
 
 /** بریدن جمله اول یک استدلال برای نمای خلاصه فلش‌کارت */
@@ -23,14 +24,19 @@ function firstSentence(text: string | null | undefined, maxLen = 130): string {
   return clean.length > maxLen ? `${clean.slice(0, maxLen)}…` : clean;
 }
 
-/** تصمیم سوپروایزر از پرتفوی یک بازی (با در نظر گرفتن حالت اجرایی + قانون فعال لیگ) */
+/**
+ * تصمیم سوپروایزر از پرتفوی یک بازی (با در نظر گرفتن حالت اجرایی + قانون فعال لیگ
+ * + v14.0: پاداش الگوی اختصاصی دسته رقابت — ملی/زنان)
+ */
 export function supervisorFor(
   portfolio: PortfolioResultDTO | null,
   executionMode: "DUAL_BOOK" | "SINGLE_BOOK",
-  rule?: ActiveRuleDTO | null
+  rule?: ActiveRuleDTO | null,
+  leagueName?: string | null
 ): SupervisorDecision | null {
   if (!portfolio?.pairs?.length) return null;
-  return pickCrownPair(portfolio.pairs, executionMode, rule);
+  const categoryBoost = leagueName ? patternBoostForCategory(categoryForLeagueName(leagueName)) : null;
+  return pickCrownPair(portfolio.pairs, executionMode, rule, categoryBoost);
 }
 
 /** ساخت کارت از ورودی‌های خام — زوج = تک‌تیپ طلایی سوپروایزر */
@@ -104,7 +110,7 @@ export function useFlashcards(): FlashcardView[] {
     for (const m of matches) {
       const st = autopilot[m.id];
       if (!st?.portfolio?.pairs?.length) continue;
-      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null);
+      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null, m.league);
       if (!sup) continue;
       out.push(buildFlashcard(m, sup.crown, st.debate, st.lineup, st.portfolio, sup));
     }
@@ -124,7 +130,7 @@ export function useSupervisorStats(): { scanned: number; approved: number; vetoe
     for (const m of matches) {
       const st = autopilot[m.id];
       if (!st?.portfolio?.pairs?.length) continue;
-      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null);
+      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null, m.league);
       if (!sup) continue;
       if (sup.veto) vetoed += 1;
       else approved += 1;
@@ -148,7 +154,7 @@ export function useCartItems(): { key: string; view: FlashcardView; pair: Portfo
       const match = matches.find((m) => m.id === matchId);
       const pair = st?.portfolio?.pairs.find((p) => p.id === pairId);
       if (!st || !match || !pair) continue;
-      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === match.league) ?? null);
+      const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === match.league) ?? null, match.league);
       out.push({ key, pair, view: buildFlashcard(match, pair, st.debate, st.lineup, st.portfolio, sup) });
     }
     return out;

@@ -14,6 +14,7 @@ import { db } from "@/lib/db";
 import {
   ESPN_LEAGUES,
   fetchEspnEvents,
+  fetchEspnEventsSmartWindow,
   fetchEspnNews,
   fetchSportsDbNext,
   fetchWeather,
@@ -492,13 +493,16 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
 
   // ─── ۱) منابع زنده به صورت موازی ───
   const tEspn = Date.now();
-  const espnPromise = fetchEspnEvents(0, 7);
+  // v14.0 — اسکنر هوشمند پنجره ۷ روزه: پایه امروز+۳ آینده؛ در کمبود بازی (فیفادی) → ۷ روز + اندپوینت جامع all
+  const espnPromise = fetchEspnEventsSmartWindow();
   const newsPromise = fetchEspnNews().then((n) => {
     cache.news = n;
     cache.newsAt = Date.now();
     return n;
   });
-  const sdbPromise = Promise.allSettled(ESPN_LEAGUES.map((l) => fetchSportsDbNext(l.sportsDbId)));
+  const sdbPromise = Promise.allSettled(
+    ESPN_LEAGUES.filter((l) => l.sportsDbId).map((l) => fetchSportsDbNext(l.sportsDbId))
+  );
 
   // ─── ۲) Odds API فقط با اجازه (هزینه اعتبار پلن رایگان) ───
   let oddsEvents: OddsApiEvent[] = [];
@@ -509,7 +513,7 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     if (cache.oddsSyncAt > 0 && since < ODDS_THROTTLE_MS) {
       oddsThrottled = true;
     } else {
-      const keys = ESPN_LEAGUES.map((l) => l.oddsKey);
+      const keys = ESPN_LEAGUES.map((l) => l.oddsKey).filter(Boolean);
       const res = await fetchOddsApiEvents(keys, oddsApiKey(opts.oddsApiKey));
       oddsEvents = res.events;
       oddsUsed = true;
@@ -518,13 +522,14 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     }
   }
 
-  const [espnEvents, , sdbResults] = await Promise.all([espnPromise, newsPromise, sdbPromise]);
+  const [smart, , sdbResults] = await Promise.all([espnPromise, newsPromise, sdbPromise]);
+  const espnEvents = smart.events;
 
   sources.push({
     key: "espn",
-    label: "ESPN Scoreboard (۶ لیگ × ۸ روز)",
+    label: "ESPN Scoreboard (۱۹ رقابت × پنجره هوشمند ۷ روزه)",
     ok: espnEvents.length > 0,
-    detail: `${espnEvents.length} مسابقه واقعی استخراج شد`,
+    detail: `${espnEvents.length} مسابقه واقعی · امروز: ${smart.todayCount}${smart.expandedTo7Days ? " · گسترش به ۷ روز آینده" : ""}${smart.usedAllScoreboard ? " · اندپوینت جامع all" : ""}`,
     latencyMs: Date.now() - tEspn,
   });
 

@@ -60,6 +60,8 @@ interface ConfigDTO {
   adminUserId: number;
   walletUsdtTrc20: string;
   walletUsdtPolygon: string;
+  walletUsdtBsc: string;
+  walletUsdtSolana: string;
   bankCardNumber: string;
   bankCardHolder: string;
   bankName: string;
@@ -111,7 +113,7 @@ interface ReceiptDTO {
 const PLAN_FA: Record<string, string> = {
   weekend: "⚡ بسته ۴۸ ساعته",
   pro_monthly: "💎 ماهانه Pro",
-  quant_all: "👑 جامع کامل",
+  quant_all: "👑 جامع مادام‌العمر",
 };
 
 const STATUS_FA: Record<string, { label: string; cls: string }> = {
@@ -128,6 +130,8 @@ const emptyForm = {
   adminUserId: "",
   walletUsdtTrc20: "",
   walletUsdtPolygon: "",
+  walletUsdtBsc: "",
+  walletUsdtSolana: "",
   bankCardNumber: "",
   bankCardHolder: "",
   bankName: "",
@@ -192,6 +196,8 @@ export function VipBotTab() {
         "vipChannelId",
         "walletUsdtTrc20",
         "walletUsdtPolygon",
+        "walletUsdtBsc",
+        "walletUsdtSolana",
         "bankCardNumber",
         "bankCardHolder",
         "bankName",
@@ -427,14 +433,19 @@ export function VipBotTab() {
                   <TableRow><TableCell colSpan={4} className="py-4 text-center text-[10px] text-muted-foreground">عضوی ثبت نشده</TableCell></TableRow>
                 ) : (
                   members.map((u) => {
-                    const active = u.vip_expires_at ? new Date(u.vip_expires_at) > new Date() : false;
+                    const isLifetime = u.vip_expires_at ? new Date(u.vip_expires_at).getUTCFullYear() > 2100 : false;
+                    const active = isLifetime || (u.vip_expires_at ? new Date(u.vip_expires_at) > new Date() : false);
                     return (
                       <TableRow key={u.user_id} className="border-white/5 text-[10px]">
                         <TableCell className="py-1.5" dir="ltr">@{u.username ?? u.user_id}</TableCell>
                         <TableCell className="py-1.5">{PLAN_FA[u.selected_plan] ?? u.selected_plan}</TableCell>
                         <TableCell className="py-1.5" dir="ltr">
                           {u.vip_expires_at ? (
-                            <span className={active ? "text-emerald-300" : "text-muted-foreground/50"}>{new Date(u.vip_expires_at).toLocaleDateString("fa-IR")}</span>
+                            isLifetime ? (
+                              <span className="text-emerald-300">♾️ مادام‌العمر</span>
+                            ) : (
+                              <span className={active ? "text-emerald-300" : "text-muted-foreground/50"}>{new Date(u.vip_expires_at).toLocaleDateString("fa-IR")}</span>
+                            )
                           ) : (
                             <span className="text-muted-foreground/50">رایگان</span>
                           )}
@@ -515,12 +526,14 @@ export function VipBotTab() {
               { key: "vipChannelId", label: "شناسه کانال خصوصی VIP", ph: "-1001234567890", ltr: true },
               { key: "adminUserId", label: "آیدی عددی ادمین فیش‌ها", ph: "123456789", ltr: true, num: true },
               { key: "walletUsdtTrc20", label: "کیف پول USDT — TRC20 (ترون)", ph: "T…", ltr: true },
-              { key: "walletUsdtPolygon", label: "کیف پول USDT — Polygon", ph: "0x…", ltr: true },
+              { key: "walletUsdtPolygon", label: "کیف پول USDT — Polygon (پالیگان)", ph: "0x…", ltr: true },
+              { key: "walletUsdtBsc", label: "کیف پول تتر بایننس — BNB Chain (BEP20)", ph: "0x…", ltr: true },
+              { key: "walletUsdtSolana", label: "کیف پول USDT — سولانا (SPL)", ph: "Base58…", ltr: true },
               { key: "bankName", label: "نام بانک کارت مقصد", ph: "بانک ملی / ملت / سامان", ltr: false },
               { key: "bankCardNumber", label: "شماره کارت کارت‌به‌کارت", ph: "6037-9975-XXXX-XXXX", ltr: true },
               { key: "bankCardHolder", label: "نام صاحب حساب", ph: "نام صاحب حساب", ltr: false },
               { key: "usdtToTomanRate", label: "نرخ هر تتر (تومان)", ph: "65000", ltr: true, num: true },
-            ] as const
+            ] as { key: keyof typeof emptyForm; label: string; ph: string; ltr: boolean; pwd?: boolean; num?: boolean }[]
           ).map((f) => (
             <div key={f.key} className="space-y-1">
               <Label className="text-[9px] text-muted-foreground">{f.label}</Label>
@@ -540,7 +553,7 @@ export function VipBotTab() {
 
         <div className="mt-3 flex items-center justify-between gap-2">
           <p className="text-[9px] leading-4 text-muted-foreground">
-            فیلدهای خالی نادیده گرفته می‌شوند (مقادیر قبلی حفزار می‌شوند). با ثبت توکن معتبر، polling بلافاصله آغاز و ربات @aineobet_bot زنده می‌شود؛ تایید فیش هم از تلگرام ادمین و هم از همین پنل کار می‌کند.
+            فیلدهای خالی نادیده گرفته می‌شوند (مقادیر قبلی حفزار می‌شوند). با ثبت توکن معتبر، polling بلافاصله آغاز و ربات @aineobet_bot زنده می‌شود؛ درگاه تتر خودکار هر ۴ شبکه (ترون / پالیگان / BNB بایننس / سولانا) را استعلام می‌کند و تایید فیش هم از تلگرام ادمین و هم از همین پنل کار می‌کند.
           </p>
           <Button size="sm" className="h-8 shrink-0 gap-1 bg-violet-600 px-4 text-[11px] font-bold hover:bg-violet-500" onClick={() => void saveConfig()} disabled={saving}>
             {saving ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />} ذخیره پیکربندی

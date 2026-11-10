@@ -76,9 +76,8 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
       ),
       choose_payment_method: (
         "📦 <b>پلن انتخابی:</b> {plan_title}\n" +
-        "⏳ <b>مدت اعتبار:</b> {days} روز کامل\n\n" +
-        "💵 <b>مبلغ دلاری (تتر):</b> <code>{amount_usdt} USDT</code>\n" +
-        "💳 <b>مبلغ ریالی (کارت‌به‌کارت):</b> <code>{amount_toman} تومان</code>\n\n" +
+        "⏳ <b>مدت اعتبار:</b> {validity}\n\n" +
+        "💳 <b>مبلغ پرداخت (کارت‌به‌کارت):</b> <code>{amount_toman} تومان</code>\n\n" +
         "👇 لطفاً روش پرداخت خود را انتخاب کنید:"
       ),
       payment_invoice_usdt: (
@@ -87,8 +86,11 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
         "💰 <b>مبلغ قابل پرداخت:</b> <code>{amount}</code> <b>USDT (تتر)</b>\n\n" +
         "🟢 <b>روش ۱ — شبکه ترون (USDT - TRC20):</b>\n{wallet_trc20}\n\n" +
         "🟣 <b>روش ۲ — شبکه پالیگان (USDT - Polygon POS):</b>\n{wallet_polygon}\n\n" +
+        "🟡 <b>روش ۳ — زنجیره BNB (تتر بایننس - BEP20):</b>\n{wallet_bsc}\n\n" +
+        "🔵 <b>روش ۴ — شبکه سولانا (USDT - Solana SPL):</b>\n{wallet_solana}\n\n" +
         "⚡ <b>نحوه فعال‌سازی آنی:</b>\n" +
-        "پس از واریز، کافی است <b>کد هش تراکنش (TxID)</b> خود را مستقیماً در همین چت ارسال کنید تا لینک VIP بلافاصله صادر شود!"
+        "پس از واریز، کافی است <b>کد هش تراکنش (TxID)</b> خود را مستقیماً در همین چت ارسال کنید تا لینک VIP بلافاصله صادر شود!\n" +
+        "🤖 <i>هر چهار شبکه (ترون / پالیگان / BNB / سولانا) به‌صورت خودکار تشخیص و تایید می‌شوند.</i>"
       ),
       payment_invoice_card: (
         "💳 <b>فاکتور پرداخت ریالی (کارت‌به‌کارت نیمه‌خودکار)</b>\n\n" +
@@ -117,7 +119,7 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
         "❌ <b>رسید پرداخت شماره <code>#{receipt_id}</code> تایید نشد.</b>\n" +
         "در صورت نیاز به بررسی مجدد، تصویر واضح‌تری از فیش واریزی یا شماره پیگیری بانکی را ارسال نمایید."
       ),
-      verifying_tx: "⏳ در حال استعلام مستقیم تراکنش از نودهای بلاکچین (TronGrid / Polygon RPC)...",
+      verifying_tx: "⏳ در حال استعلام مستقیم تراکنش از نودهای بلاکچین (Tron / Polygon / BNB Chain / Solana)...",
       tx_already_used: "❌ این کد تراکنش (TxID) قبلاً در سیستم ثبت و استفاده شده است.",
       tx_failed: (
         "❌ <b>تراکنش تایید نشد:</b>\n{reason}\n\n" +
@@ -147,7 +149,7 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
       referral_info: (
         "🚀 <b>طرح رشد ارگانیک @aineobet — دریافت اشتراک VIP رایگان!</b>\n\n" +
         "با اشتراک‌گذاری لینک اختصاصی خود، به ازای هر <b>۵ دوستی</b> که وارد ربات شده و در کانال عمومی عضو شوند، " +
-        "<b>۴۸ ساعت اشتراک کامل کانال VIP (به ارزش ۷ دلار)</b> به صورت خودکار هدیه می‌گیرید!\n\n" +
+        "<b>۴۸ ساعت اشتراک کامل کانال VIP</b> به صورت خودکار هدیه می‌گیرید!\n\n" +
         "🔗 <b>لینک دعوت اختصاصی شما:</b>\n<code>{ref_link}</code>\n\n" +
         "📊 <b>تعداد دعوت‌های شما تا این لحظه:</b> {referrals} نفر"
       ),
@@ -188,7 +190,7 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
       ),
       choose_payment_method: (
         "📦 <b>Selected Plan:</b> {plan_title}\n" +
-        "⏳ <b>Duration:</b> {days} Full Days\n\n" +
+        "⏳ <b>Duration:</b> {validity}\n\n" +
         "💵 <b>Crypto Price (USDT):</b> <code>{amount_usdt} USDT</code>\n" +
         "💳 <b>Iranian Card Price:</b> <code>{amount_toman} Toman</code>\n\n" +
         "👇 Select your preferred payment method:"
@@ -199,8 +201,11 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
         "💰 <b>Amount Due:</b> <code>{amount}</code> <b>USDT</b>\n\n" +
         "🟢 <b>Option 1 — Tron Network (USDT - TRC20):</b>\n{wallet_trc20}\n\n" +
         "🟣 <b>Option 2 — Polygon Network (USDT - Polygon POS):</b>\n{wallet_polygon}\n\n" +
+        "🟡 <b>Option 3 — BNB Chain (Binance-Peg USDT - BEP20):</b>\n{wallet_bsc}\n\n" +
+        "🔵 <b>Option 4 — Solana Network (USDT - Solana SPL):</b>\n{wallet_solana}\n\n" +
         "⚡ <b>Instant Activation Instructions:</b>\n" +
-        "After sending USDT, simply paste your <b>Transaction Hash (TxID)</b> directly in this chat!"
+        "After sending USDT, simply paste your <b>Transaction Hash (TxID)</b> directly in this chat!\n" +
+        "🤖 <i>All four networks (Tron / Polygon / BNB Chain / Solana) are auto-detected and verified.</i>"
       ),
       payment_invoice_card: (
         "💳 <b>Iranian Bank Card-to-Card Invoice (Semi-Automated)</b>\n\n" +
@@ -226,7 +231,7 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
         "❌ <b>Payment Receipt <code>#{receipt_id}</code> was not approved.</b>\n" +
         "Please send a clearer screenshot of your bank transfer receipt or contact support."
       ),
-      verifying_tx: "⏳ Querying blockchain nodes (TronGrid / Polygon RPC) to verify your transaction...",
+      verifying_tx: "⏳ Querying blockchain nodes (Tron / Polygon / BNB Chain / Solana) to verify your transaction...",
       tx_already_used: "❌ This Transaction Hash (TxID) has already been redeemed.",
       tx_failed: (
         "❌ <b>Verification Failed:</b>\n{reason}\n\n" +
@@ -263,14 +268,28 @@ export function buildMessages(publicChannelUsername: string): Record<Lang, Messa
   };
 }
 
-// ─── پلن‌های تجاری (بخش ۱ پایتون — بدون تغییر) ──────────────────────────────
+// ─── پلن‌های تجاری — v13.2: پلن ۳ «مادام‌العمر» شد ──────────────────────────
 
 export interface PlanDef {
   price_usdt: number;
   price_toman: number;
   days: number;
+  isLifetime?: boolean;
   title_fa: string;
   title_en: string;
+}
+
+/** عمر مجازی اشتراک مادام‌العمر (۱۰۰ سال — فقط برای ذخیره تاریخ؛ نمایش = مادام‌العمر) */
+export const LIFETIME_DAYS = 36500;
+
+export function isLifetimePlan(p: PlanDef): boolean {
+  return p.isLifetime === true || p.days >= 3650;
+}
+
+/** برچسب مدت اعتبار پلن — در منوی فارسی قیمت دلاری نمایش داده نمی‌شود */
+export function validityLabel(p: PlanDef, lang: Lang): string {
+  if (isLifetimePlan(p)) return lang === "fa" ? "مادام‌العمر ♾️" : "Lifetime ♾️";
+  return lang === "fa" ? `${p.days} روز کامل` : `${p.days} Full Days`;
 }
 
 export const SUBSCRIPTION_PLANS: Record<string, PlanDef> = {
@@ -291,8 +310,9 @@ export const SUBSCRIPTION_PLANS: Record<string, PlanDef> = {
   quant_all: {
     price_usdt: 59.0,
     price_toman: 3750000,
-    days: 30,
-    title_fa: "👑 اشتراک جامع VIP (فوتبال + تنیس مارکوف + اسنایپر)",
-    title_en: "👑 All-Access Quant VIP (Football + Tennis + Sniper)",
+    days: LIFETIME_DAYS,
+    isLifetime: true,
+    title_fa: "👑 اشتراک جامع VIP مادام‌العمر (فوتبال + تنیس مارکوف + اسنایپر)",
+    title_en: "👑 All-Access Quant VIP (Lifetime)",
   },
 };

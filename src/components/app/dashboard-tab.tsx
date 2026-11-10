@@ -20,13 +20,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { faNum, faPctSigned } from "@/lib/format";
 import { TacticalPitch } from "@/components/app/fx/tactical-pitch";
 import { PulseFlow, type FlowNode } from "@/components/app/fx/pulse-flow";
 import { AnimNum } from "@/components/app/fx/anim-num";
 import { RolloverLadder } from "@/components/app/autopilot/rollover-ladder";
 import { useQuantStore } from "@/lib/store";
+import {
+  categoryForLeagueName,
+  DASHBOARD_FILTERS,
+  filterMatchesCategory,
+  type DashboardFilterKey,
+} from "@/lib/leagues-catalog";
 
 const PIPELINE: FlowNode[] = [
   { icon: Database, label: "لایه ۱ — داده‌کاوی", color: "text-sky-400", glow: "#0ea5e9" },
@@ -78,6 +84,13 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
   const setActiveMatchId = useQuantStore((s) => s.setActiveMatchId);
   const activeMatch = matches.find((m) => m.id === activeMatchId) ?? null;
 
+  // ═══ v14.0 — نوار فیلتر سریع رقابت‌ها (ملی/فیفادی، ۵ لیگ اول+UCL، زنان، چمپیونشیپ و آمریکا) ═══
+  const [categoryFilter, setCategoryFilter] = useState<DashboardFilterKey>("ALL");
+  const visibleMatches =
+    categoryFilter === "ALL"
+      ? matches
+      : matches.filter((m) => filterMatchesCategory(categoryFilter, categoryForLeagueName(m.league)));
+
   const bestEvMatch = matches
     .filter((m) => m.latestAnalysis)
     .sort((a, b) => (b.latestAnalysis?.bestEv ?? -1) - (a.latestAnalysis?.bestEv ?? -1))[0];
@@ -91,7 +104,7 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
             <Globe className="size-3.5" /> بازی‌های ردیابی‌شده
           </div>
           <AnimNum value={loading ? 0 : matches.length} decimals={0} className="text-2xl font-bold" />
-          <p className="mt-0.5 text-[11px] text-muted-foreground">از ۵ لیگ بزرگ اروپا</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">از ۱۹ رقابت جهانی — اسکنر چهارفصل v14.0</p>
         </Card>
         <Card className="glass p-4">
           <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
@@ -172,10 +185,28 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
               فید زنده بازی‌ها (Data Ingestion)
             </CardTitle>
             <CardDescription className="text-xs">
-              کلیک روی هر بازی، آن را به «بازی فعال» کل زنجیره ۷ تب تبدیل می‌کند
+              کلیک روی هر بازی، آن را به «بازی فعال» کل زنجیره ۷ تب تبدیل می‌کند — {faNum(visibleMatches.length, 0)} از {faNum(matches.length, 0)} بازی در این فیلتر
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {/* v14.0 — نوار فیلتر دسته‌بندی رقابت‌ها */}
+            <div className="mb-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="فیلتر دسته‌بندی رقابت‌ها">
+              {DASHBOARD_FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setCategoryFilter(f.key)}
+                  aria-pressed={categoryFilter === f.key}
+                  className={`rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors ${
+                    categoryFilter === f.key
+                      ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+                      : "border-white/10 bg-white/[0.03] text-muted-foreground hover:border-white/25 hover:text-foreground"
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
             {loading ? (
               <div className="space-y-2">
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -195,7 +226,14 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {matches.map((m) => (
+                    {visibleMatches.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="py-6 text-center text-[11px] text-muted-foreground">
+                          در این دسته فعلاً بازی زنده‌ای نیست — فیلتر «🌍 همه رقابت‌های فعال» را انتخاب کنید
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      visibleMatches.map((m) => (
                       <TableRow
                         key={m.id}
                         onClick={() => setActiveMatchId(m.id)}
@@ -238,7 +276,8 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
                           </Button>
                         </TableCell>
                       </TableRow>
-                    ))}
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </ScrollArea>

@@ -241,11 +241,11 @@ export function NewsRadar() {
                   className="group rounded-xl border border-white/10 bg-white/[0.03] p-3 transition-colors hover:border-white/25 hover:bg-white/[0.05]"
                 >
                   <p className="flex items-start justify-between gap-2 text-xs font-semibold leading-5">
-                    <span className="line-clamp-2">{n.headline}</span>
+                    <span className="break-words">{n.headline}</span>
                     <ArrowUpRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-emerald-400" />
                   </p>
                   {n.description && (
-                    <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-muted-foreground">{n.description}</p>
+                    <p className="mt-1 break-words text-[11px] leading-5 text-muted-foreground">{n.description}</p>
                   )}
                   <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
                     <span className="rounded bg-white/10 px-1.5 py-0.5" dir="ltr">

@@ -183,7 +183,7 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v13.0 @AINEOBET
+                  <Sparkles className="size-2.5" /> v14.0 @AINEOBET — Global All-Season Scanner
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
@@ -400,7 +400,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v13.0 Autonomous Procedural Graphics Edition · موتور خودساز گرافیک استادیوم (صفر آپلود) + ۳ خط تولید مجزا (Single / Combo / Sniper) + قیف کانال عمومی↔VIP (@aineobet) + افراز مجزا کارنامه + گیت سخت ریسک ۹.۸٪ + تسویه خودکار ESPN + حلقه فعال درس‌های کالیبراسیون
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v14.0 Global All-Season & FIFA Window Autonomous Scanner Edition · موتور خودساز گرافیک استادیوم (صفر آپلود) + ۳ خط تولید مجزا (Single / Combo / Sniper) + قیف کانال عمومی↔VIP (@aineobet) + افراز مجزا کارنامه + گیت سخت ریسک ۹.۸٪ + تسویه خودکار ESPN + حلقه فعال درس‌های کالیبراسیون
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

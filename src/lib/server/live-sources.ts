@@ -9,23 +9,15 @@
 // می‌شوند تا لایه ingest مستقل از شکل JSON منابع کار کند.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** ۶ لیگ معتبر با میانگین گل تاریخی (مبنای لامبدای پایه) */
-export interface LeagueMeta {
-  slug: string; // اسلاگ ESPN
-  name: string; // نام فارسی لیگ
-  oddsKey: string; // کلید لیگ در The Odds API
-  sportsDbId: string; // شناسه لیگ در TheSportsDB
-  avgGoals: number; // میانگین گل تاریخی لیگ
-}
+/** v14.0 — متادیتای رقابت (نوع اصلی در کاتالوگ مشترک کلاینت/سرور تعریف شده است) */
+export type { LeagueMeta, LeagueCategory } from "@/lib/leagues-catalog";
 
-export const ESPN_LEAGUES: LeagueMeta[] = [
-  { slug: "eng.1", name: "لیگ برتر انگلیس", oddsKey: "soccer_epl", sportsDbId: "4328", avgGoals: 2.85 },
-  { slug: "esp.1", name: "لالیگا اسپانیا", oddsKey: "soccer_spain_la_liga", sportsDbId: "4335", avgGoals: 2.55 },
-  { slug: "ita.1", name: "سری آ ایتالیا", oddsKey: "soccer_italy_serie_a", sportsDbId: "4332", avgGoals: 2.62 },
-  { slug: "ger.1", name: "بوندسلیگا آلمان", oddsKey: "soccer_germany_bundesliga", sportsDbId: "4331", avgGoals: 3.12 },
-  { slug: "fra.1", name: "لیگ ۱ فرانسه", oddsKey: "soccer_france_ligue_one", sportsDbId: "4334", avgGoals: 2.7 },
-  { slug: "uefa.champions", name: "لیگ قهرمانان اروپا", oddsKey: "soccer_uefa_champs_league", sportsDbId: "4480", avgGoals: 2.95 },
-];
+/** v14.0 — ۱۹ رقابت جهانی (اسکنر چهارفصل — تعطیلات فیفادی هم پوشش داده می‌شود) */
+export { GLOBAL_ESPN_SOCCER_LEAGUES } from "@/lib/leagues-catalog";
+import { GLOBAL_ESPN_SOCCER_LEAGUES as GLOBAL_LEAGUES, leagueBySlug, type LeagueCategory, type LeagueMeta } from "@/lib/leagues-catalog";
+
+/** سازگاری با مصرف‌کنندگان قبلی — همان آرایه جهانی */
+export const ESPN_LEAGUES: LeagueMeta[] = GLOBAL_LEAGUES;
 
 // ═════════════════════ ساختارهای کنونیکال ═════════════════════
 
@@ -34,6 +26,10 @@ export interface LiveMatchEvent {
   leagueSlug: string;
   leagueName: string;
   avgGoals: number;
+  /** v14.0 — دسته رقابت (مبنای قواعد کالیبراسیون سوپروایزر) */
+  category: LeagueCategory;
+  /** v14.0 — همبستگی دیکسون-کولز اختصاصی رقابت */
+  rho: number;
   /** v6.0 — شناسه‌های رسمی ESPN دو تیم (برای Roster API واقعی) */
   homeTeamId: string | null;
   awayTeamId: string | null;
@@ -199,6 +195,8 @@ function parseEspnEvent(ev: any, league: LeagueMeta): LiveMatchEvent | null {
     leagueSlug: league.slug,
     leagueName: league.name,
     avgGoals: league.avgGoals,
+    category: league.category,
+    rho: league.rho,
     homeTeamId: home.team?.id != null ? String(home.team.id) : null,
     awayTeamId: away.team?.id != null ? String(away.team.id) : null,
     homeTeam: home.team.displayName,
@@ -220,12 +218,35 @@ function parseEspnEvent(ev: any, league: LeagueMeta): LiveMatchEvent | null {
   };
 }
 
-/** اسکوربورد ESPN برای یک روز مشخص (فرمت YYYYMMDD) */
+/** اسکوربورد ESPN برای یک روز مشخص (فرمت YYYYMMDD) — کش کوتاه برای کاهش درخواست ۱۹ رقابت */
+const scoreboardCache = new Map<string, { at: number; events: any[] | null }>();
+const SCOREBOARD_TTL_MS = 90_000;
+
 export async function fetchEspnScoreboardDay(slug: string, dateCompact: string): Promise<any[] | null> {
+  const key = `${slug}::${dateCompact}`;
+  const hit = scoreboardCache.get(key);
+  if (hit && Date.now() - hit.at < SCOREBOARD_TTL_MS) return hit.events;
   const data = await fetchJson<any>(
     `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${dateCompact}`
   );
-  return data?.events ?? null;
+  const events = data?.events ?? null;
+  scoreboardCache.set(key, { at: Date.now(), events });
+  if (scoreboardCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of scoreboardCache) {
+      if (now - v.at > SCOREBOARD_TTL_MS) scoreboardCache.delete(k);
+    }
+  }
+  return events;
+}
+
+/** حذف تکراری‌ها بر اساس externalId (پاسخ‌های هم‌پوشان روزها / اندپوینت جامع) */
+function dedupEvents(list: LiveMatchEvent[]): LiveMatchEvent[] {
+  const byId = new Map<string, LiveMatchEvent>();
+  for (const ev of list) {
+    if (!byId.has(ev.externalId)) byId.set(ev.externalId, ev);
+  }
+  return [...byId.values()];
 }
 
 /**
@@ -251,15 +272,99 @@ export async function fetchEspnEvents(fromOffset = 0, toOffset = 7): Promise<Liv
     })
   );
 
-  const byId = new Map<string, LiveMatchEvent>();
+  const merged: LiveMatchEvent[] = [];
   for (const r of settled) {
     if (r.status !== "fulfilled") continue;
-    for (const ev of r.value) {
-      // پاسخ‌های هم‌پوشان روزها → dedup بر اساس externalId
-      if (!byId.has(ev.externalId)) byId.set(ev.externalId, ev);
+    merged.push(...r.value);
+  }
+  return dedupEvents(merged);
+}
+
+// ═══════════ v14.0 — اسکنر هوشمند پنجره ۷ روزه + اندپوینت جامع all ═══════════
+
+/** اگر بازی «امروز» کمتر از این باشد → پنجره به ۷ روز آینده گسترش می‌یابد */
+export const SMART_WINDOW_THRESHOLD = 10;
+/** حداقل مسابقه زنده هدف داشبورد (سند: همیشه ۲۰ تا ۴۰ مسابقه) */
+export const SMART_WINDOW_MIN_TOTAL = 20;
+
+export interface SmartScanResult {
+  events: LiveMatchEvent[];
+  /** تعداد مسابقات امروز UTC */
+  todayCount: number;
+  /** پنجره به ۷ روز آینده گسترش یافت؟ */
+  expandedTo7Days: boolean;
+  /** اندپوینت جامع all/scoreboard به‌عنوان پشتیبان فراخوانی شد؟ */
+  usedAllScoreboard: boolean;
+}
+
+function sameUtcDay(iso: string): boolean {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return false;
+  const d = new Date(t);
+  const now = new Date();
+  return (
+    d.getUTCFullYear() === now.getUTCFullYear() &&
+    d.getUTCMonth() === now.getUTCMonth() &&
+    d.getUTCDate() === now.getUTCDate()
+  );
+}
+
+/** اندپوینت جامع جهانی soccer/all/scoreboard — پشتیبان خودکار وقتی بازی روز کم است */
+export async function fetchEspnAllScoreboardDay(): Promise<LiveMatchEvent[]> {
+  const data = await fetchJson<any>(
+    "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard",
+    12_000
+  );
+  const events = data?.events ?? [];
+  const out: LiveMatchEvent[] = [];
+  for (const ev of events) {
+    const lslug = String(ev?.league?.slug ?? ev?.league?.abbreviation ?? "").toLowerCase();
+    const known = lslug ? leagueBySlug(lslug) : null;
+    const meta: LeagueMeta =
+      known ?? {
+        slug: lslug || "all",
+        name: String(ev?.league?.name ?? "رقابت جهانی (ESPN All)"),
+        oddsKey: "",
+        sportsDbId: "",
+        avgGoals: 2.6,
+        category: "GLOBAL_OTHER",
+        rho: -0.09,
+      };
+    const parsed = parseEspnEvent(ev, meta);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+/**
+ * v14.0 — اسکنر هوشمند پنجره ۷ روزه:
+ *  ۱) پنجره پایه: امروز + ۳ روز آینده روی همه ۱۹ رقابت
+ *  ۲) اگر بازی امروز کم بود (روزهای فیفادی) → گسترش به ۷ روز آینده
+ *  ۳) اگر هنوز مسابقه زنده کافی نبود → اندپوینت جامع all/scoreboard
+ *  (۳ روز گذشته جداگانه در تسویه کارنامه fetchEspnEvents(-3, 0) پوشش داده می‌شود)
+ */
+export async function fetchEspnEventsSmartWindow(): Promise<SmartScanResult> {
+  const base = await fetchEspnEvents(0, 3);
+  const todayCount = base.filter((e) => sameUtcDay(e.kickoff)).length;
+  let events = base;
+  let expandedTo7Days = false;
+  let usedAllScoreboard = false;
+
+  if (todayCount < SMART_WINDOW_THRESHOLD) {
+    const more = await fetchEspnEvents(4, 7);
+    events = dedupEvents([...base, ...more]);
+    expandedTo7Days = true;
+    const liveTotal = events.filter((e) => e.statusState !== "post").length;
+    if (liveTotal < SMART_WINDOW_MIN_TOTAL) {
+      const all = await fetchEspnAllScoreboardDay();
+      if (all.length > 0) {
+        events = dedupEvents([...events, ...all]);
+        usedAllScoreboard = true;
+      }
     }
   }
-  return [...byId.values()];
+
+  return { events, todayCount, expandedTo7Days, usedAllScoreboard };
 }
 
 // ═════════════════════ ۲) ESPN — اخبار زنده ═════════════════════

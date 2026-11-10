@@ -14,6 +14,10 @@ export interface BotConfig {
   adminUserId: number;
   walletUsdtTrc20: string;
   walletUsdtPolygon: string;
+  /** v13.2 — درگاه ۳: تتر بایننس روی زنجیره BNB (BEP-20) */
+  walletUsdtBsc: string;
+  /** v13.2 — درگاه ۴: تتر اسپل روی سولانا */
+  walletUsdtSolana: string;
   bankCardNumber: string;
   bankCardHolder: string;
   bankName: string;
@@ -31,6 +35,8 @@ export function defaultConfig(): BotConfig {
     adminUserId: Number(process.env.ADMIN_USER_ID ?? "123456789"),
     walletUsdtTrc20: process.env.WALLET_USDT_TRC20 ?? "TYourTronWalletAddressHereXXXXXXXXXX",
     walletUsdtPolygon: process.env.WALLET_USDT_POLYGON ?? "0xYourPolygonWalletAddressHereXXXXXXXXXXXX",
+    walletUsdtBsc: process.env.WALLET_USDT_BSC ?? "0xYourBNBSmartChainWalletAddressXXXXXXXXXX",
+    walletUsdtSolana: process.env.WALLET_USDT_SOLANA ?? "YourSolanaWalletAddressHereXXXXXXXXXXXXXXXX",
     bankCardNumber: process.env.BANK_CARD_NUMBER ?? "6037-9975-XXXX-XXXX",
     bankCardHolder: process.env.BANK_CARD_HOLDER ?? "نام صاحب حساب",
     bankName: process.env.BANK_NAME ?? "بانک ملی / ملت / سامان",
@@ -59,6 +65,8 @@ export function loadConfig(db: Database): BotConfig {
   cfg.adminUserId = Number(map.get("adminUserId") ?? cfg.adminUserId) || cfg.adminUserId;
   cfg.walletUsdtTrc20 = s("walletUsdtTrc20", cfg.walletUsdtTrc20);
   cfg.walletUsdtPolygon = s("walletUsdtPolygon", cfg.walletUsdtPolygon);
+  cfg.walletUsdtBsc = s("walletUsdtBsc", cfg.walletUsdtBsc);
+  cfg.walletUsdtSolana = s("walletUsdtSolana", cfg.walletUsdtSolana);
   cfg.bankCardNumber = s("bankCardNumber", cfg.bankCardNumber);
   cfg.bankCardHolder = s("bankCardHolder", cfg.bankCardHolder);
   cfg.bankName = s("bankName", cfg.bankName);
@@ -75,6 +83,8 @@ const CONFIG_KEYS: (keyof BotConfig)[] = [
   "adminUserId",
   "walletUsdtTrc20",
   "walletUsdtPolygon",
+  "walletUsdtBsc",
+  "walletUsdtSolana",
   "bankCardNumber",
   "bankCardHolder",
   "bankName",

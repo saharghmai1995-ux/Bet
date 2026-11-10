@@ -44,6 +44,7 @@ import { faNum, faPct } from "@/lib/format";
 import { useQuantStore } from "@/lib/store";
 import { SupervisorSeal } from "@/components/app/fx/supervisor-seal";
 import { cn } from "@/lib/utils";
+import { CATEGORY_LABEL_FA, categoryForLeagueName, patternBoostForCategory } from "@/lib/leagues-catalog";
 import type { FlashcardView } from "@/lib/autopilot-types";
 
 const TRUST_STYLES: Record<FlashcardView["trust"]["kind"], string> = {
@@ -233,6 +234,23 @@ export function FlashCard({
                 <Clock className="size-3" />
                 <span dir="ltr">{new Date(match.kickoff).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}</span>
               </div>
+              {/* v14.0 — دسته رقابت + قاعده کالیبراسیون اختصاصی (ملی/زنان) روی فلش‌کارت */}
+              {(() => {
+                const cat = categoryForLeagueName(match.league);
+                const boost = patternBoostForCategory(cat);
+                return (
+                  <p className="mt-1 flex flex-wrap items-center gap-1 text-[9px]">
+                    <span className="rounded border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-300">
+                      {CATEGORY_LABEL_FA[cat]}
+                    </span>
+                    {boost && (
+                      <span className="rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-amber-300">
+                        🎯 {boost.label}
+                      </span>
+                    )}
+                  </p>
+                );
+              })()}
               <h3 className="text-sm font-bold leading-snug sm:text-base">
                 <span className="break-words">{match.homeTeam}</span> <span className="text-muted-foreground">×</span>{" "}
                 <span className="break-words">{match.awayTeam}</span>
@@ -281,7 +299,7 @@ export function FlashCard({
                 <span className="inline-block size-2 rounded-sm bg-sky-500" />
                 تیپ A — ضریب هدف ~۲
               </p>
-              <p className="line-clamp-3 min-h-[42px] text-[11px] leading-4 text-foreground/90">{pair.labelA}</p>
+              <p className="min-h-[42px] break-words text-[11px] leading-4 text-foreground/90">{pair.labelA}</p>
               <div className="mt-1.5 flex items-end justify-between gap-1">
                 <div>
                   <p className="text-[9px] text-muted-foreground">ضریب</p>
@@ -303,7 +321,7 @@ export function FlashCard({
                 <span className="inline-block size-2 rounded-sm bg-emerald-500" />
                 تیپ B مکمل — ضریب ~۳
               </p>
-              <p className={`line-clamp-3 min-h-[42px] text-[11px] leading-4 text-foreground/90 ${isFree ? "select-none blur-[5px]" : ""}`} aria-hidden={isFree}>
+              <p className={`min-h-[42px] break-words text-[11px] leading-4 text-foreground/90 ${isFree ? "select-none blur-[5px]" : ""}`} aria-hidden={isFree}>
                 {pair.labelB}
               </p>
               {isFree ? (
@@ -535,7 +553,7 @@ export function FlashCard({
                   <ul className="space-y-0.5 text-[10px]">
                     {sup.rejected.slice(0, 6).map((r) => (
                       <li key={r.id} className="flex items-center justify-between gap-2 rounded-md bg-white/[0.03] px-1.5 py-0.5">
-                        <span className="min-w-0 truncate text-muted-foreground">✕ {r.short}</span>
+                        <span className="min-w-0 break-words text-muted-foreground" title={r.reason || r.short}>✕ {r.short}</span>
                         <span className="flex shrink-0 items-center gap-1">
                           <b className={r.veto ? "text-rose-300" : "text-zinc-400"} dir="ltr">{r.score100}/100</b>
                           <span className="text-[9px] text-muted-foreground/70">{r.veto ? "وتو" : "پایین‌تر"}</span>

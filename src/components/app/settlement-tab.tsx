@@ -1143,19 +1143,19 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
           </Badge>
         )}
         {!slip.supervisorApproved && slip.vetoReason && (
-          <p className="mt-1 max-w-[160px] truncate text-[9px] text-rose-300/80" title={slip.vetoReason}>
+          <p className="mt-1 break-words text-[9px] leading-4 text-rose-300/80" title={slip.vetoReason}>
             {slip.vetoReason}
           </p>
         )}
         {slip.settleNote && (
-          <p className="mt-1 max-w-[160px] truncate text-[9px] text-muted-foreground" title={slip.settleNote}>
+          <p className="mt-1 break-words text-[9px] leading-4 text-muted-foreground" title={slip.settleNote}>
             {slip.settleNote}
           </p>
         )}
       </TableCell>
 
       <TableCell className="max-w-[170px] py-2.5">
-        <p className="line-clamp-2 text-[10px] leading-4">{slip.labelA}</p>
+        <p className="break-words text-[10px] leading-4">{slip.labelA}</p>
         <p className="mt-0.5 text-[9px] text-muted-foreground">
           ضریب <b className="font-num text-sky-300" dir="ltr">{slip.oddsA.toFixed(2)}</b> · استیک{" "}
           <b className="font-num" dir="ltr">{faNum(slip.stakeA, 1)}</b>
@@ -1169,7 +1169,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
       </TableCell>
 
       <TableCell className="max-w-[170px] py-2.5">
-        <p className="line-clamp-2 text-[10px] leading-4">{slip.labelB}</p>
+        <p className="break-words text-[10px] leading-4">{slip.labelB}</p>
         <p className="mt-0.5 text-[9px] text-muted-foreground">
           ضریب <b className="font-num text-emerald-300" dir="ltr">{slip.oddsB.toFixed(2)}</b> · استیک{" "}
           <b className="font-num" dir="ltr">{faNum(slip.stakeB, 1)}</b>
