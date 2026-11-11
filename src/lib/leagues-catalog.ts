@@ -19,6 +19,8 @@ export type LeagueCategory =
 export interface LeagueMeta {
   slug: string; // اسلاگ ESPN
   name: string; // نام فارسی رقابت
+  /** v13.5 — نام رسمی انگلیسی رقابت — برای «هیچ کلمه فارسی در تصویر» پوسترها */
+  nameEn: string;
   oddsKey: string; // کلید The Odds API («» = بدون پوشش ضرایب)
   sportsDbId: string; // شناسه TheSportsDB («» = بدون فیکسچر مکمل)
   avgGoals: number; // میانگین گل تاریخی رقابت (مبنای لامبدای پایه)
@@ -29,31 +31,31 @@ export interface LeagueMeta {
 /** ۱۹ رقابت جهانی دسته‌بندی‌شده — دقیقاً طبق سند ارتقا v14.0 */
 export const GLOBAL_ESPN_SOCCER_LEAGUES: LeagueMeta[] = [
   // الف) ۵ لیگ برتر باشگاهی اروپا + رقابت‌های یوفا مردان
-  { slug: "eng.1", name: "لیگ برتر انگلیس (EPL)", oddsKey: "soccer_epl", sportsDbId: "4328", avgGoals: 2.85, category: "CLUB_TOP5", rho: -0.08 },
-  { slug: "esp.1", name: "لالیگا اسپانیا (LaLiga)", oddsKey: "soccer_spain_la_liga", sportsDbId: "4335", avgGoals: 2.55, category: "CLUB_TOP5", rho: -0.1 },
-  { slug: "ita.1", name: "سری آ ایتالیا (Serie A)", oddsKey: "soccer_italy_serie_a", sportsDbId: "4332", avgGoals: 2.62, category: "CLUB_TOP5", rho: -0.09 },
-  { slug: "ger.1", name: "بوندسلیگا آلمان (Bundesliga)", oddsKey: "soccer_germany_bundesliga", sportsDbId: "4331", avgGoals: 3.12, category: "CLUB_TOP5", rho: -0.06 },
-  { slug: "fra.1", name: "لیگ ۱ فرانسه (Ligue 1)", oddsKey: "soccer_france_ligue_one", sportsDbId: "4334", avgGoals: 2.7, category: "CLUB_TOP5", rho: -0.08 },
-  { slug: "uefa.champions", name: "لیگ قهرمانان اروپا (UCL)", oddsKey: "soccer_uefa_champs_league", sportsDbId: "4480", avgGoals: 2.95, category: "UEFA_CLUB", rho: -0.07 },
-  { slug: "uefa.europa", name: "لیگ اروپا (UEL)", oddsKey: "soccer_uefa_europa_league", sportsDbId: "4481", avgGoals: 2.82, category: "UEFA_CLUB", rho: -0.07 },
+  { slug: "eng.1", name: "لیگ برتر انگلیس (EPL)", nameEn: "English Premier League (EPL)", oddsKey: "soccer_epl", sportsDbId: "4328", avgGoals: 2.85, category: "CLUB_TOP5", rho: -0.08 },
+  { slug: "esp.1", name: "لالیگا اسپانیا (LaLiga)", nameEn: "Spanish LaLiga", oddsKey: "soccer_spain_la_liga", sportsDbId: "4335", avgGoals: 2.55, category: "CLUB_TOP5", rho: -0.1 },
+  { slug: "ita.1", name: "سری آ ایتالیا (Serie A)", nameEn: "Italian Serie A", oddsKey: "soccer_italy_serie_a", sportsDbId: "4332", avgGoals: 2.62, category: "CLUB_TOP5", rho: -0.09 },
+  { slug: "ger.1", name: "بوندسلیگا آلمان (Bundesliga)", nameEn: "German Bundesliga", oddsKey: "soccer_germany_bundesliga", sportsDbId: "4331", avgGoals: 3.12, category: "CLUB_TOP5", rho: -0.06 },
+  { slug: "fra.1", name: "لیگ ۱ فرانسه (Ligue 1)", nameEn: "French Ligue 1", oddsKey: "soccer_france_ligue_one", sportsDbId: "4334", avgGoals: 2.7, category: "CLUB_TOP5", rho: -0.08 },
+  { slug: "uefa.champions", name: "لیگ قهرمانان اروپا (UCL)", nameEn: "UEFA Champions League (UCL)", oddsKey: "soccer_uefa_champs_league", sportsDbId: "4480", avgGoals: 2.95, category: "UEFA_CLUB", rho: -0.07 },
+  { slug: "uefa.europa", name: "لیگ اروپا (UEL)", nameEn: "UEFA Europa League (UEL)", oddsKey: "soccer_uefa_europa_league", sportsDbId: "4481", avgGoals: 2.82, category: "UEFA_CLUB", rho: -0.07 },
 
   // ب) مسابقات حساس ملی جهان (فعال در تعطیلات فیفادی!)
-  { slug: "uefa.nations", name: "لیگ ملت‌های اروپا (UEFA Nations League)", oddsKey: "soccer_uefa_nations_league", sportsDbId: "4482", avgGoals: 2.52, category: "NATIONAL", rho: -0.13 },
-  { slug: "fifa.worldq.uefa", name: "مقدماتی جام جهانی — اروپا (WCQ UEFA)", oddsKey: "", sportsDbId: "", avgGoals: 2.78, category: "NATIONAL", rho: -0.1 },
-  { slug: "fifa.worldq.conmebol", name: "مقدماتی جام جهانی — آمریکای جنوبی (CONMEBOL)", oddsKey: "", sportsDbId: "", avgGoals: 2.28, category: "NATIONAL", rho: -0.13 },
-  { slug: "fifa.worldq.afc", name: "مقدماتی جام جهانی — آسیا (WCQ AFC)", oddsKey: "", sportsDbId: "", avgGoals: 2.65, category: "NATIONAL", rho: -0.11 },
-  { slug: "fifa.worldq.caf", name: "مقدماتی جام جهانی — آفریقا (WCQ CAF)", oddsKey: "", sportsDbId: "", avgGoals: 2.2, category: "NATIONAL", rho: -0.14 },
-  { slug: "fifa.friendly", name: "مسابقات دوستانه بین‌المللی فیفا", oddsKey: "", sportsDbId: "", avgGoals: 2.6, category: "NATIONAL", rho: -0.09 },
+  { slug: "uefa.nations", name: "لیگ ملت‌های اروپا (UEFA Nations League)", nameEn: "UEFA Nations League", oddsKey: "soccer_uefa_nations_league", sportsDbId: "4482", avgGoals: 2.52, category: "NATIONAL", rho: -0.13 },
+  { slug: "fifa.worldq.uefa", name: "مقدماتی جام جهانی — اروپا (WCQ UEFA)", nameEn: "FIFA World Cup Qualifying — UEFA", oddsKey: "", sportsDbId: "", avgGoals: 2.78, category: "NATIONAL", rho: -0.1 },
+  { slug: "fifa.worldq.conmebol", name: "مقدماتی جام جهانی — آمریکای جنوبی (CONMEBOL)", nameEn: "FIFA World Cup Qualifying — CONMEBOL", oddsKey: "", sportsDbId: "", avgGoals: 2.28, category: "NATIONAL", rho: -0.13 },
+  { slug: "fifa.worldq.afc", name: "مقدماتی جام جهانی — آسیا (WCQ AFC)", nameEn: "FIFA World Cup Qualifying — AFC", oddsKey: "", sportsDbId: "", avgGoals: 2.65, category: "NATIONAL", rho: -0.11 },
+  { slug: "fifa.worldq.caf", name: "مقدماتی جام جهانی — آفریقا (WCQ CAF)", nameEn: "FIFA World Cup Qualifying — CAF", oddsKey: "", sportsDbId: "", avgGoals: 2.2, category: "NATIONAL", rho: -0.14 },
+  { slug: "fifa.friendly", name: "مسابقات دوستانه بین‌المللی فیفا", nameEn: "International Friendly", oddsKey: "", sportsDbId: "", avgGoals: 2.6, category: "NATIONAL", rho: -0.09 },
 
   // ج) لیگ قهرمانان زنان اروپا (UWCL — فعال در وسط هفته و تعطیلات)
-  { slug: "uefa.wchampions", name: "لیگ قهرمانان زنان اروپا (UWCL)", oddsKey: "", sportsDbId: "", avgGoals: 3.35, category: "WOMEN_ELITE", rho: -0.05 },
+  { slug: "uefa.wchampions", name: "لیگ قهرمانان زنان اروپا (UWCL)", nameEn: "UEFA Women's Champions League (UWCL)", oddsKey: "", sportsDbId: "", avgGoals: 3.35, category: "WOMEN_ELITE", rho: -0.05 },
 
   // د) لیگ‌های سطح دوم اروپا و لیگ‌های تراز اول قاره آمریکا
-  { slug: "eng.2", name: "چمپیونشیپ انگلیس (EFL Championship)", oddsKey: "soccer_efl_champ", sportsDbId: "4329", avgGoals: 2.64, category: "TIER2_PRO", rho: -0.09 },
-  { slug: "esp.2", name: "لالیگا ۲ اسپانیا (Segunda División)", oddsKey: "soccer_spain_segunda_division", sportsDbId: "4338", avgGoals: 2.25, category: "TIER2_PRO", rho: -0.13 },
-  { slug: "bra.1", name: "سری آ برزیل (Brasileirão)", oddsKey: "soccer_brazil_campeonato", sportsDbId: "4351", avgGoals: 2.48, category: "AMERICAS", rho: -0.11 },
-  { slug: "arg.1", name: "لیگ حرفه‌ای آرژانتین (Liga Profesional)", oddsKey: "soccer_argentina_primera_division", sportsDbId: "4356", avgGoals: 2.22, category: "AMERICAS", rho: -0.13 },
-  { slug: "usa.1", name: "لیگ حرفه‌ای آمریکا (MLS)", oddsKey: "soccer_usa_mls", sportsDbId: "4346", avgGoals: 3.05, category: "AMERICAS", rho: -0.06 },
+  { slug: "eng.2", name: "چمپیونشیپ انگلیس (EFL Championship)", nameEn: "EFL Championship", oddsKey: "soccer_efl_champ", sportsDbId: "4329", avgGoals: 2.64, category: "TIER2_PRO", rho: -0.09 },
+  { slug: "esp.2", name: "لالیگا ۲ اسپانیا (Segunda División)", nameEn: "Spanish Segunda División", oddsKey: "soccer_spain_segunda_division", sportsDbId: "4338", avgGoals: 2.25, category: "TIER2_PRO", rho: -0.13 },
+  { slug: "bra.1", name: "سری آ برزیل (Brasileirão)", nameEn: "Brazilian Serie A (Brasileirão)", oddsKey: "soccer_brazil_campeonato", sportsDbId: "4351", avgGoals: 2.48, category: "AMERICAS", rho: -0.11 },
+  { slug: "arg.1", name: "لیگ حرفه‌ای آرژانتین (Liga Profesional)", nameEn: "Argentine Liga Profesional", oddsKey: "soccer_argentina_primera_division", sportsDbId: "4356", avgGoals: 2.22, category: "AMERICAS", rho: -0.13 },
+  { slug: "usa.1", name: "لیگ حرفه‌ای آمریکا (MLS)", nameEn: "Major League Soccer (MLS)", oddsKey: "soccer_usa_mls", sportsDbId: "4346", avgGoals: 3.05, category: "AMERICAS", rho: -0.06 },
 ];
 
 const BY_SLUG = new Map(GLOBAL_ESPN_SOCCER_LEAGUES.map((l) => [l.slug, l]));
@@ -65,6 +67,36 @@ export function leagueBySlug(slug: string): LeagueMeta | null {
 
 export function leagueByName(name: string): LeagueMeta | null {
   return BY_NAME.get(name.trim()) ?? null;
+}
+
+// ═══ v13.5 — «هیچ کلمه فارسی در تصویر» ═══
+// برچسب‌های پوستر باید ۱۰۰٪ لاتین باشند. نام فارسی/عربی هر رقابت به معادل رسمی انگلیسی
+// نگاشت می‌شود؛ اگر رقابت ناشناخته بود بخش لاتین داخل پرانتز (مثل «(EPL)») یا
+// برچسب خنثی چاپ می‌شود — کاراکتر فارسی/عربی هرگز وارد تصویر نمی‌شود.
+
+const HAS_FA_AR = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+/** نگاشت مستقیم نام فارسی → انگلیسی (برای ردیف‌های قدیمی دیتابیس) */
+const FA_TO_EN = new Map<string, string>(
+  GLOBAL_ESPN_SOCCER_LEAGUES.map((l) => [l.name.trim(), l.nameEn])
+);
+
+/**
+ * برچسب انگلیسی امن برای چاپ روی پوستر:
+ *  ۱) نگاشت دقیق کاتالوگ  ۲) پرانتز لاتین داخل نام (مثل «لیگ برتر انگلیس (EPL)»)  ۳) حذف نویسه‌های فارسی
+ */
+export function enLeagueLabel(league: string | null | undefined): string {
+  const raw = String(league ?? "").trim();
+  if (!raw) return "FOOTBALL";
+  if (!HAS_FA_AR.test(raw)) return raw; // لاتین خالص — دست‌نخورده
+  const mapped = FA_TO_EN.get(raw);
+  if (mapped) return mapped;
+  // پرانتز لاتین داخل نام فارسی (مثل «(EPL)») — رایج‌ترین شناسه رقابت
+  const paren = raw.match(/\(([A-Za-z][A-Za-z0-9 .·&'’\-]{1,40})\)/);
+  if (paren) return paren[1].trim().toUpperCase();
+  // فالبک: حذف همه نویسه‌های فارسی/عربی — اگر چیزی نماند برچسب خنثی
+  const stripped = raw.replace(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g, " ").replace(/\s+/g, " ").trim();
+  return stripped.length >= 3 ? stripped : "INTERNATIONAL FOOTBALL";
 }
 
 /** استخراج دسته رقابت از نام لیگ (exact → کلیدواژه) — برای ردیف‌های قدیمی دیتابیس هم کار می‌کند */

@@ -20,7 +20,8 @@ const TICK_INTERVAL_MS = 90_000;
 const DAILY_REPORT_HOUR_TEHRAN = 21;
 const DAILY_REPORT_MINUTE_WINDOW = 5; // پنجره ۵ دقیقه‌ای پس از ساعت هدف
 // v13.5 — ساعت‌های مدیر کانال‌ها
-const DAILY_GIFT_HOUR_TEHRAN = 12; // ۱ کارت VIP رایگان روزانه (اولویت دژ نفوذناپذیر)
+// v13.5.1 — کارت رایگان روزانه دیگر به ساعت ۱۲ گره نیست: هر تیک بین ۹ تا ۲۳ تلاش می‌کند
+// (Dedupe داخلی روزانه) تا اگر ساعت ۱۲ کارت تاییدشده‌ای وجود نداشت، با اولین صدور امروز ارسال شود.
 const FUNNEL_PNL_HOUR = 23;   // برآیند واقعی شب
 const FUNNEL_PNL_MINUTE = 30;
 const MARKETING_START_HOUR = 9;  // پنجره بنر بازاریابی ساعتی ۰۹ تا ۲۳ تهران
@@ -102,11 +103,13 @@ async function runTick(): Promise<void> {
     try {
       const funnel = await import("./telegram-service");
 
-      // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — ۱۲:۰۰ تهران ───
-      if (th.hour === DAILY_GIFT_HOUR_TEHRAN && th.minute < 10) {
+      // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — v13.5.1: هر تیک بین ۹ تا ۲۳ تلاش می‌شود؛
+      // Dedupe داخلی KEY_FUNNEL_GIFT_DAY ارسال تکراری را صفر می‌کند — اگر ساعت ۱۲ کارت امروز
+      // وجود نداشت، به محض صدور اولین کارت تاییدشده امروز، هدیه خودکار ارسال می‌شود.
+      if (th.hour >= MARKETING_START_HOUR && th.hour <= MARKETING_END_HOUR) {
         const gift = await funnel.sendDailyGiftCard(false);
         if (gift.ok) console.log(`[scheduler] daily free VIP card sent to public (${gift.detail})`);
-        else if (!gift.detail.startsWith("ALREADY")) console.warn(`[scheduler] daily gift card skipped: ${gift.detail}`);
+        else if (!gift.detail.startsWith("ALREADY") && gift.detail !== "NO_TODAY_CARD") console.warn(`[scheduler] daily gift card skipped: ${gift.detail}`);
       }
 
       // ─── بنر بازاریابی هوشمند ساعتی — ۰۹ تا ۲۳ تهران، هر ساعت یک‌بار (Dedupe داخلی) ───

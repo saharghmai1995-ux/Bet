@@ -153,13 +153,14 @@ export async function GET() {
     // ─── افراز مجزا بر اساس productLine + وضعیت تایید سوپروایزر + پرچم بازخوانی v13.2 ───
     // کارت‌های بازخوانی (retroIssued — بازی FT پیش از صدور) دیگر هرگز در دسته الف شمرده
     // نمی‌شوند؛ ریشه باگ «۳ تله میانی بدون صدور و تایید قبلی» حذف شد.
-    const approved = slips.filter((s) => s.supervisorApproved);
-    const retro = approved.filter((s) => s.retroIssued);
-    const live = approved.filter((s) => !s.retroIssued);
+    // v13.5.1 — بازخوانی فقط با پرچم retroIssued شناسایی می‌شود (مستقل از تایید)؛ کارت
+    // بازخوانی هرگز «تاییدشده» نیست و دفتر سایه (وتوی زنده) هم نیست — دسته مستقل ه.
+    const retro = slips.filter((s) => s.retroIssued);
+    const live = slips.filter((s) => s.supervisorApproved && !s.retroIssued);
     const partitionA = live.filter((s) => (s.productLine ?? "SINGLE") === "SINGLE");
     const partitionB = live.filter((s) => s.productLine === "COMBO");
     const partitionC = live.filter((s) => s.productLine === "SNIPER");
-    const partitionD = slips.filter((s) => !s.supervisorApproved);
+    const partitionD = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
 
     // کنترل افراز: مجموع ۵ دسته = کل کارت‌ها (هر کارت دقیقاً یک‌بار)
     const sumTotal = partitionA.length + partitionB.length + partitionC.length + partitionD.length + retro.length;
@@ -264,7 +265,7 @@ export async function GET() {
       categories,
       filterPerformance,
       shadowLedger: {
-        approvedSlips: approved.length,
+        approvedSlips: live.length,
         shadowSlips: partitionD.length,
         note:
           sumTotal === slips.length

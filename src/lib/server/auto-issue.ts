@@ -279,7 +279,10 @@ export async function autoSyncPastAndPresentMatches(options?: {
           /** v13.2 — کارت بازخوانی: بازی هنگام صدور از قبل FT بود (هرگز پیش‌بازی صادر/تایید/منتشر نشده) */
           retroIssued: isFinished,
           /** v11.0 — دفتر سایه: کارت واقعی یا سایه + سنجه‌های لحظه تصمیم */
-          supervisorApproved: !shadow,
+          // v13.5.1 — ریشه‌ای باگ «تله میانی بدون صدور قبلی»: کارت بازخوانی هرگز «تاییدشده»
+          // نیست (تایید = مجوز پول واقعی پیش از کیک‌آف). صدور پس از FT صرفاً تحلیل کاغذی دفتر
+          // بازخوانی است و با پرچم retroIssued شناسایی می‌شود، نه با تایید سوپروایزر.
+          supervisorApproved: !shadow && !isFinished,
           supervisorScore: decision.score.raw,
           vetoReason: shadow ? decision.vetoReason : null,
           jointLossRiskPct: decision.score.jointLossRiskPct,

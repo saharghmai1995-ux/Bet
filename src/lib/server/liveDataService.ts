@@ -817,17 +817,21 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
 }
 
 export async function getLedger(): Promise<LedgerDTO> {
-  const [rows, outboxRows, tgStatus] = await Promise.all([
-    db.issuedSlip.findMany({ orderBy: [{ status: "asc" }, { kickoff: "desc" }], take: 120 }),
+  // v13.5.1 — رفع باگ محاسباتی منحنی بانک: آمار تیتر (سود خالص مجموع) از «تمام تاریخ» محاسبه
+  // می‌شود، نه از ۱۲۰ ردیف آخر؛ وگرنه با منحنی بانک (تمام تاریخ) نمی‌خواند.
+  // ردیف‌های DTO برای نمایش به ۱۲۰ ردیف آخر محدود می‌شوند (سقف نمایش، نه سقف محاسبه).
+  const [allRows, outboxRows, tgStatus] = await Promise.all([
+    db.issuedSlip.findMany({ orderBy: [{ status: "asc" }, { kickoff: "desc" }] }),
     db.telegramOutbox.findMany({ orderBy: { createdAt: "desc" }, take: 25, include: { slip: { select: { hash: true } } } }),
     import("./telegram-service").then((m) => m.telegramStatus()),
   ]);
 
-  const slips = rows.map((s) => mapSlip(s));
+  const slips = allRows.map((s) => mapSlip(s));
+  const slipsView = slips.slice(0, 120); // سقف نمایش جدول کارنامه
   // ─── v11.0 — آمار تیتر کارنامه فقط از کارت‌های تایید سوپروایزر؛ وتوها به «دفتر سایه» می‌روند ───
   // v13.2 — کارت‌های بازخوانی (retroIssued — بازی FT پیش از صدور) از آمار اصلی حذف و به دسته ه می‌روند
   const approvedSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued);
-  const retroSlips = slips.filter((s) => s.supervisorApproved && s.retroIssued);
+  const retroSlips = slips.filter((s) => s.retroIssued);
   const stats: SettlementStatsDTO = {
     total: approvedSlips.length,
     pending: 0,
@@ -864,7 +868,8 @@ export async function getLedger(): Promise<LedgerDTO> {
   stats.netProfitPct = stats.staked > 0 ? Math.round((stats.netProfit / stats.staked) * 1000) / 10 : 0;
 
   // ─── v11.0 — دفتر سایه: تسویه کاغذی کارت‌های وتوشده (paper P&L — هرگز واقعی نبوده) ───
-  const shadowSlips = slips.filter((s) => !s.supervisorApproved);
+  // v13.5.1 — کارت‌های بازخوانی (retroIssued) از دفتر سایه خارج شدند؛ سایه فقط وتوهای زنده است
+  const shadowSlips = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
   const shadowByStatus: Record<string, number> = {};
   let shadowWins = 0;
   let shadowLosses = 0;
@@ -889,6 +894,8 @@ export async function getLedger(): Promise<LedgerDTO> {
   };
 
   // ─── v13.2 — دفتر بازخوانی: کارت‌های چندروزه (هرگز پیش‌بازی صادر نشده) — جدا از آمار واقعی ───
+  // v13.5.1 — بازخوانی با پرچم retroIssued شناسایی می‌شود (مستقل از تایید)؛ کارت بازخوانی
+  // هرگز «تاییدشده» نیست — صدور پس از FT صرفاً تحلیل کاغذی است.
   let retroWins = 0;
   let retroLosses = 0;
   let retroNet = 0;
@@ -936,17 +943,22 @@ export async function getLedger(): Promise<LedgerDTO> {
     equityAcc += r.netProfit ?? 0;
     equityPoints.push(Math.round(equityAcc * 100) / 100);
   }
+  const firstSettled = curveRows[0]?.settledAt ?? null;
+  const lastSettled = curveRows[curveRows.length - 1]?.settledAt ?? null;
   const equity = {
     startBank: START_BANK,
     points: equityPoints,
     finalBank: Math.round(equityAcc * 100) / 100,
     roiPct: Math.round(((equityAcc - START_BANK) / START_BANK) * 1000) / 10,
     basis: curveRows.length,
+    /** v13.5.1 — بازه زمانی واقعی منحنی برای برچسب محور زیر نمودار */
+    firstSettledAt: firstSettled ? firstSettled.toISOString() : null,
+    lastSettledAt: lastSettled ? lastSettled.toISOString() : null,
   };
 
   return {
     success: true,
-    slips,
+    slips: slipsView,
     stats,
     shadow,
     retroBook,

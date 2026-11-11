@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import sharp from "sharp";
+import { enLeagueLabel } from "@/lib/leagues-catalog";
 
 // ═════════════════════ برندینگ رسمی v12.0 ═════════════════════
 
@@ -574,7 +575,9 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
   const tLines = wrapText(input.timingDetail, 900 - 300, 21, 400, 2);
   const homeSize = fitSize(input.homeTeam, 380, 30, 15, 700);
   const awaySize = fitSize(input.awayTeam, 380, 30, 15, 700);
-  const leagueSize = fitSize(input.league, 500, 23, 14, 600);
+  // v13.5 — «هیچ کلمه فارسی در تصویر»: نام لیگ فارسی به معادل رسمی انگلیسی نگاشت می‌شود
+  const leagueEn = enLeagueLabel(input.league);
+  const leagueSize = fitSize(leagueEn, 500, 23, 14, 600);
 
   // ─── v13.2 — استراتژی آموزشی الگو ───
   const strategy = STRATEGY_EN[st?.archetypeCode ?? ""] ?? STRATEGY_DEFAULT;
@@ -610,9 +613,9 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
   ${brandHeader(W, accent)}
 
   <!-- لیگ + زمان -->
-  <rect x="90" y="108" width="${textWidth(input.league, leagueSize, 600) + 56}" height="44" rx="22" fill="rgba(6,10,20,0.75)" stroke="rgba(56,214,245,0.5)" stroke-width="1.5"/>
+  <rect x="90" y="108" width="${textWidth(leagueEn, leagueSize, 600) + 56}" height="44" rx="22" fill="rgba(6,10,20,0.75)" stroke="rgba(56,214,245,0.5)" stroke-width="1.5"/>
   <circle cx="118" cy="130" r="7" fill="${C.cyan}"/>
-  <text x="138" y="138" font-family="${C.sans}" font-size="${leagueSize}" font-weight="600" fill="${C.cyan}">${esc(input.league)}</text>
+  <text x="138" y="138" font-family="${C.sans}" font-size="${leagueSize}" font-weight="600" fill="${C.cyan}">${esc(leagueEn)}</text>
   <text x="${W - 90}" y="130" text-anchor="end" font-family="${C.sans}" font-size="21" fill="${C.inkDim}">${esc(fmtKickoff(input.kickoffIso))}</text>
 
   <!-- نشان‌های داده v13.2 -->
@@ -764,7 +767,8 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
   const profit = input.netProfit;
   const homeSize = fitSize(input.homeTeam, 360, 28, 14, 700);
   const awaySize = fitSize(input.awayTeam, 360, 28, 14, 700);
-  const leagueSize = fitSize(`${input.league} · FT · OFFICIAL ESPN SCOREBOARD`, 760, 20, 13, 400);
+  const leagueEn = enLeagueLabel(input.league);
+  const leagueSize = fitSize(`${leagueEn} · FT · OFFICIAL ESPN SCOREBOARD`, 760, 20, 13, 400);
   const winRate = input.winRatePct;
   const barLine =
     input.kind === "DOUBLE_WIN"
@@ -857,7 +861,7 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
   ${glassBox(geo.boxX, geo.boxY, geo.boxW, geo.boxH, meta.accent, 24)}
   ${centerContent}`
   }
-  <text x="${W / 2}" y="${geo.boxY + geo.boxH + 38}" text-anchor="middle" font-family="${C.sans}" font-size="${leagueSize}" fill="${C.inkDim}">${esc(input.league)} · FT · OFFICIAL ESPN SCOREBOARD</text>
+  <text x="${W / 2}" y="${geo.boxY + geo.boxH + 38}" text-anchor="middle" font-family="${C.sans}" font-size="${leagueSize}" fill="${C.inkDim}">${esc(leagueEn)} · FT · OFFICIAL ESPN SCOREBOARD</text>
 
   <!-- نوار شیشه‌ای پایینی -->
   ${glassBox(geo.barX, geo.barY, geo.barW, geo.barH, meta.accent, 18)}
@@ -975,7 +979,7 @@ export async function renderRolloverLadderPNG(input: RolloverLadderInput): Promi
     <circle cx="150" cy="${y + 100}" r="40" fill="rgba(245,197,66,0.14)" stroke="${C.gold}" stroke-width="3"/>
     <text x="150" y="${y + 112}" text-anchor="middle" font-family="${C.sans}" font-size="30" font-weight="bold" fill="${C.gold}">${i + 1}</text>
     <text x="220" y="${y + 56}" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(s.teams)}</text>
-    <text x="220" y="${y + 92}" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">${esc(s.league)} · ${esc(s.kickoffEn)} Tehran · odds ${s.oddsA.toFixed(2)} / ${s.oddsB.toFixed(2)}</text>
+    <text x="220" y="${y + 92}" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">${esc(enLeagueLabel(s.league))} · ${esc(s.kickoffEn)} Tehran · odds ${s.oddsA.toFixed(2)} / ${s.oddsB.toFixed(2)}</text>
     <text x="220" y="${y + 136}" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">Enter with <tspan font-weight="bold" fill="${C.ink}">${bankAt(input, i).toFixed(1)} u</tspan> → guaranteed profit <tspan font-weight="bold" fill="${C.emerald}">+${s.marginPct.toFixed(1)}%</tspan></text>
     <text x="960" y="${y + 108}" text-anchor="end" font-family="${C.mono}" font-size="32" font-weight="bold" fill="${C.emerald}">${endBank.toFixed(1)} u</text>
     ${i < rows.length - 1 ? `<path d="M940 ${y + 214} l-16 -22 h10 v-30 h12 v30 h10 z" fill="${C.gold}" opacity="0.85"/>` : ""}`;
@@ -1128,7 +1132,7 @@ export async function renderComboPosterPNG(input: ComboPosterInput): Promise<Buf
     <circle cx="150" cy="${y + rowH / 2}" r="34" fill="rgba(61,220,151,0.12)" stroke="${C.emerald}" stroke-width="2.5"/>
     <text x="150" y="${y + rowH / 2 + 10}" text-anchor="middle" font-family="${C.sans}" font-size="24" font-weight="bold" fill="${C.emerald}">L${i + 1}</text>
     <text x="206" y="${y + 58}" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(l.teams)}</text>
-    <text x="206" y="${y + 90}" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">${esc(l.league)} · ${esc(l.kickoffEn)} Tehran</text>
+    <text x="206" y="${y + 90}" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">${esc(enLeagueLabel(l.league))} · ${esc(l.kickoffEn)} Tehran</text>
     <text x="206" y="${y + 148}" font-family="${C.sans}" font-size="${legSize}" font-weight="bold" fill="${C.cyan}">${esc(l.legLabel)}</text>
     <text x="206" y="${y + 176}" font-family="${C.sans}" font-size="14" fill="${C.inkDim}">model confidence ${l.probPct.toFixed(1)}%</text>
     <rect x="806" y="${y + 58}" width="156" height="80" rx="14" fill="rgba(0,0,0,0.5)" stroke="rgba(61,220,151,0.5)" stroke-width="2"/>
@@ -1200,7 +1204,7 @@ export async function renderSniperPosterPNG(input: SniperPosterInput): Promise<B
   <text x="${W / 2}" y="250" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">reverse-poisson value hunt · single shot · small stake</text>
 
   <text x="${W / 2}" y="356" text-anchor="middle" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(input.teams)}</text>
-  <text x="${W / 2}" y="396" text-anchor="middle" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">${esc(input.league)} · ${esc(input.kickoffEn)} Tehran</text>
+  <text x="${W / 2}" y="396" text-anchor="middle" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">${esc(enLeagueLabel(input.league))} · ${esc(input.kickoffEn)} Tehran</text>
 
   <!-- رادار هدف‌گیری -->
   <g>
@@ -1278,7 +1282,7 @@ export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<B
   <rect x="${W / 2 - 52}" y="302" width="104" height="56" rx="14" fill="rgba(4,8,16,0.78)" stroke="rgba(255,255,255,0.2)"/>
   <text x="${W / 2}" y="340" text-anchor="middle" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}">VS</text>
 
-  <text x="${W / 2}" y="540" text-anchor="middle" font-family="${C.sans}" font-size="20" fill="${C.inkDim}">${esc(input.league)} · ${esc(input.kickoffEn)} Tehran</text>
+  <text x="${W / 2}" y="540" text-anchor="middle" font-family="${C.sans}" font-size="20" fill="${C.inkDim}">${esc(enLeagueLabel(input.league))} · ${esc(input.kickoffEn)} Tehran</text>
 
   <!-- تیپ A همیشه باز -->
   ${glassBox(90, 580, 900, 220, C.cyan, 22)}
@@ -1466,10 +1470,9 @@ export async function renderVipAdPNG(input: VipAdInput): Promise<Buffer> {
   <!-- KPI واقعی کانال -->
   ${kpiBoxes}
 
-  <!-- جدول قیمت — ۱۰۰٪ انگلیسی داخل تصویر (منع متن فارسی در پوستر) -->
+  <!-- جدول قیمت — یک خط مرکزی فشرده؛ بدون همپوشانی دو لایه متن (رفع باگ نمایش) -->
   ${glassBox(90, 1340, 900, 52, C.gold, 14, 0.9)}
-  <text x="112" y="1373" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.2">VIP PLANS · 1-MONTH 25 · LIFETIME 50 ★ · 3-MONTH 60</text>
-  <text x="${W - 112}" y="1373" text-anchor="end" font-family="${C.mono}" font-size="16.5" font-weight="bold" fill="${C.gold}">${esc(input.priceUsdt)}  ·  ${esc(input.priceToman)}</text>
+  <text x="${W / 2}" y="1373" text-anchor="middle" font-family="${C.sans}" font-size="16.5" font-weight="bold" fill="${C.gold}" letter-spacing="1.2">VIP PLANS · 1-MONTH 25 · LIFETIME 50 ★ · 3-MONTH 60 — ALL-IN USDT</text>
 
   ${footer(W, H, `JOIN ${BRAND_HANDLE} VIP · USDT TRC-20 / SOL / BSC / POLYGON · instant auto-verify`)}`;
 

@@ -149,21 +149,12 @@ function mainMenuKeyboard(lang: Lang, msgs: ReturnType<typeof buildMessages>) {
   };
 }
 
-function plansKeyboard(lang: Lang, msgs: ReturnType<typeof buildMessages>) {
-  const m = msgs[lang];
+function plansKeyboard(lang: Lang) {
   const rows: InlineButton[][] = [];
   for (const [key, p] of Object.entries(SUBSCRIPTION_PLANS)) {
-    const title = lang === "fa" ? p.title_fa : p.title_en;
-    // v13.2 — منوی فارسی فقط قیمت تومانی را نشان می‌دهد (بدون قیمت دلاری)
-    const priceLabel =
-      lang === "fa"
-        ? isLifetimePlan(p)
-          ? "مادام‌العمر ♾️"
-          : `${p.price_toman.toLocaleString("en-US")} تومان`
-        : isLifetimePlan(p)
-          ? `$${p.price_usdt.toFixed(0)} USDT · Lifetime`
-          : `$${p.price_usdt.toFixed(0)} USDT`;
-    rows.push([{ text: `${title} (${priceLabel})`, callback_data: `select_plan_${key}` }]);
+    // v13.5 — برچسب کوتاه اختصاصی دکمه: تلگرام متن بلند دکمه را می‌بُرد؛
+    // عنوان کامل پلن در پیام فاکتور چاپ می‌شود (رفع باگ خوانده‌نشدن متن تب‌ها)
+    rows.push([{ text: lang === "fa" ? p.btn_fa : p.btn_en, callback_data: `select_plan_${key}` }]);
   }
   rows.push([{ text: lang === "fa" ? "🔙 بازگشت به منوی اصلی" : "🔙 Back to Main Menu", callback_data: "back_main" }]);
   return { inline_keyboard: rows };
@@ -488,7 +479,7 @@ export async function handleUpdate(db: Database, cfg: BotConfig, update: Update)
         chat_id: chatId,
         text: m.select_plan,
         parse_mode: "HTML",
-        reply_markup: plansKeyboard(lang, msgs),
+        reply_markup: plansKeyboard(lang),
       });
     } else if (data.startsWith("select_plan_")) {
       const planKey = data.replace("select_plan_", "");

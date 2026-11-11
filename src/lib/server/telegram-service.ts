@@ -21,6 +21,8 @@ import {
   renderWinRateReportPNG,
   renderDailyReportPNG,
   renderDailyRadarPNG,
+  // v13.5.1 — رفع باگ «RENDER_FAILED» بنر بازاریابی ساعتی: این تابع هیچ‌وقت import نشده بود
+  renderVipAdBannerPNG,
 } from "./slip-images";
 import type { IssuedSlip } from "@prisma/client";
 
@@ -465,16 +467,18 @@ async function channelWinRateStats() {
   const winRatePct = st.settled > 0 ? Math.round(((st.settled - st.middleTrap) / st.settled) * 1000) / 10 : 0;
   const netPct = st.staked > 0 ? Math.round((st.netProfit / st.staked) * 1000) / 10 : 0;
   // ─── v11.0 — دفتر سایه: شفافیت counterfactual وتوها (خط جداگانه گزارش) ───
+  // v13.5.1 — سایه فقط وتوهای زنده است؛ کارت‌های بازخوانی (retroIssued) داخل سایه شمرده نمی‌شوند
   const shadowRows = await db.issuedSlip.findMany({
-    where: { supervisorApproved: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    where: { supervisorApproved: false, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
     select: { status: true, netProfit: true },
   });
   const shadowWins = shadowRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
   const shadowNet = Math.round(shadowRows.reduce((a, b) => a + (b.netProfit ?? 0), 0) * 100) / 100;
   const shadowWinRate = shadowRows.length > 0 ? Math.round((shadowWins / shadowRows.length) * 1000) / 10 : null;
   // ─── v13.2 — دفتر بازخوانی: کارت‌های چندروزه‌ای که هرگز پیش‌بازی صادر نشده‌اند (تسویه کاغذی تحلیلی) ───
+  // v13.5.1 — بازخوانی با پرچم retroIssued شناسایی می‌شود (مستقل از تایید — کارت بازخوانی هرگز تاییدشده نیست)
   const retroRows = await db.issuedSlip.findMany({
-    where: { retroIssued: true, supervisorApproved: true, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    where: { retroIssued: true, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
     select: { status: true, netProfit: true },
   });
   const retroWins = retroRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
@@ -595,7 +599,8 @@ export async function autoDispatchApprovedSlips(options?: {
   const maxCards = Math.max(1, Math.min(12, options?.maxCards ?? 3));
   const maxResults = Math.max(1, Math.min(12, options?.maxResults ?? 3));
   const [tg, autoOn] = await Promise.all([telegramStatus(), getAutoDispatch()]);
-  const skippedVetoed = await db.issuedSlip.count({ where: { supervisorApproved: false, telegramCard: false } });
+  // v13.5.1 — کارت‌های بازخوانی (retroIssued) وتو نیستند — شمارش وتو فقط برای کارت‌های زنده
+  const skippedVetoed = await db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false, telegramCard: false } });
 
   if (!tg.configured || !tg.channelSet) {
     return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed, detail: "TELEGRAM_NOT_CONFIGURED" };
@@ -1122,7 +1127,7 @@ export async function sendHourlyVipAd(force = false): Promise<{ ok: boolean; det
 export async function funnelRadarStats(): Promise<{ scanned: number; vetoed: number; golden: number }> {
   const [all, vetoed] = await Promise.all([
     db.issuedSlip.findMany({ select: { externalId: true, supervisorApproved: true } }),
-    db.issuedSlip.count({ where: { supervisorApproved: false } }),
+    db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false } }),
   ]);
   const scanned = new Set(all.map((s) => s.externalId ?? s.id)).size;
   const golden = await db.issuedSlip.count({ where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } } });

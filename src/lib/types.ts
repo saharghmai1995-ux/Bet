@@ -802,6 +802,9 @@ export interface LedgerDTO {
     roiPct: number;
     /** تعداد کارت‌های واقعاً لحاظ‌شده در منحنی (هم‌مبنا با stats.settled) */
     basis: number;
+    /** v13.5.1 — بازه زمانی واقعی تسویه‌های منحنی برای برچسب محور نمودار */
+    firstSettledAt: string | null;
+    lastSettledAt: string | null;
   };
 }
 

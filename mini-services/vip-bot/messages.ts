@@ -277,6 +277,9 @@ export interface PlanDef {
   isLifetime?: boolean;
   title_fa: string;
   title_en: string;
+  /** v13.5 — برچسب کوتاه دکمه منو (تلگرام متن بلند دکمه را می‌بُرد — رفع باگ نمایش تب‌ها) */
+  btn_fa: string;
+  btn_en: string;
 }
 
 /** عمر مجازی اشتراک مادام‌العمر (۱۰۰ سال — فقط برای ذخیره تاریخ؛ نمایش = مادام‌العمر) */
@@ -299,6 +302,8 @@ export const SUBSCRIPTION_PLANS: Record<string, PlanDef> = {
     days: 2,
     title_fa: "⚡ بسته ۴۸ ساعته آخر هفته (Weekend Pass)",
     title_en: "⚡ 48-Hour Weekend Matchday Pass",
+    btn_fa: "⚡ ۴۸ ساعته — ۴۵۰,۰۰۰ تومان",
+    btn_en: "⚡ 48h Pass — $7 USDT",
   },
   pro_monthly: {
     price_usdt: 29.0,
@@ -306,6 +311,8 @@ export const SUBSCRIPTION_PLANS: Record<string, PlanDef> = {
     days: 30,
     title_fa: "💎 اشتراک ماهانه VIP فوتبال‌کوانت (۳۰ روز)",
     title_en: "💎 Pro Football Quant VIP (30 Days)",
+    btn_fa: "💎 ماهانه — ۱,۸۵۰,۰۰۰ تومان",
+    btn_en: "💎 Monthly — $29 USDT",
   },
   quant_all: {
     price_usdt: 59.0,
@@ -314,5 +321,7 @@ export const SUBSCRIPTION_PLANS: Record<string, PlanDef> = {
     isLifetime: true,
     title_fa: "👑 اشتراک جامع VIP مادام‌العمر (فوتبال + تنیس مارکوف + اسنایپر)",
     title_en: "👑 All-Access Quant VIP (Lifetime)",
+    btn_fa: "👑 مادام‌العمر — ۳,۷۵۰,۰۰۰ تومان ♾️",
+    btn_en: "👑 Lifetime — $59 USDT ♾️",
   },
 };

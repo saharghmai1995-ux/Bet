@@ -105,9 +105,10 @@ function LegendRow({ color, label, value }: { color: string; label: React.ReactN
 }
 
 /**
- * نمونه‌برداری یکنواخت — همیشه نقطه اول و آخر حفظ می‌شود (رفع اعوجاج منحنی).
- * v13.5 — رفع باگ: نمونه‌های تکراری مجاور حذف می‌شوند تا منحنی پله‌ای/مسطح کاذب رندر نشود؛
- * اگر کل منحنی تخت است (بانک ثابت)، حداقل سه نقطه بازمی‌گردد تا خط مرجع ۱۰۰۰ دیده شود.
+ * نمونه‌برداری یکنواخت — همیشه نقطه اول و آخر حفظ می‌شود.
+ * v13.5.1 — رفع باگ نمایش: فیلتر «حذف تکراری‌های مجاور» حذف شد؛ آن فیلتر
+ * ۱) لبه‌های فلات را نگه می‌داشت و ۲) بعد از حذف نقاط میانی، فاصله‌گذاری افقی را به‌هم
+ * می‌ریخت (اعوجاج منحنی). اکنون فقط نمونه‌برداری مساوی با حفظ دو سر انجام می‌شود.
  */
 function downsampleEvenly(arr: number[], maxPts: number): number[] {
   if (arr.length <= maxPts) return arr;
@@ -116,13 +117,25 @@ function downsampleEvenly(arr: number[], maxPts: number): number[] {
     out.push(arr[Math.round((i * (arr.length - 1)) / (maxPts - 1))]);
   }
   out.push(arr[arr.length - 1]);
-  // حذف تکراری‌های مجاور (نقاط با ارزش یکسان پشت سر هم جز ارتفاع منحنی نیستند)
-  const deduped = out.filter((v, i) => i === 0 || i === out.length - 1 || v !== out[i - 1] || v !== out[i + 1]);
-  return deduped.length >= 2 ? deduped : out;
+  return out;
 }
 
-/** منحنی اسپارک‌لاین رشد سرمایه (SVG متحرک با draw-in) — v13.5 با خط مرجع ۱۰۰۰ */
-function EquitySparkline({ curve, roi, finalBank, basis }: { curve: number[]; roi: number; finalBank: number; basis: number }) {
+/** منحنی اسپارک‌لاین رشد سرمایه (SVG متحرک با draw-in) — v13.5.1 با خط مرجع ۱۰۰۰ + محور تاریخ */
+function EquitySparkline({
+  curve,
+  roi,
+  finalBank,
+  basis,
+  firstSettledAt,
+  lastSettledAt,
+}: {
+  curve: number[];
+  roi: number;
+  finalBank: number;
+  basis: number;
+  firstSettledAt: string | null;
+  lastSettledAt: string | null;
+}) {
   const [drawn, setDrawn] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setDrawn(true), 200);
@@ -142,6 +155,13 @@ function EquitySparkline({ curve, roi, finalBank, basis }: { curve: number[]; ro
   const area = `${line} L${W},${H} L0,${H} Z`;
   const baseY = yOf(START_BANK);
   const up = roi >= 0;
+  // v13.5.1 — برچسب محور زمان: اولین و آخرین تسویه واقعی منحنی (شمسی/میلادی کوتاه)
+  const dateLbl = (iso: string | null) =>
+    iso
+      ? new Intl.DateTimeFormat("fa-IR", { month: "short", day: "numeric" }).format(new Date(iso))
+      : null;
+  const fromLbl = dateLbl(firstSettledAt);
+  const toLbl = dateLbl(lastSettledAt);
 
   return (
     <div className="min-w-0 flex-1">
@@ -192,8 +212,13 @@ function EquitySparkline({ curve, roi, finalBank, basis }: { curve: number[]; ro
           <animate attributeName="r" values="3;4.4;3" dur="1.6s" repeatCount="indefinite" />
         </circle>
       </svg>
-      <p className="mt-0.5 text-[9px] text-muted-foreground/70" dir="ltr">
-        START 1,000u → END {faNum(Math.round(finalBank), 0)}u · {faNum(basis, 0)} real settled cards
+      <p className="mt-0.5 flex items-center justify-between gap-2 text-[9px] text-muted-foreground/70" dir="ltr">
+        <span>START 1,000u → END {faNum(Math.round(finalBank), 0)}u · {faNum(basis, 0)} real settled cards</span>
+        {fromLbl && toLbl && (
+          <span className="shrink-0 tabular-nums" dir="rtl">
+            {fromLbl} ← {toLbl}
+          </span>
+        )}
       </p>
     </div>
   );
@@ -415,7 +440,7 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
     };
   }, []);
 
-  const { winPct, breakdown, curve, roi, settledCount, finalBank, curveBasis } = useMemo(() => {
+  const { winPct, breakdown, curve, roi, settledCount, finalBank, curveBasis, eqFrom, eqTo } = useMemo(() => {
     const stats = ledger?.stats;
     const settled = stats?.settled ?? 0;
     const wins = (stats?.wonA ?? 0) + (stats?.wonB ?? 0) + (stats?.doubleWin ?? 0);
@@ -443,6 +468,8 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
         settledCount: settled,
         finalBank: eq.finalBank,
         curveBasis: eq.basis,
+        eqFrom: eq.firstSettledAt ?? null,
+        eqTo: eq.lastSettledAt ?? null,
       };
     }
     // فالبک سمت کلاینت (نسخه قدیمی API) — با فیلتر کامل شامل حذف بازخوانی‌ها
@@ -457,7 +484,18 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
     }
     const curve = downsampleEvenly(fullCurve, 31);
     const roi = ((acc - START_BANK) / START_BANK) * 100;
-    return { winPct, breakdown, curve, roi, settledCount: settled, finalBank: acc, curveBasis: settledSlips.length };
+    const times = settledSlips.map((s) => s.settledAt!).filter(Boolean);
+    return {
+      winPct,
+      breakdown,
+      curve,
+      roi,
+      settledCount: settled,
+      finalBank: acc,
+      curveBasis: settledSlips.length,
+      eqFrom: times[0] ?? null,
+      eqTo: times[times.length - 1] ?? null,
+    };
   }, [ledger]);
 
   return (
@@ -488,7 +526,7 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           <WinRateGauge winPct={winPct} breakdown={breakdown} />
         </div>
         <div className="flex flex-col rounded-xl border border-white/8 bg-white/[0.02] p-3">
-          <EquitySparkline curve={curve} roi={roi} finalBank={finalBank} basis={curveBasis} />
+          <EquitySparkline curve={curve} roi={roi} finalBank={finalBank} basis={curveBasis} firstSettledAt={eqFrom} lastSettledAt={eqTo} />
         </div>
         <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3">
           <VetoEfficiency approved={approved} vetoed={vetoed} scanned={scanned} savedByVeto={savedByVeto} />
