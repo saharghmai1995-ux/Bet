@@ -368,7 +368,7 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
   if (notify) {
     try {
       const unnotified = await db.issuedSlip.findMany({
-        where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true },
+        where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true, retroIssued: false },
         orderBy: { settledAt: "asc" },
         take: 5,
       });
@@ -579,6 +579,7 @@ export async function issueSlip(
       espnUrl: item.match.espnUrl ?? espnUrlOf(externalId),
       supervisorApproved: item.supervisorApproved !== false,
       autoIssued: opts?.autoIssued === true,
+      retroIssued: item.retroIssued === true,
       supervisorScore: item.supervisorScore ?? null,
       vetoReason: item.vetoReason ?? null,
       jointLossRiskPct: item.jointLossRiskPct ?? null,
@@ -778,6 +779,7 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
     lambdaAway: s.lambdaAway,
     supervisorApproved: s.supervisorApproved,
     autoIssued: s.autoIssued,
+    retroIssued: s.retroIssued,
     supervisorScore: s.supervisorScore,
     vetoReason: s.vetoReason,
     jointLossRiskPct: s.jointLossRiskPct,
@@ -823,7 +825,9 @@ export async function getLedger(): Promise<LedgerDTO> {
 
   const slips = rows.map((s) => mapSlip(s));
   // ─── v11.0 — آمار تیتر کارنامه فقط از کارت‌های تایید سوپروایزر؛ وتوها به «دفتر سایه» می‌روند ───
-  const approvedSlips = slips.filter((s) => s.supervisorApproved);
+  // v13.2 — کارت‌های بازخوانی (retroIssued — بازی FT پیش از صدور) از آمار اصلی حذف و به دسته ه می‌روند
+  const approvedSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued);
+  const retroSlips = slips.filter((s) => s.supervisorApproved && s.retroIssued);
   const stats: SettlementStatsDTO = {
     total: approvedSlips.length,
     pending: 0,
@@ -884,6 +888,27 @@ export async function getLedger(): Promise<LedgerDTO> {
     byStatus: shadowByStatus,
   };
 
+  // ─── v13.2 — دفتر بازخوانی: کارت‌های چندروزه (هرگز پیش‌بازی صادر نشده) — جدا از آمار واقعی ───
+  let retroWins = 0;
+  let retroLosses = 0;
+  let retroNet = 0;
+  for (const s of retroSlips) {
+    if (["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status)) {
+      if (s.status === "MIDDLE_TRAP") retroLosses += 1;
+      else retroWins += 1;
+      retroNet += s.netProfit ?? 0;
+    }
+  }
+  const retroSettled = retroWins + retroLosses;
+  const retroBook = {
+    total: retroSlips.length,
+    settled: retroSettled,
+    wins: retroWins,
+    losses: retroLosses,
+    winRate: retroSettled > 0 ? Math.round((retroWins / retroSettled) * 1000) / 10 : null,
+    netProfit: Math.round(retroNet * 100) / 100,
+  };
+
   // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور ───
   const [journal, doctrine, sched] = await Promise.all([
     listJournal(30).catch(() => []),
@@ -891,11 +916,40 @@ export async function getLedger(): Promise<LedgerDTO> {
     Promise.resolve(getSchedulerStatus()),
   ]);
 
+  // ─── v13.5 — منحنی رشد بانک ۱۰۰۰ واحدی از «تمام تاریخ» (بدون سقف take:120) ───
+  // فقط کارت‌های تاییدشده غیربازخوانی تسویه‌شده — هم‌مبنا با stats؛ انتهای منحنی
+  // دقیقاً با «سود خالص مجموع» تیتر برابر است (رفع باگ نمایش/محاسبه).
+  const curveRows = await db.issuedSlip.findMany({
+    where: {
+      supervisorApproved: true,
+      retroIssued: false,
+      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+      settledAt: { not: null },
+    },
+    select: { netProfit: true, settledAt: true },
+    orderBy: { settledAt: "asc" },
+  });
+  const START_BANK = 1000;
+  let equityAcc = START_BANK;
+  const equityPoints = [equityAcc];
+  for (const r of curveRows) {
+    equityAcc += r.netProfit ?? 0;
+    equityPoints.push(Math.round(equityAcc * 100) / 100);
+  }
+  const equity = {
+    startBank: START_BANK,
+    points: equityPoints,
+    finalBank: Math.round(equityAcc * 100) / 100,
+    roiPct: Math.round(((equityAcc - START_BANK) / START_BANK) * 1000) / 10,
+    basis: curveRows.length,
+  };
+
   return {
     success: true,
     slips,
     stats,
     shadow,
+    retroBook,
     outbox: outboxRows.map((o) => ({
       id: o.id,
       kind: o.kind,
@@ -914,6 +968,7 @@ export async function getLedger(): Promise<LedgerDTO> {
       intervalSec: sched.intervalSec,
     },
     unitBasis: { stakePerTicket: 100, unitPctOfBankroll: 1, exampleBankrollUsd: 10 },
+    equity,
   };
 }
 

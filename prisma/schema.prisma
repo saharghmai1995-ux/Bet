@@ -306,6 +306,12 @@ model IssuedSlip {
   // هر کارت فقط و فقط در یکی از سه خط تولید شمرده می‌شود — دوباره‌شماری صفر.
   productLine String @default("SINGLE")
 
+  // ─── v13.2 — کارت بازخوانی (Retro Card) ───
+  // بازی‌ای که هنگام صدور کارت از قبل FT شده بود (خط لوله چندروزه) — هرگز پیش از بازی
+  // صادر و تایید/منتشر نشده است؛ فقط تسویه کاغذی تحلیلی برای یادگیری دکترین.
+  // از وین‌ریت واقعی کانال، اعلام نتایج تلگرام و دسته الف کارنامه مستثناست.
+  retroIssued Boolean @default(false)
+
   // ─── v10.0 — پنجره زمانی طلایی ثبت ضریب (Optimal Odds Timing Window) ───
   tipKindA String?       // FAVORITE | TOTALS | UNDERDOG
   tipKindB String?

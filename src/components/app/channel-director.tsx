@@ -1,15 +1,16 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 📣 ایجنت مدیر کانال عمومی و VIP (@aineobet Channel Director Agent) — v13.0
-// کنسول قیف تبدیل مخاطب عمومی به VIP:
-//   پست ۱ (۱۱:۰۰) رادار شفافیت → پست ۲ (T-60) گیفت رایگان + تیزر قفل‌شده
-//   → پست ۳ (FT+5m) بازگشایی قفل + اثبات SHA-256 → پست ۴ (۲۳:۳۰) برآیند واقعی
+// 📣 ایجنت مدیر کانال عمومی و VIP (@aineobet Channel Director) — v13.5
+// خط لوله جدید کارفرما:
+//   کانال عمومی @aineobet = فقط نتایج + روزانه ۱ کارت رایگان (دژ نفوذناپذیر اولویت)
+//     + بنر بازاریابی ساعتی ۰۹–۲۳ + برآیند شبانه ۲۳:۳۰
+//   کانال VIP = فقط فلش‌کارت‌های بازی + کارت نتیجه برایند روزانه ۲۱:۰۰
 // همه پست‌ها سمت سرور اجرا می‌شوند (زمان‌بند ۹۰ ثانیه‌ای) — دکمه‌ها فقط اجرای دستی‌اند.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Clock, Loader2, Lock, Megaphone, Moon, Radar, Send, Unlock, XCircle } from "lucide-react";
+import { BadgeCheck, CheckCircle2, Clock, Gift, Loader2, Megaphone, Moon, PieChart, Send, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +29,9 @@ interface FunnelStatusDTO {
   radarSentToday?: boolean;
   pnlSentToday?: boolean;
   giftSentToday?: boolean;
+  digestSentToday?: boolean;
+  adSentThisHour?: boolean;
+  lastAdStamp?: string | null;
   stats?: { scanned: number; vetoed: number; golden: number };
   sentCounts?: Record<string, number>;
   recent?: { kind: string; ok: boolean; detail: string | null; createdAt: string }[];
@@ -35,11 +39,14 @@ interface FunnelStatusDTO {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  FUNNEL_RADAR: "📡 رادار صبح (کانال عمومی)",
-  FUNNEL_GIFT: "🎁 گیفت رایگان (T-60)",
-  FUNNEL_TEASER: "🔒 تیزر قفل‌شده (T-60)",
-  FUNNEL_UNBLUR: "🔓 بازگشایی + اثبات (FT+5m)",
-  FUNNEL_PNL: "🌙 برآیند شبانه (۲۳:۳۰)",
+  FUNNEL_RADAR: "📡 رادار صبح (عمومی — نسخه قدیم)",
+  FUNNEL_GIFT: "🎁 کارت رایگان روزانه (عمومی)",
+  FUNNEL_TEASER: "🔒 تیزر قفل‌شده (عمومی — نسخه قدیم)",
+  FUNNEL_UNBLUR: "🔓 بازگشایی + اثبات (نسخه قدیم)",
+  FUNNEL_PNL: "🌙 برآیند شبانه ۲۳:۳۰ (عمومی)",
+  MARKETING_AD: "📣 بنر بازاریابی ساعتی (عمومی)",
+  DAILY_DIGEST: "📊 برآیند روزانه ۲۱:۰۰ (عمومی + VIP)",
+  WINRATE: "🎯 گزارش وین‌ریت (عمومی)",
 };
 
 export function ChannelDirectorTab() {
@@ -113,11 +120,58 @@ export function ChannelDirectorTab() {
     [load]
   );
 
+  // ─── خط لوله v13.5 — ۵ پست خودکار ───
   const posts = [
-    { n: 1, time: "۱۱:۰۰ تهران", icon: Radar, title: "رادار شفافیت روزانه — کانال عمومی", desc: "X بازی اسکن شد · Y بازی پرریسک وتو شد · Z سیگنال طلایی برای VIP صادر شد", action: "radar", done: status?.radarSentToday, btn: "📡 ارسال رادار" },
-    { n: 2, time: "T-60m", icon: Lock, title: "۱ گیفت کامل رایگان + تیزرهای قفل‌شده — کانال عمومی", desc: "مبارزه، سود تضمینی و هش SHA-256 نمایان؛ تیپ B با شیشه تار و مهر 🔒 LOCKED FOR @AINEOBET VIP", action: "teasers", done: status?.giftSentToday, btn: "🎁 ارسال گیفت + تیزر" },
-    { n: 3, time: "FT + 5m", icon: Unlock, title: "بازگشایی قفل + پوستر WIN CONFIRMED — کانال عمومی", desc: "همان کارت بدون سانسور کنار نتیجه ESPN منتشر می‌شود تا هش پیش از بازی با برد تطبیق دیده شود", action: "unblur", done: (status?.sentCounts?.FUNNEL_UNBLUR ?? 0) > 0, btn: "🔓 ارسال اثبات" },
-    { n: 4, time: "۲۳:۳۰ تهران", icon: Moon, title: "برآیند واقعی شب با افراز مجزا — کانال عمومی", desc: "سود خالص Tier 1 / Tier 2 / Tier 3 جداگانه — هیچ کارتی در دو خط شمرده نمی‌شود", action: "pnl", done: status?.pnlSentToday, btn: "🌙 ارسال برآیند" },
+    {
+      n: 1,
+      time: "هر ۹۰ ثانیه (خودکار)",
+      icon: Megaphone,
+      title: "نتایج FT → کانال عمومی @aineobet · فلش‌کارت → کانال VIP",
+      desc: "کارت‌های تاییدشده فقط به کانال VIP اعضا می‌روند و اعلام نتیجه رسمی ESPN فقط به کانال عمومی — تفکیک کامل طبق دستور کارفرما.",
+      action: null,
+      done: true,
+      btn: "خودکار",
+    },
+    {
+      n: 2,
+      time: "۱۲:۰۰ تهران",
+      icon: Gift,
+      title: "۱ کارت VIP رایگان روزانه (تایید سوپروایزر یا دژ نفوذناپذیر) — کانال عمومی",
+      desc: "اولویت با کارت‌های دژ (ریسک باخت همزمان زیر ۷٪)؛ در نبود دژ، بالاترین امتیاز سوپروایزر انتخاب می‌شود.",
+      action: "gift",
+      done: status?.giftSentToday,
+      btn: "🎁 ارسال کارت رایگان",
+    },
+    {
+      n: 3,
+      time: "ساعتی · ۰۹ تا ۲۳ تهران",
+      icon: Megaphone,
+      title: "بنر بازاریابی هوشمند تصویری (۱۰ موضوع چرخشی) — کانال عمومی",
+      desc: "بنر کاملاً انگلیسی با KPI واقعی کانال + کپشن فارسی حرفه‌ای — برای جذب اشتراک VIP.",
+      action: "ad",
+      done: status?.adSentThisHour,
+      btn: "📣 ارسال بنر بازاریابی",
+    },
+    {
+      n: 4,
+      time: "۲۱:۰۰ تهران",
+      icon: PieChart,
+      title: "کارت نتیجه برایند روزانه — هر دو کانال (عمومی + VIP)",
+      desc: "KPIهای واقعی روز: تعداد تسویه، وین‌ریت، جکپات‌ها و سود خالص واحد.",
+      action: "digest",
+      done: status?.digestSentToday,
+      btn: "📊 ارسال برایند روزانه",
+    },
+    {
+      n: 5,
+      time: "۲۳:۳۰ تهران",
+      icon: Moon,
+      title: "برآیند واقعی شب با افراز مجزا — کانال عمومی",
+      desc: "سود خالص Tier 1 / Tier 2 / Tier 3 جداگانه — هیچ کارتی در دو خط شمرده نمی‌شود.",
+      action: "pnl",
+      done: status?.pnlSentToday,
+      btn: "🌙 ارسال برآیند",
+    },
   ];
 
   return (
@@ -126,18 +180,34 @@ export function ChannelDirectorTab() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-bold sm:text-base">
           <span aria-hidden>📣</span>
-          ایجنت مدیر کانال عمومی و VIP (@aineobet Funnel Director)
+          ایجنت مدیر کانال عمومی و VIP (@aineobet Channel Director)
         </h2>
         <Badge variant="outline" className="gap-1 border-violet-500/40 bg-violet-500/10 text-[9px] text-violet-300">
           <Clock className="size-2.5" /> زمان‌بند سرور ۹۰ ثانیه‌ای — کاملاً مستقل از مرورگر
         </Badge>
       </div>
 
+      {/* راهنمای تفکیک کانال‌ها */}
+      <div className="grid gap-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-3 sm:grid-cols-2">
+        <p className="flex items-start gap-1.5 text-[10px] leading-4 text-foreground/85">
+          <BadgeCheck className="mt-0.5 size-3.5 shrink-0 text-cyan-300" />
+          <span>
+            <b>کانال عمومی {status?.publicChannel ?? "@aineobet"}:</b> فقط نتایج FT، گزارش وین‌ریت، برآیند روزانه، ۱ کارت رایگان روزانه و بنرهای بازاریابی ساعتی.
+          </span>
+        </p>
+        <p className="flex items-start gap-1.5 text-[10px] leading-4 text-foreground/85">
+          <BadgeCheck className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
+          <span>
+            <b>کانال VIP {status?.vipChannel ?? "—"}</b> (اعضای ویژه): فقط فلش‌کارت‌های بازی + کارت نتیجه برایند روزانه — بدون تبلیغ، بدون نویز.
+          </span>
+        </p>
+      </div>
+
       {/* دو کانال */}
-      <div className="grid gap-3 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-4 lg:grid-cols-[1fr_1fr_auto]">
+      <div className="grid gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-4 lg:grid-cols-[1fr_1fr_auto]">
         <div className="space-y-1.5">
           <Label htmlFor="fd-public" className="text-[10px] text-muted-foreground">
-            شناسه کانال عمومی ویترین (Public Showcase Chat ID)
+            شناسه کانال عمومی (Public Results Channel)
           </Label>
           <Input id="fd-public" dir="ltr" placeholder="@aineobet" value={pub} onChange={(e) => setPub(e.target.value)} className="h-9 border-white/10 bg-black/30 text-xs" autoComplete="off" />
         </div>
@@ -145,7 +215,7 @@ export function ChannelDirectorTab() {
           <Label htmlFor="fd-vip" className="text-[10px] text-muted-foreground">
             شناسه کانال اعضای ویژه (VIP Private Chat ID)
           </Label>
-          <Input id="fd-vip" dir="ltr" placeholder="@aineobet_vip یا -1001234567890" value={vip} onChange={(e) => setVip(e.target.value)} className="h-9 border-white/10 bg-black/30 text-xs" autoComplete="off" />
+          <Input id="fd-vip" dir="ltr" placeholder="-1004487154797" value={vip} onChange={(e) => setVip(e.target.value)} className="h-9 border-white/10 bg-black/30 text-xs" autoComplete="off" />
         </div>
         <div className="flex items-end">
           <Button size="sm" className="h-9 gap-1 bg-violet-600 px-4 text-[11px] font-bold hover:bg-violet-500" onClick={() => void save()} disabled={saving}>
@@ -170,7 +240,7 @@ export function ChannelDirectorTab() {
         </div>
       )}
 
-      {/* ۴ پست قیف */}
+      {/* ۵ پست خط لوله */}
       <div className="grid gap-2 lg:grid-cols-2">
         {posts.map((p) => (
           <div key={p.n} className={cn("space-y-1.5 rounded-xl border p-3", p.done ? "border-emerald-500/30 bg-emerald-500/[0.05]" : "border-white/10 bg-white/[0.02]")}>
@@ -185,19 +255,21 @@ export function ChannelDirectorTab() {
               </span>
             </div>
             <p className="text-[10px] leading-4 text-muted-foreground">{p.desc}</p>
-            <Button size="sm" variant="outline" className="h-7 gap-1 border-violet-500/40 px-2.5 text-[10px] text-violet-300 hover:bg-violet-500/10" onClick={() => void run(p.action, p.btn)} disabled={busy !== null}>
-              {busy === p.action ? <Loader2 className="size-3 animate-spin" /> : <p.icon className="size-3" />}
-              اجرای دستی — {p.btn}
-            </Button>
+            {p.action ? (
+              <Button size="sm" variant="outline" className="h-7 gap-1 border-violet-500/40 px-2.5 text-[10px] text-violet-300 hover:bg-violet-500/10" onClick={() => void run(p.action as string, p.btn)} disabled={busy !== null}>
+                {busy === p.action ? <Loader2 className="size-3 animate-spin" /> : <p.icon className="size-3" />}
+                اجرای دستی — {p.btn}
+              </Button>
+            ) : null}
           </div>
         ))}
       </div>
 
-      {/* لاگ قیف */}
+      {/* لاگ */}
       <div className="rounded-xl border border-white/10 bg-white/[0.02]">
         <div className="flex items-center justify-between gap-2 border-b border-white/8 px-3 py-2.5">
           <p className="flex items-center gap-1.5 text-xs font-semibold">
-            <Megaphone className="size-3.5 text-violet-300" /> صندوق قیف کانال — آخرین پست‌های خودکار مدیر کانال
+            <Megaphone className="size-3.5 text-violet-300" /> صندوق مدیر کانال — آخرین پست‌های خودکار (نتایج/گیفت/بنر/برآیند)
           </p>
           {status?.sentCounts && (
             <p className="text-[9px] text-muted-foreground" dir="ltr">
@@ -207,7 +279,7 @@ export function ChannelDirectorTab() {
         </div>
         {!status?.recent || status.recent.length === 0 ? (
           <p className="p-4 text-center text-[10px] text-muted-foreground">
-            هنوز پستی از قیف ارسال نشده — به‌محض تنظیم توکن بات، پست‌ها طبق برنامه (۱۱:۰۰ / T-60 / FT+5m / ۲۳:۳۰) خودکار مخابره می‌شوند.
+            هنوز پستی از مدیر کانال ارسال نشده — به‌محض تنظیم توکن بات، پست‌ها طبق برنامه (۱۲:۰۰ / ساعتی / ۲۱:۰۰ / ۲۳:۳۰) خودکار مخابره می‌شوند.
           </p>
         ) : (
           <ScrollArea className="max-h-60">

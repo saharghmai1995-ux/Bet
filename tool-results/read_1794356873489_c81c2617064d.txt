@@ -1,0 +1,1258 @@
+     1→"use client";
+     2→
+     3→// ─────────────────────────────────────────────────────────────────────────────
+     4→// کارنامه و تسویه خودکار (Automated Post-Match Grader + VIP Telegram) — v7.0
+     5→//
+     6→//   ۱) دکمه «⚡ همگام‌سازی و تسویه خودکار نتایج پایان‌یافته با سرور ESPN» بالای جدول
+     7→//   ۲) جدول کارنامه: برد تیپ A / برد تیپ B / جکپات دو برد / تله میانی — با سود واقعی
+     8→//      فرمول سند ارتقا: stakeA×oddsA−۱۰۰ (برد A) · stakeB×oddsB−۱۰۰ (برد B)
+     9→//   ۳) کانال تلگرام VIP: انتشار کارت کامل / تیزر (تیپ B سانسور 🔒) + نتیجه خودکار
+    10→//      با تصویر جام پیروزی (برد) و رختکن بهم‌ریخته (باخت) — همه با هش SHA-256
+    11→// ─────────────────────────────────────────────────────────────────────────────
+    12→
+    13→import { useCallback, useEffect, useMemo, useState } from "react";
+    14→import {
+    15→  BadgeCheck,
+    16→  Bot,
+    17→  BookOpen,
+    18→  Calculator,
+    19→  Check,
+    20→  ClipboardList,
+    21→  Copy,
+    22→  Crown,
+    23→  ExternalLink,
+    24→  EyeOff,
+    25→  Film,
+    26→  Link2,
+    27→  Loader2,
+    28→  Lock,
+    29→  MonitorSmartphone,
+    30→  RefreshCw,
+    31→  Rocket,
+    32→  ScrollText,
+    33→  Send,
+    34→  SendHorizonal,
+    35→  ServerCog,
+    36→  Settings2,
+    37→  ShieldCheck,
+    38→  ShieldOff,
+    39→  Sparkles,
+    40→  Target,
+    41→  TriangleAlert,
+    42→  Trophy,
+    43→  Wallet,
+    44→} from "lucide-react";
+    45→import { Button } from "@/components/ui/button";
+    46→import { Input } from "@/components/ui/input";
+    47→import { Label } from "@/components/ui/label";
+    48→import { ScrollArea } from "@/components/ui/scroll-area";
+    49→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    50→import { Switch } from "@/components/ui/switch";
+    51→import { Badge } from "@/components/ui/badge";
+    52→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+    53→import { useQuantStore } from "@/lib/store";
+    54→import { useCartItems } from "@/lib/autopilot-derive";
+    55→import { principalLockSettledPnl } from "@/lib/engine/asymmetric";
+    56→import { MotionPosterPreview } from "@/components/app/motion-poster";
+    57→import { faNum } from "@/lib/format";
+    58→import { toast } from "sonner";
+    59→import { cn } from "@/lib/utils";
+    60→import type { CategoryPerformanceResponseDTO, IssueSlipItemDTO, IssuedSlipDTO, LedgerDTO } from "@/lib/types";
+    61→
+    62→// ═══════════ استیک داچینگ روی مجموع ۱۰۰ واحد (مبنای فرمول سند ارتقا) ═══════════
+    63→
+    64→function equalProfitStakes(oddsA: number, oddsB: number): { stakeA: number; stakeB: number } {
+    65→  const invA = 1 / Math.max(1.01, oddsA);
+    66→  const invB = 1 / Math.max(1.01, oddsB);
+    67→  const sum = invA + invB;
+    68→  const r1 = (v: number) => Math.round(v * 10) / 10;
+    69→  return { stakeA: r1((100 * invA) / sum), stakeB: r1((100 * invB) / sum) };
+    70→}
+    71→
+    72→const STATUS_META: Record<string, { label: string; icon: typeof Trophy; cls: string }> = {
+    73→  PENDING: { label: "در انتظار نتیجه", icon: ClipboardList, cls: "border-white/15 bg-white/5 text-zinc-300" },
+    74→  LIVE: { label: "در جریان (ESPN Live)", icon: RefreshCw, cls: "border-cyan-500/40 bg-cyan-500/10 text-cyan-300" },
+    75→  WON_A: { label: "🟢 برد تیپ A", icon: BadgeCheck, cls: "border-sky-500/40 bg-sky-500/10 text-sky-300" },
+    76→  WON_B: { label: "🟢 برد تیپ B", icon: BadgeCheck, cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" },
+    77→  DOUBLE_WIN: { label: "🏆 جکپات دو برد", icon: Trophy, cls: "border-amber-500/50 bg-amber-500/15 text-amber-300" },
+    78→  MIDDLE_TRAP: { label: "🔴 تله میانی", icon: EyeOff, cls: "border-rose-500/40 bg-rose-500/10 text-rose-300" },
+    79→  MANUAL_REVIEW: { label: "بازبینی دستی", icon: Settings2, cls: "border-violet-500/40 bg-violet-500/10 text-violet-300" },
+    80→  VOID: { label: "باطل (VOID)", icon: EyeOff, cls: "border-white/10 bg-white/[0.03] text-zinc-500" },
+    81→};
+    82→
+    83→export function SettlementTab() {
+    84→  const cartItems = useCartItems();
+    85→  const matches = useQuantStore((s) => s.matches);
+    86→  const config = useQuantStore((s) => s.config);
+    87→  const patchConfig = useQuantStore((s) => s.patchConfig);
+    88→
+    89→  const [ledger, setLedger] = useState<LedgerDTO | null>(null);
+    90→  const [loading, setLoading] = useState(true);
+    91→  const [publishing, setPublishing] = useState<string | null>(null);
+    92→  const [issuing, setIssuing] = useState(false);
+    93→  const [savingTg, setSavingTg] = useState(false);
+    94→  const [tgToken, setTgToken] = useState(config.telegramBotToken ?? "");
+    95→  // v8.0 — کانال پیش‌فرض رسمی @aineobet (در صورت خالی بودن تنظیمات کاربر)
+    96→  const [tgChannel, setTgChannel] = useState(config.telegramChannelId || "@aineobet");
+    97→  // v13.0 — کانال عمومی ویترین (قیف دوکاناله)
+    98→  const [tgPublic, setTgPublic] = useState(config.telegramPublicChannelId || "@aineobet");
+    99→  const [preview, setPreview] = useState<string | null>(null);
+   100→  // ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر + شبیه‌ساز فید کانال ═══
+   101→  const [autoDispatch, setAutoDispatch] = useState(true);
+   102→  const [dispatching, setDispatching] = useState(false);
+   103→  const [feed, setFeed] = useState<{ kind: string; matchLabel: string; message: string; status?: string }[]>([]);
+   104→  const [feedOpen, setFeedOpen] = useState(false);
+   105→  // ═══ v10.0 — ماشین‌حساب بانک‌رول شخصی (۱ واحد = ریسک هر کارت ÷ ۱۰۰) ═══
+   106→  const [bankrollUsd, setBankrollUsd] = useState(10);
+   107→  const [riskPct, setRiskPct] = useState(5);
+   108→  const [doctrineFilter, setDoctrineFilter] = useState<string>("ALL");
+   109→
+   110→  const loadFeed = useCallback(async () => {
+   111→    try {
+   112→      const res = await fetch("/api/telegram/autodispatch", { cache: "no-store" });
+   113→      const data = (await res.json()) as {
+   114→        success: boolean;
+   115→        queue?: { kind: string; matchLabel: string; message: string; status?: string }[];
+   116→        autoDispatch?: boolean;
+   117→        configured?: boolean;
+   118→      };
+   119→      if (data.success && Array.isArray(data.queue)) {
+   120→        setFeed(data.queue);
+   121→        if (typeof data.autoDispatch === "boolean") setAutoDispatch(data.autoDispatch);
+   122→      }
+   123→    } catch {
+   124→      // خطای شبکه — فید قبلی معتبر می‌ماند
+   125→    }
+   126→  }, []);
+   127→
+   128→  useEffect(() => {
+   129→    void loadFeed();
+   130→  }, [loadFeed]);
+   131→
+   132→  const toggleAutoDispatch = useCallback(
+   133→    async (on: boolean) => {
+   134→      setAutoDispatch(on);
+   135→      try {
+   136→        await fetch("/api/telegram/config", {
+   137→          method: "POST",
+   138→          headers: { "Content-Type": "application/json" },
+   139→          body: JSON.stringify({ autoDispatch: on }),
+   140→        });
+   141→        toast.success(on ? "🤖 ارسال خودکار کارت‌های تایید سوپروایزر روشن شد" : "ارسال خودکار خاموش شد — فقط ارسال دستی فعال است");
+   142→      } catch {
+   143→        toast.error("خطا در ذخیره سوییچ ارسال خودکار");
+   144→        setAutoDispatch(!on);
+   145→      }
+   146→    },
+   147→    []
+   148→  );
+   149→
+   150→  const loadLedger = useCallback(async () => {
+   151→    try {
+   152→      const res = await fetch("/api/settlement/ledger", { cache: "no-store" });
+   153→      const data = (await res.json()) as LedgerDTO;
+   154→      if (data.success) setLedger(data);
+   155→    } catch {
+   156→      // خطای شبکه — داده قبلی حفظ می‌شود
+   157→    } finally {
+   158→      setLoading(false);
+   159→    }
+   160→  }, []);
+   161→
+   162→  // ═══ v11.0 — عملکرد دسته‌های فلش‌کارت (وتوشده/سود۱۵/ریسک۱۰/دوبل‌وین) ═══
+   163→  const [categories, setCategories] = useState<CategoryPerformanceResponseDTO | null>(null);
+   164→  const loadCategories = useCallback(async () => {
+   165→    try {
+   166→      const res = await fetch("/api/settlement/categories", { cache: "no-store" });
+   167→      const data = (await res.json()) as CategoryPerformanceResponseDTO;
+   168→      if (data.success) setCategories(data);
+   169→    } catch {
+   170→      // خطای شبکه — داده قبلی حفظ می‌شود
+   171→    }
+   172→  }, []);
+   173→
+   174→  useEffect(() => {
+   175→    void loadCategories();
+   176→  }, [loadCategories]);
+   177→
+   178→  useEffect(() => {
+   179→    void loadLedger();
+   180→  }, [loadLedger]);
+   181→
+   182→  // v10.0 — تازه‌سازی خودکار کارنامه هر ۶۰ ثانیه (هماهنگ با زمان‌بند سرور)
+   183→  useEffect(() => {
+   184→    const t = setInterval(() => {
+   185→      void loadLedger();
+   186→      void loadCategories();
+   187→    }, 60_000);
+   188→    return () => clearInterval(t);
+   189→  }, [loadLedger, loadCategories]);
+   190→
+   191→  // ─── 🚀 ارسال فوری تمام کارت‌های تاییدشده سوپروایزر و گزارش نتایج تسویه‌شده (v9.0) ───
+   192→  const dispatchNow = useCallback(async () => {
+   193→    setDispatching(true);
+   194→    try {
+   195→      const res = await fetch("/api/telegram/autodispatch", { method: "POST" });
+   196→      const data = (await res.json()) as { success: boolean; sentCards?: number; sentResults?: number; winRateSent?: boolean; skippedVetoed?: number; detail?: string; error?: string };
+   197→      if (!data.success) {
+   198→        toast.error(data.error ?? "ارسال ناموفق بود");
+   199→        return;
+   200→      }
+   201→      if (data.detail === "TELEGRAM_NOT_CONFIGURED") {
+   202→        toast.warning("اتصال تلگرام تنظیم نشده — پیش‌نمایش زنده فید کانال را ببینید", {
+   203→          description: "با وارد کردن توکن، همه پیام‌های صف بلافاصله مخابره می‌شوند",
+   204→        });
+   205→        setFeedOpen(true);
+   206→        await loadFeed();
+   207→        return;
+   208→      }
+   209→      if (data.detail === "AUTO_DISPATCH_OFF") {
+   210→        toast.info("سوییچ ارسال خودکار خاموش است — آن را روشن کنید یا از دکمه‌های دستی استفاده کنید");
+   211→        return;
+   212→      }
+   213→      if (data.detail === "QUEUE_EMPTY") {
+   214→        toast.info("صف انتشار خالی است — همه کارت‌های تایید و نتایج قبلاً مخابره شده‌اند", {
+   215→          description: `بازی‌های وتوشده رد‌شده: ${faNum(data.skippedVetoed ?? 0, 0)}`,
+   216→        });
+   217→        return;
+   218→      }
+   219→      toast.success(`🚀 ${faNum(data.sentCards ?? 0, 0)} کارت تایید سوپروایزر + ${faNum(data.sentResults ?? 0, 0)} برگه نتیجه FT مخابره شد`, {
+   220→        description: data.winRateSent ? "📊 گزارش وین‌ریت کانال هم ارسال شد" : undefined,
+   221→      });
+   222→      await loadFeed();
+   223→      await loadLedger();
+   224→    } catch {
+   225→      toast.error("خطای شبکه در ارسال خودکار");
+   226→    } finally {
+   227→      setDispatching(false);
+   228→    }
+   229→  }, [loadFeed, loadLedger]);
+   230→
+   231→  // ─── ساخت بدنه صدور از آیتم‌های سبد (تطبیق میکس دو بازی با externalId ESPN) ───
+   232→  const buildIssueItem = useCallback(
+   233→    (it: (typeof cartItems)[number]): IssueSlipItemDTO => {
+   234→      const { pair, view } = it;
+   235→      const m = view.match;
+   236→      const extOf = (matchId: string) => matches.find((x) => x.id === matchId)?.externalId ?? m.externalId ?? null;
+   237→      const legsOf = (legs: string[] | undefined, base: string, varKey: string, varMatchId: string): { key: string; matchExternalId: string | null; matchLabel: string }[] => {
+   238→        if (legs && legs.length > 0) {
+   239→          return legs.map((k) => ({ key: k, matchExternalId: m.externalId ?? null, matchLabel: `${m.homeTeam} × ${m.awayTeam}` }));
+   240→        }
+   241→        const isPrimary = varMatchId === m.id;
+   242→        const legsOut: { key: string; matchExternalId: string | null; matchLabel: string }[] = [];
+   243→        if (base && base !== "ORTHO") legsOut.push({ key: base, matchExternalId: m.externalId ?? null, matchLabel: `${m.homeTeam} × ${m.awayTeam}` });
+   244→        legsOut.push({
+   245→          key: varKey,
+   246→          matchExternalId: isPrimary ? m.externalId ?? null : extOf(varMatchId),
+   247→          matchLabel: isPrimary ? `${m.homeTeam} × ${m.awayTeam}` : matches.find((x) => x.id === varMatchId) ? `${matches.find((x) => x.id === varMatchId)!.homeTeam} × ${matches.find((x) => x.id === varMatchId)!.awayTeam}` : "بازی دوم میکس",
+   248→        });
+   249→        return legsOut;
+   250→      };
+   251→      const stakes = equalProfitStakes(pair.totalOddsA, pair.totalOddsB);
+   252→      const espnId = m.externalId?.split("-").pop() ?? null;
+   253→      return {
+   254→        match: {
+   255→          id: m.id,
+   256→          externalId: m.externalId ?? null,
+   257→          league: m.league,
+   258→          homeTeam: m.homeTeam,
+   259→          awayTeam: m.awayTeam,
+   260→          kickoff: m.kickoff,
+   261→          espnUrl: espnId ? `https://www.espn.com/soccer/match/_/gameId/${espnId}` : null,
+   262→        },
+   263→        labelA: pair.labelA,
+   264→        labelB: pair.labelB,
+   265→        legsA: legsOf(pair.structure.legsA, pair.structure.baseKey, pair.structure.varAKey, pair.structure.varAMatchId),
+   266→        legsB: legsOf(pair.structure.legsB, pair.structure.baseKey, pair.structure.varBKey, pair.structure.varBMatchId),
+   267→        oddsA: pair.totalOddsA,
+   268→        oddsB: pair.totalOddsB,
+   269→        stakeA: stakes.stakeA,
+   270→        stakeB: stakes.stakeB,
+   271→        guaranteedProfit: pair.equalProfit.profit,
+   272→        marginPct: pair.guaranteedMarginPct,
+   273→        archetype: pair.archetype?.short ?? null,
+   274→        lambdaHome: view.lambdaHome,
+   275→        lambdaAway: view.lambdaAway,
+   276→      };
+   277→    },
+   278→    [matches]
+   279→  );
+   280→
+   281→  // ─── صدور همه کارت‌های سبد به کارنامه ───
+   282→  const issueAll = useCallback(async () => {
+   283→    if (cartItems.length === 0) {
+   284→      toast.warning("سبد تیپ‌ها خالی است — ابتدا از فلش‌کارت‌ها «افزودن به سبد» بزنید");
+   285→      return;
+   286→    }
+   287→    setIssuing(true);
+   288→    try {
+   289→      const res = await fetch("/api/settlement/issue", {
+   290→        method: "POST",
+   291→        headers: { "Content-Type": "application/json" },
+   292→        body: JSON.stringify({ items: cartItems.map(buildIssueItem) }),
+   293→      });
+   294→      const data = (await res.json()) as { success: boolean; issued?: number };
+   295→      if (data.success) {
+   296→        toast.success(`${faNum(data.issued ?? 0, 0)} کارت با هش SHA-256 به کارنامه صادر شد`, {
+   297→          description: "با FT شدن بازی در ESPN، تسویه تیپ A و B به‌صورت ۱۰۰٪ خودکار انجام می‌شود",
+   298→        });
+   299→        await loadLedger();
+   300→      } else {
+   301→        toast.error("صدور کارت ناموفق بود");
+   302→      }
+   303→    } catch {
+   304→      toast.error("خطای شبکه در صدور کارت");
+   305→    } finally {
+   306→      setIssuing(false);
+   307→    }
+   308→  }, [cartItems, buildIssueItem, loadLedger]);
+   309→
+   310→  // ─── انتشار تلگرام: کارت کامل / تیزر ───
+   311→  const publish = useCallback(
+   312→    async (it: (typeof cartItems)[number], mode: "CARD" | "TEASER") => {
+   313→      const key = `${it.key}::${mode}`;
+   314→      setPublishing(key);
+   315→      try {
+   316→        const res = await fetch("/api/telegram/publish", {
+   317→          method: "POST",
+   318→          headers: { "Content-Type": "application/json" },
+   319→          body: JSON.stringify({ item: buildIssueItem(it), mode }),
+   320→        });
+   321→        const data = (await res.json()) as { success: boolean; detail?: string; preview?: string; notConfigured?: boolean; error?: string };
+   322→        if (data.notConfigured) {
+   323→          toast.warning("اتصال تلگرام تنظیم نشده — توکن بات و کانال را در همین تب ذخیره کنید", {
+   324→            description: "پیش‌نمایش پیام تولید شد و پس از اتصال قابل انتشار است",
+   325→          });
+   326→          if (data.preview) setPreview(data.preview);
+   327→          await loadLedger();
+   328→          return;
+   329→        }
+   330→        if (data.success) {
+   331→          toast.success(mode === "CARD" ? "📤 کارت کامل به کانال VIP ارسال شد" : "🔒 تیزر VIP (با تیپ B سانسور) ارسال شد", {
+   332→            description: `تلگرام: ${data.detail ?? "ok"}`,
+   333→          });
+   334→          if (data.preview) setPreview(data.preview);
+   335→          await loadLedger();
+   336→        } else {
+   337→          toast.error(`ارسال تلگرام ناموفق: ${data.detail ?? data.error ?? "?"}`);
+   338→          await loadLedger();
+   339→        }
+   340→      } catch {
+   341→        toast.error("خطای شبکه در انتشار تلگرام");
+   342→      } finally {
+   343→        setPublishing(null);
+   344→      }
+   345→    },
+   346→    [buildIssueItem, loadLedger]
+   347→  );
+   348→
+   349→  // ─── ذخیره تنظیمات تلگرام + پیام آزمون ───
+   350→  const saveTelegram = useCallback(
+   351→    async (test: boolean) => {
+   352→      setSavingTg(true);
+   353→      try {
+   354→        const res = await fetch("/api/telegram/config", {
+   355→          method: "POST",
+   356→          headers: { "Content-Type": "application/json" },
+   357→          body: JSON.stringify({ botToken: tgToken, channelId: tgChannel, publicChannelId: tgPublic, test }),
+   358→        });
+   359→        const data = (await res.json()) as { success: boolean; test?: { ok: boolean; detail: string } | null };
+   360→        patchConfig({ telegramBotToken: tgToken, telegramChannelId: tgChannel, telegramPublicChannelId: tgPublic });
+   361→        if (test) {
+   362→          if (data.test?.ok) toast.success("✅ پیام آزمون به کانال VIP ارسال شد — اتصال برقرار است");
+   363→          else toast.error(`پیام آزمون ناموفق: ${data.test?.detail ?? "?"}`, { description: "توکن بات و شناسه کانال (مثل @channel یا -100...) را بررسی کنید" });
+   364→        } else {
+   365→          toast.success("تنظیمات تلگرام روی سرور ذخیره شد");
+   366→        }
+   367→        await loadLedger();
+   368→      } catch {
+   369→        toast.error("خطای شبکه در ذخیره تنظیمات");
+   370→      } finally {
+   371→        setSavingTg(false);
+   372→      }
+   373→    },
+   374→    [tgToken, tgChannel, tgPublic, patchConfig, loadLedger]
+   375→  );
+   376→
+   377→  const stats = ledger?.stats;
+   378→  const slipCount = ledger?.slips.length ?? 0;
+   379→  const automation = ledger?.automation;
+   380→  // استیک هر کارت = ریسک انتخابی کاربر؛ ۱ واحد = استیک کارت ÷ ۱۰۰ (استاندارد صد واحدی کارنامه)
+   381→  const perCardUsd = (bankrollUsd * riskPct) / 100;
+   382→  const unitValueUsd = perCardUsd / 100;
+   383→  const netUsd = (stats?.netProfit ?? 0) * unitValueUsd;
+   384→
+   385→  // ═══ v11.0-④ — سرمایه نجات‌یافته توسط وتوی سوپروایزر ═══
+   386→  // زیان کاغذی دفتر سایه که اگر وتو نمی‌شد پول واقعی بود
+   387→  const savedByVeto = Math.max(0, -(ledger?.shadow?.netProfit ?? 0));
+   388→
+   389→  // ═══ v11.0-② — شبیه‌سازی شتاب‌دهنده نامتقارن روی دسته «ریسک زیر ۱۰٪» ═══
+   390→  const boosterSim = useMemo(() => {
+   391→    const slips = ledger?.slips ?? [];
+   392→    const risk10 = slips.filter((s) => (s.jointLossRiskPct ?? 100) < 10);
+   393→    let equalNet = 0;
+   394→    let boosterNet = 0;
+   395→    let settled = 0;
+   396→    for (const s of risk10) {
+   397→      if (s.status === "WON_A" || s.status === "WON_B" || s.status === "DOUBLE_WIN" || s.status === "MIDDLE_TRAP") {
+   398→        settled += 1;
+   399→        equalNet += s.netProfit ?? 0;
+   400→        boosterNet += principalLockSettledPnl(s.oddsA, s.oddsB, s.status);
+   401→      }
+   402→    }
+   403→    return { settled, equalNet: Math.round(equalNet * 10) / 10, boosterNet: Math.round(boosterNet * 10) / 10 };
+   404→  }, [ledger]);
+   405→
+   406→  const journal = ledger?.journal ?? [];
+   407→  const doctrineAll = ledger?.doctrine ?? [];
+   408→  const doctrine = doctrineFilter === "ALL" ? doctrineAll : doctrineAll.filter((d) => d.kind === doctrineFilter);
+   409→  const doctrineCounts = useMemo(
+   410→    () => ({
+   411→      ALL: doctrineAll.length,
+   412→      LEAGUE_LAMBDA: doctrineAll.filter((d) => d.kind === "LEAGUE_LAMBDA").length,
+   413→      ARCHETYPE: doctrineAll.filter((d) => d.kind === "ARCHETYPE").length,
+   414→      TIMING_WINDOW: doctrineAll.filter((d) => d.kind === "TIMING_WINDOW").length,
+   415→    }),
+   416→    [doctrineAll]
+   417→  );
+   418→
+   419→  const tgStatusBadges = useMemo(
+   420→    () => (
+   421→      <div className="flex flex-wrap items-center gap-1.5">
+   422→        <Badge variant="outline" className={cn("gap-1 text-[9px]", ledger?.telegram.configured ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300")}>
+   423→          {ledger?.telegram.configured ? <Check className="size-2.5" /> : <Settings2 className="size-2.5" />}
+   424→          {ledger?.telegram.configured ? "بات متصل" : "بات تنظیم نشده"}
+   425→        </Badge>
+   426→        <Badge variant="outline" className={cn("gap-1 text-[9px]", ledger?.telegram.channelSet ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300")}>
+   427→          <Crown className="size-2.5" />
+   428→          {ledger?.telegram.channelSet ? "کانال VIP متصل" : "کانال تنظیم نشده"}
+   429→        </Badge>
+   430→      </div>
+   431→    ),
+   432→    [ledger]
+   433→  );
+   434→
+   435→  return (
+   436→    <section className="space-y-4" aria-label="کارنامه و تسویه خودکار">
+   437→      {/* ═══ هدر و آمار ═══ */}
+   438→      <div className="flex flex-wrap items-center justify-between gap-2">
+   439→        <h2 className="flex items-center gap-2 text-sm font-bold sm:text-base">
+   440→          <span aria-hidden>🧾</span>
+   441→          کارنامه تسویه خودکار + کانال تلگرام VIP
+   442→          {slipCount > 0 && (
+   443→            <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300" dir="ltr">
+   444→              {faNum(slipCount, 0)}
+   445→            </span>
+   446→          )}
+   447→        </h2>
+   448→        {tgStatusBadges}
+   449→      </div>
+   450→
+   451→      {/* آمار تجمیعی */}
+   452→      {stats && (
+   453→        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+   454→          <StatCard label="تسویه‌شده" value={stats.settled} tone="text-foreground" sub={`از ${faNum(stats.total, 0)} کارت`} />
+   455→          <StatCard label="🟢 برد تیپ A" value={stats.wonA} tone="text-sky-300" />
+   456→          <StatCard label="🟢 برد تیپ B" value={stats.wonB} tone="text-emerald-300" />
+   457→          <StatCard label="🏆 جکپات دو برد" value={stats.doubleWin} tone="text-amber-300" />
+   458→          <StatCard label="تله میانی (باخت همزمان)" value={stats.middleTrap} tone="text-rose-300" />
+   459→          <StatCard
+   460→            label="سود خالص مجموع"
+   461→            value={`${stats.netProfit >= 0 ? "+" : ""}${faNum(stats.netProfit, 1)}`}
+   462→            tone={stats.netProfit >= 0 ? "text-emerald-300" : "text-rose-300"}
+   463→            sub={`${faNum(stats.netProfitPct, 1)}٪ از استیک`}
+   464→          />
+   465→        </div>
+   466→      )}
+   467→
+   468→      {/* ═══ v11.0-④ — بج طلایی سرمایه نجات‌یافته توسط وتوی سوپروایزر ═══ */}
+   469→      {savedByVeto > 0 && (
+   470→        <div
+   471→          className="flex flex-wrap items-center justify-center gap-2 rounded-xl border border-amber-500/50 bg-gradient-to-l from-amber-500/[0.14] via-amber-500/[0.07] to-emerald-500/[0.08] px-4 py-2.5 text-center"
+   472→          role="status"
+   473→          aria-label="سرمایه نجات‌یافته توسط وتوی سوپروایزر"
+   474→        >
+   475→          <ShieldCheck className="size-4 shrink-0 text-amber-300" />
+   476→          <p className="text-xs font-bold text-amber-200">
+   477→            🛡️ سرمایه نجات‌یافته توسط وتوی سوپروایزر:
+   478→            <b className="font-num mx-1.5 rounded-md border border-amber-500/40 bg-black/40 px-2 py-0.5 text-sm text-amber-300" dir="ltr">
+   479→              +{faNum(savedByVeto, 1)} واحد
+   480→            </b>
+   481→            — این ضرر در دفتر سایه تسویه کاغذی شد و هرگز پول واقعی نشد
+   482→          </p>
+   483→        </div>
+   484→      )}
+   485→
+   486→      {/* ═══ v11.0 — عملکرد دسته‌های فلش‌کارت: پاسخ داده‌محور به چهار سوال کلیدی ═══ */}
+   487→      {categories && categories.categories.length > 0 && (
+   488→        <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+   489→          <div className="flex flex-wrap items-center justify-between gap-2">
+   490→            <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+   491→              <Sparkles className="size-3.5 text-amber-300" />
+   492→              عملکرد هر دسته فلش‌کارت — پاسخ «اگر شرط می‌بستیم چه می‌شد؟»
+   493→            </p>
+   494→            <Badge variant="outline" className="gap-1 border-violet-500/40 bg-violet-500/10 text-[9px] text-violet-300">
+   495→              <ShieldOff className="size-2.5" />
+   496→              دفتر سایه v11.0 — {faNum(categories.shadowLedger.shadowSlips, 0)} کارت وتوشده در حال ردیابی
+   497→            </Badge>
+   498→          </div>
+   499→          <p className="text-[10px] leading-5 text-muted-foreground">
+   500→            از v11.0 وتوهای سوپروایزر دور ریخته نمی‌شوند؛ مثل کارت واقعی با نتیجه ESPN تسویه کاغذی می‌شوند تا وین‌ریت کارنامه
+   501→            <b className="text-foreground/90"> بدون سوگیری بازماندگی </b>
+   502→            قابل ارزیابی باشد. کارت‌های سایه هرگز به تلگرام نمی‌روند و در سود واقعی کارنامه هم لحاظ نمی‌شوند.
+   503→          </p>
+   504→          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+   505→            {categories.categories.map((c) => {
+   506→              // v13.0-③ — افراز مجزا: الف/ب/ج/د — هر کارت فقط یک‌بار شمرده می‌شود
+   507→              const icon =
+   508→                c.key === "APPROVED" ? ShieldCheck : c.key === "VETOED" ? ShieldOff : c.key === "COMBO" ? Link2 : Target;
+   509→              const Icon = icon;
+   510→              return (
+   511→                <div
+   512→                  key={c.key}
+   513→                  className={cn(
+   514→                    "space-y-1.5 rounded-lg border p-3",
+   515→                    c.paper ? "border-rose-500/25 bg-rose-500/[0.05]" : "border-white/10 bg-black/20"
+   516→                  )}
+   517→                >
+   518→                  <div className="flex items-center gap-1.5">
+   519→                    <Icon className={cn("size-3.5 shrink-0", c.paper ? "text-rose-300" : "text-emerald-300")} aria-hidden />
+   520→                    {/* v13.0-⑦ — ترتیب صحیح فارسی-انگلیسی با dir صریح */}
+   521→                    <p className="min-w-0 truncate text-[10px] font-bold text-foreground/90" title={c.label}>
+   522→                      <span dir="rtl">{c.label}</span>
+   523→                    </p>
+   524→                    {c.paper && (
+   525→                      <span className="ms-auto shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1 py-px text-[8px] font-bold text-rose-300">
+   526→                        کاغذی
+   527→                      </span>
+   528→                    )}
+   529→                  </div>
+   530→                  <div className="flex items-baseline gap-1">
+   531→                    <span className={cn("text-lg font-black tabular-nums", c.winRate === null ? "text-zinc-500" : c.winRate >= 50 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+   532→                      {c.winRate === null ? "—" : `${faNum(c.winRate, 1)}٪`}
+   533→                    </span>
+   534→                    <span className="text-[9px] text-muted-foreground">وین‌ریت</span>
+   535→                  </div>
+   536→                  <div className="space-y-0.5 text-[9px] leading-4 text-muted-foreground" dir="rtl">
+   537→                    <p>
+   538→                      {faNum(c.settled, 0)} تسویه‌شده از {faNum(c.total, 0)} کارت
+   539→                      {c.pending > 0 ? ` · ${faNum(c.pending, 0)} در انتظار` : ""}
+   540→                    </p>
+   541→                    <p className={cn("font-num", c.netProfit >= 0 ? "text-emerald-300/90" : "text-rose-300/90")} dir="ltr">
+   542→                      {c.netProfit >= 0 ? "+" : ""}{faNum(c.netProfit, 1)} unit
+   543→                    </p>
+   544→                    {c.key === "DOUBLE" && (
+   545→                      <p className="text-amber-300/90">🏆 برد طلایی واقعی: {faNum(c.doubleWinHits, 0)}</p>
+   546→                    )}
+   547→                    {c.avgJointLossRiskPct !== null && (
+   548→                      <p dir="ltr">avg risk {faNum(c.avgJointLossRiskPct, 1)}%</p>
+   549→                    )}
+   550→                  </div>
+   551→                </div>
+   552→              );
+   553→            })}
+   554→          </div>
+   555→
+   556→          {/* ═══ v11.0-② — اثر شتاب‌دهنده نامتقارن روی دسته ریسک زیر ۱۰٪ ═══ */}
+   557→          {boosterSim.settled > 0 && boosterSim.boosterNet > boosterSim.equalNet && (
+   558→            <div className="flex flex-wrap items-center justify-center gap-2 rounded-lg border border-amber-500/35 bg-amber-500/[0.06] px-3 py-2 text-[11px]" role="note">
+   559→              <Rocket className="size-3.5 shrink-0 text-amber-300" />
+   560→              <p className="text-amber-200/90">
+   561→                🚀 «اثر شتاب‌دهنده نامتقارن (پرتاب سود روی تیپ A + بیمه تیپ B)» روی {faNum(boosterSim.settled, 0)} کارت دسته ریسک زیر ۱۰٪: سود خالص از{" "}
+   562→                <b className="font-num text-emerald-300" dir="ltr">+{faNum(boosterSim.equalNet, 1)}</b> به{" "}
+   563→                <b className="font-num text-amber-300" dir="ltr">+{faNum(boosterSim.boosterNet, 1)} واحد</b> ارتقا می‌یافت — شبیه‌سازی کاغذی v11.0-②
+   564→              </p>
+   565→            </div>
+   566→          )}
+   567→        </div>
+   568→      )}
+   569→
+   570→      {/* ═══ v10.0 — 🧮 ماشین‌حساب بانک‌رول شخصی: «۲۹۵ واحد یعنی چی؟» ═══ */}
+   571→      {stats && (
+   572→        <div className="grid gap-3 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-4 lg:grid-cols-[1fr_320px]">
+   573→          <div className="space-y-2">
+   574→            <p className="flex items-center gap-1.5 text-xs font-semibold text-violet-300">
+   575→              <Calculator className="size-3.5" /> سود خالص تجمعی بر چه اساسی محاسبه می‌شود؟ — استاندارد «واحد»
+   576→            </p>
+   577→            <p className="text-[10px] leading-5 text-muted-foreground">
+   578→              هر کارت با <b className="text-foreground/90">مجموع استیک ۱۰۰ واحد</b> (داچینگ تیپ A + تیپ B) ثبت می‌شود و سود/زیان هر کارت با
+   579→              فرمول <b className="font-num" dir="ltr">stake×odds−۱۰۰</b> به «واحد» ثبت می‌گردد. یعنی
+   580→              <b className="text-foreground/90"> {faNum(stats.netProfit, 1)} واحد </b>
+   581→              یعنی: اگر برای هر کارت ۱۰۰ واحد می‌دانستی، اکنون {stats.netProfit >= 0 ? "+" : ""}
+   582→              {faNum(stats.netProfit, 1)} واحد (≈ {faNum(stats.netProfit / 100, 2)} برابرِ استیک یک کارت) در خالص‌سازی داشته باشی —
+   583→              بازده <b className="font-num">{faNum(stats.netProfitPct, 1)}٪</b> روی کل استیک‌های تسویه‌شده (
+   584→              {faNum(stats.staked, 0)} واحد). مقیاس واقعی پول کاملاً به تو بستگی دارد و با فرمول روبه‌رو خطی تبدیل می‌شود.
+   585→            </p>
+   586→            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-black/25 p-2.5">
+   587→              <div className="space-y-0.5">
+   588→                <Label htmlFor="bankroll-usd" className="text-[9px] text-muted-foreground">موجودی حساب شخصی شما ($)</Label>
+   589→                <Input
+   590→                  id="bankroll-usd"
+   591→                  type="number"
+   592→                  min={1}
+   593→                  step="any"
+   594→                  dir="ltr"
+   595→                  value={bankrollUsd}
+   596→                  onChange={(e) => setBankrollUsd(Math.max(1, Number(e.target.value) || 0))}
+   597→                  className="h-8 w-28 border-white/10 bg-black/30 text-xs"
+   598→                />
+   599→              </div>
+   600→              <div className="space-y-0.5">
+   601→                <Label className="text-[9px] text-muted-foreground">ریسک هر کارت (درصد موجودی)</Label>
+   602→                <Select value={String(riskPct)} onValueChange={(v) => setRiskPct(Number(v))}>
+   603→                  <SelectTrigger className="h-8 w-24 border-white/10 bg-black/30 text-xs" aria-label="درصد ریسک هر کارت">
+   604→                    <SelectValue />
+   605→                  </SelectTrigger>
+   606→                  <SelectContent className="border-white/10 bg-popover">
+   607→                    {[1, 2, 5, 10].map((p) => (
+   608→                      <SelectItem key={p} value={String(p)} className="text-xs">
+   609→                        {faNum(p, 0)}٪ <span className="text-[9px] text-muted-foreground">({p === 10 ? "تهاجمی" : p === 5 ? "متعادل" : "محافظه‌کار"})</span>
+   610→                      </SelectItem>
+   611→                    ))}
+   612→                  </SelectContent>
+   613→                </Select>
+   614→              </div>
+   615→              <div className="mr-auto grid grid-cols-3 gap-2 text-center">
+   616→                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+   617→                  <p className="text-[8px] text-muted-foreground">استیک هر کارت</p>
+   618→                  <p className="font-num text-xs font-bold text-foreground" dir="ltr">${perCardUsd.toFixed(2)}</p>
+   619→                </div>
+   620→                <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+   621→                  <p className="text-[8px] text-muted-foreground">ارزش ۱ واحد</p>
+   622→                  <p className="font-num text-xs font-bold text-cyan-300" dir="ltr">${unitValueUsd.toFixed(3)}</p>
+   623→                </div>
+   624→                <div className={cn("rounded-lg border px-2.5 py-1.5", netUsd >= 0 ? "border-emerald-500/30 bg-emerald-500/[0.06]" : "border-rose-500/30 bg-rose-500/[0.06]")}>
+   625→                  <p className="text-[8px] text-muted-foreground">معادل سود شما</p>
+   626→                  <p className={cn("font-num text-xs font-bold", netUsd >= 0 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+   627→                    {netUsd >= 0 ? "+" : "−"}${Math.abs(netUsd).toFixed(2)}
+   628→                  </p>
+   629→                </div>
+   630→              </div>
+   631→            </div>
+   632→            <p className="text-[9px] leading-4 text-muted-foreground">
+   633→              مثال با موجودی <b className="font-num">${faNum(bankrollUsd, 0)}</b> و ریسک {faNum(riskPct, 0)}٪: هر کارت ={" "}
+   634→              <b className="font-num" dir="ltr">${perCardUsd.toFixed(2)}</b>، هر واحد ={" "}
+   635→              <b className="font-num" dir="ltr">${unitValueUsd.toFixed(3)}</b> ← سود {faNum(stats.netProfit, 1)} واحد ={" "}
+   636→              <b className="font-num" dir="ltr">{netUsd >= 0 ? "+" : "−"}${Math.abs(netUsd).toFixed(2)}</b>. موجودی بالاتر؟ همین اعداد خطی مقیاس می‌شوند — نسبت بازده یکسان می‌ماند.
+   637→            </p>
+   638→          </div>
+   639→          <div className="flex flex-col justify-center gap-1.5 rounded-lg border border-white/10 bg-black/25 p-3">
+   640→            <p className="text-[10px] font-semibold text-violet-300">📊 ترکیب نتایج تسویه‌شده</p>
+   641→            <ul className="space-y-1 text-[10px] text-muted-foreground">
+   642→              <li className="flex justify-between"><span>🟢 برد تیپ A</span><b className="font-num text-sky-300">{faNum(stats.wonA, 0)}</b></li>
+   643→              <li className="flex justify-between"><span>🟢 برد تیپ B</span><b className="font-num text-emerald-300">{faNum(stats.wonB, 0)}</b></li>
+   644→              <li className="flex justify-between"><span>🏆 برد طلایی همزمان (Double-Win)</span><b className="font-num text-amber-300">{faNum(stats.doubleWin, 0)}</b></li>
+   645→              <li className="flex justify-between"><span>🔴 تله میانی (ثبت شفاف)</span><b className="font-num text-rose-300">{faNum(stats.middleTrap, 0)}</b></li>
+   646→              <li className="mt-1 flex justify-between border-t border-white/8 pt-1"><span>وین‌ریت کل کانال</span><b className="font-num text-foreground">{faNum(stats.settled > 0 ? ((stats.settled - stats.middleTrap) / stats.settled) * 100 : 0, 1)}٪</b></li>
+   647→            </ul>
+   648→          </div>
+   649→        </div>
+   650→      )}
+   651→
+   652→      {/* ═══ 🤖 اتوماسیون سرور — تسویه ۱۰۰٪ خودکار بدون هیچ دکمه دستی (دستور مستقیم کارفرما) ═══ */}
+   653→      <div
+   654→        className={cn(
+   655→          "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border p-3",
+   656→          automation?.schedulerActive ? "border-emerald-500/25 bg-emerald-500/[0.06]" : "border-amber-500/25 bg-amber-500/[0.06]"
+   657→        )}
+   658→        role="status"
+   659→        aria-label="وضعیت اتوماسیون سرور"
+   660→      >
+   661→        <div className="flex items-center gap-2">
+   662→          <span className="relative flex size-2.5">
+   663→            {automation?.schedulerActive ? (
+   664→              <>
+   665→                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+   666→                <span className="relative inline-flex size-2.5 rounded-full bg-emerald-400" />
+   667→              </>
+   668→            ) : (
+   669→              <span className="relative inline-flex size-2.5 rounded-full bg-amber-400" />
+   670→            )}
+   671→          </span>
+   672→          <ServerCog className={cn("size-4", automation?.schedulerActive ? "text-emerald-400" : "text-amber-400")} />
+   673→          <b className={cn("text-xs", automation?.schedulerActive ? "text-emerald-300" : "text-amber-300")}>
+   674→            {automation?.schedulerActive ? "تسویه خودکار سرور فعال" : "اتوماسیون سرور در حال راه‌اندازی"}
+   675→          </b>
+   676→        </div>
+   677→        <p className="text-[10px] leading-4 text-muted-foreground">
+   678→          حلقه سرور هر <b className="font-num">{faNum(automation?.intervalSec ?? 90, 0)}</b> ثانیه بدون نیاز به مرورگر اجرا می‌شود:
+   679→          اسکن ESPN (۳ روز گذشته + امروز و ۲ روز آینده) ← صدور کارت تایید سوپروایزر ← تسویه FT با
+   680→          <b className="font-num" dir="ltr"> stake×odds−۱۰۰ </b>← ثبت ژورنال/دکترین ← انتشار خودکار تلگرام (کارت، نتیجه، گزارش وین‌ریت).
+   681→          {automation?.lastTickAt && (
+   682→            <>
+   683→              {" "}آخرین ضرب‌آهنگ:{" "}
+   684→              <b className="font-num" dir="ltr">
+   685→                {new Date(automation.lastTickAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+   686→              </b>
+   687→            </>
+   688→          )}
+   689→          {automation?.lastDailyReportAt && (
+   690→            <>
+   691→              {" "}· گزارش روزانه:{" "}
+   692→              <b className="font-num" dir="ltr">
+   693→                {new Date(automation.lastDailyReportAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}
+   694→              </b>
+   695→            </>
+   696→          )}
+   697→        </p>
+   698→      </div>
+   699→
+   700→      {/* ═══ کانال تلگرام VIP ═══ */}
+   701→      <div className="space-y-3 rounded-xl border border-cyan-500/25 bg-cyan-500/[0.05] p-4">
+   702→        <div className="flex flex-wrap items-center justify-between gap-2">
+   703→          <p className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+   704→            <Send className="size-3.5" /> کانال تلگرام VIP — انتشار کارت، تیزر جذب مشترک و اعلام نتیجه
+   705→          </p>
+   706→          {tgStatusBadges}
+   707→        </div>
+   708→
+   709→        <div className="grid gap-2 sm:grid-cols-2">
+   710→          <div className="space-y-1.5">
+   711→            <Label htmlFor="tg-token" className="text-[10px] text-muted-foreground">
+   712→              توکن بات تلگرام (از BotFather)
+   713→            </Label>
+   714→            <Input
+   715→              id="tg-token"
+   716→              dir="ltr"
+   717→              placeholder="123456:ABC-DEF..."
+   718→              value={tgToken}
+   719→              onChange={(e) => setTgToken(e.target.value)}
+   720→              className="h-9 border-white/10 bg-black/30 text-xs"
+   721→              autoComplete="off"
+   722→            />
+   723→          </div>
+   724→          <div className="space-y-1.5">
+   725→            <Label htmlFor="tg-channel" className="text-[10px] text-muted-foreground">
+   726→              {/* v13.0-⑫ — لیبل کامل و بدون بریدگی */}
+   727→              شناسه کانال VIP (مثال: @aineobet_vip یا -1001234567890)
+   728→            </Label>
+   729→            <Input
+   730→              id="tg-channel"
+   731→              dir="ltr"
+   732→              placeholder="@aineobet_vip"
+   733→              value={tgChannel}
+   734→              onChange={(e) => setTgChannel(e.target.value)}
+   735→              className="h-9 border-white/10 bg-black/30 text-xs"
+   736→              autoComplete="off"
+   737→            />
+   738→          </div>
+   739→          <div className="space-y-1.5 sm:col-span-2">
+   740→            <Label htmlFor="tg-public" className="text-[10px] text-muted-foreground">
+   741→              شناسه کانال عمومی ویترین (Public Showcase Chat ID) — قیف v13.0: رادار صبح + گیفت/تیزر T-60 + اثبات FT + برآیند شبانه
+   742→            </Label>
+   743→            <Input
+   744→              id="tg-public"
+   745→              dir="ltr"
+   746→              placeholder="@aineobet"
+   747→              value={tgPublic}
+   748→              onChange={(e) => setTgPublic(e.target.value)}
+   749→              className="h-9 border-white/10 bg-black/30 text-xs"
+   750→              autoComplete="off"
+   751→            />
+   752→          </div>
+   753→        </div>
+   754→        <div className="flex flex-wrap gap-2">
+   755→          <Button size="sm" variant="outline" className="h-8 gap-1 border-cyan-500/40 text-[11px] text-cyan-300 hover:bg-cyan-500/10" onClick={() => void saveTelegram(false)} disabled={savingTg}>
+   756→            {savingTg ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />} ذخیره اتصال
+   757→          </Button>
+   758→          <Button
+   759→            size="sm"
+   760→            variant="outline"
+   761→            // v13.0-⑬ — متن دکمه هرگز با «...» بریده نمی‌شود
+   762→            className="h-8 gap-1 whitespace-nowrap border-white/15 px-4 py-2.5 text-[11px] text-foreground/80"
+   763→            onClick={() => void saveTelegram(true)}
+   764→            disabled={savingTg}
+   765→          >
+   766→            <SendHorizonal className="size-3" /> ارسال پیام آزمون
+   767→          </Button>
+   768→        </div>
+   769→
+   770→        {/* ═══ v13.0-① — موتور خودساز گرافیک استادیوم: صفر آپلود + پیش‌نمایش موشن ۶۰fps ═══ */}
+   771→        <MotionPosterPreview />
+   772→        {/* ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر ═══ */}
+   773→        <div className="space-y-2 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-3">
+   774→          <div className="flex flex-wrap items-center justify-between gap-2">
+   775→            <div className="flex items-center gap-2">
+   776→              <Bot className="size-4 text-emerald-400" />
+   777→              <p className="text-[11px] font-semibold text-emerald-300">
+   778→                🤖 ارسال خودکار کارت‌های تاییدشده سوپروایزر و نتایج FT به تلگرام
+   779→              </p>
+   780→            </div>
+   781→            <div className="flex items-center gap-2">
+   782→              <span className="text-[10px] text-muted-foreground">{autoDispatch ? "روشن (پیش‌فرض)" : "خاموش"}</span>
+   783→              <Switch checked={autoDispatch} onCheckedChange={(v) => void toggleAutoDispatch(v)} aria-label="سوییچ ارسال خودکار تلگرام" />
+   784→            </div>
+   785→          </div>
+   786→          <p className="text-[10px] leading-4 text-muted-foreground">
+   787→            بازی‌های وتوشده سوپروایزر <b className="text-rose-300">مطلقاً</b> ارسال نمی‌شوند — فقط کارت‌های دارای مهر 👑 «تاییدشده سوپروایزر (Monte-Carlo Winner)».
+   788→            پست پیش از بازی (کارت کامل + λ بازار + هش SHA-256) و پست تسویه پس از FT (نتیجه ESPN + سود خالص + به‌روزرسانی وین‌ریت کل کانال) خودکار مخابره می‌شوند
+   789→            (Dedupe سمت سرور — صفر پیام تکراری).
+   790→          </p>
+   791→          <div className="flex flex-wrap gap-2">
+   792→            <Button
+   793→              size="sm"
+   794→              className="h-8 gap-1 bg-emerald-600 text-[11px] hover:bg-emerald-500"
+   795→              onClick={() => void dispatchNow()}
+   796→              disabled={dispatching}
+   797→            >
+   798→              {dispatching ? <Loader2 className="size-3 animate-spin" /> : <Rocket className="size-3" />}
+   799→              🚀 ارسال فوری تمام کارت‌های تاییدشده سوپروایزر و گزارش نتایج تسویه‌شده
+   800→            </Button>
+   801→            <Button size="sm" variant="outline" className="h-8 gap-1 border-white/15 text-[11px] text-foreground/80" onClick={() => { setFeedOpen((v) => !v); void loadFeed(); }}>
+   802→              <MonitorSmartphone className="size-3" />
+   803→              {feedOpen ? "بستن شبیه‌ساز فید کانال" : "پیش‌نمایش زنده فید کانال (شبیه‌ساز)"}
+   804→            </Button>
+   805→          </div>
+   806→
+   807→          {/* ─── شبیه‌ساز زنده فید کانال (Live Telegram Channel Simulator Feed) ─── */}
+   808→          {feedOpen && (
+   809→            <div className="space-y-2 rounded-xl border border-white/10 bg-black/30 p-3">
+   810→              <p className="flex items-center gap-1.5 text-[11px] font-semibold text-cyan-300">
+   811→                <MonitorSmartphone className="size-3.5" />
+   812→                پیش‌نمایش زنده فید کانال VIP — صف فعلی ({faNum(feed.length, 0)} پیام آماده مخابره)
+   813→                {!ledger?.telegram.configured && (
+   814→                  <Badge variant="outline" className="border-amber-500/40 text-[9px] text-amber-300">بات تنظیم نشده — با ذخیره توکن، همین پیام‌ها مخابره می‌شوند</Badge>
+   815→                )}
+   816→              </p>
+   817→              {feed.length === 0 ? (
+   818→                <p className="rounded-lg border border-dashed border-white/10 p-3 text-center text-[10px] text-muted-foreground">
+   819→                  صف خالی است — کارت‌های تایید سوپروایزر پس از صدور خودکار و نتایج پس از FT اینجا ظاهر می‌شوند.
+   820→                </p>
+   821→              ) : (
+   822→                <ScrollArea className="max-h-72">
+   823→                  <div className="space-y-2 pr-1">
+   824→                    {feed.map((msg, i) => (
+   825→                      <div key={`${msg.kind}-${i}`} className="rounded-lg border border-white/10 bg-[rgba(8,12,22,0.9)] p-2.5">
+   826→                        <div className="mb-1 flex items-center justify-between gap-2">
+   827→                          <Badge
+   828→                            variant="outline"
+   829→                            className={`text-[9px] ${msg.kind === "CARD" ? "border-cyan-500/40 text-cyan-300" : msg.kind === "RESULT" ? "border-emerald-500/40 text-emerald-300" : "border-amber-500/40 text-amber-300"}`}
+   830→                          >
+   831→                            {msg.kind === "CARD" ? "📤 پست پیش از بازی (کارت تایید سوپروایزر)" : msg.kind === "RESULT" ? "🏁 پست تسویه پس از FT" : "📊 گزارش وین‌ریت کانال"}
+   832→                          </Badge>
+   833→                          <span className="truncate text-[10px] text-muted-foreground">{msg.matchLabel}</span>
+   834→                        </div>
+   835→                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap text-[10px] leading-4 text-foreground/80" dir="rtl" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+   836→                          {msg.message}
+   837→                        </pre>
+   838→                      </div>
+   839→                    ))}
+   840→                  </div>
+   841→                </ScrollArea>
+   842→              )}
+   843→            </div>
+   844→          )}
+   845→        </div>
+   846→
+   847→        {/* سبد → انتشار / صدور */}
+   848→        <div className="space-y-2">
+   849→          <div className="flex flex-wrap items-center justify-between gap-2">
+   850→            <p className="text-[11px] font-medium text-foreground/80">
+   851→              سبد تیپ‌های آماده انتشار ({faNum(cartItems.length, 0)} زوج‌تیپ)
+   852→            </p>
+   853→            <Button size="sm" variant="outline" className="h-7 gap-1 border-white/15 px-2 text-[10px]" onClick={() => void issueAll()} disabled={issuing}>
+   854→              {issuing ? <Loader2 className="size-3 animate-spin" /> : <ClipboardList className="size-3" />}
+   855→              صدور همه به کارنامه (SHA-256)
+   856→            </Button>
+   857→          </div>
+   858→          {cartItems.length === 0 ? (
+   859→            <p className="rounded-lg border border-dashed border-white/10 p-3 text-center text-[10px] text-muted-foreground">
+   860→              سبد خالی است — از فلش‌کارت‌ها زوج‌تیپ را «افزودن به سبد» کنید تا دکمه‌های انتشار کارت و تیزر فعال شوند.
+   861→            </p>
+   862→          ) : (
+   863→            <ScrollArea className="max-h-64">
+   864→              <div className="space-y-2 pr-1">
+   865→                {cartItems.map((it) => {
+   866→                  const stake = equalProfitStakes(it.pair.totalOddsA, it.pair.totalOddsB);
+   867→                  return (
+   868→                    <div key={it.key} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+   869→                      <p className="truncate text-[11px] font-bold">
+   870→                        {it.view.match.homeTeam} <span className="text-muted-foreground">×</span> {it.view.match.awayTeam}
+   871→                        <span className="mr-1 text-[9px] font-normal text-muted-foreground">({it.view.match.league})</span>
+   872→                      </p>
+   873→                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+   874→                        داچینگ ۱۰۰ واحدی: A <b className="font-num" dir="ltr">{faNum(stake.stakeA, 1)}</b> · B <b className="font-num" dir="ltr">{faNum(stake.stakeB, 1)}</b>
+   875→                        {" · "}سود تضمینی <b className="font-num text-emerald-300" dir="ltr">+{faNum(it.pair.guaranteedMarginPct, 1)}%</b>
+   876→                      </p>
+   877→                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+   878→                        <Button size="sm" className="h-7 gap-1 bg-cyan-600 text-[10px] hover:bg-cyan-500" onClick={() => void publish(it, "CARD")} disabled={publishing !== null}>
+   879→                          {publishing === `${it.key}::CARD` ? <Loader2 className="size-3 animate-spin" /> : <Send className="size-3" />}
+   880→                          📤 انتشار کارت کامل
+   881→                        </Button>
+   882→                        <Button size="sm" variant="outline" className="h-7 gap-1 border-amber-500/40 text-[10px] text-amber-300 hover:bg-amber-500/10" onClick={() => void publish(it, "TEASER")} disabled={publishing !== null}>
+   883→                          {publishing === `${it.key}::TEASER` ? <Loader2 className="size-3 animate-spin" /> : <Lock className="size-3" />}
+   884→                          🔒 انتشار تیزر (تیپ B سانسور)
+   885→                        </Button>
+   886→                      </div>
+   887→                    </div>
+   888→                  );
+   889→                })}
+   890→              </div>
+   891→            </ScrollArea>
+   892→          )}
+   893→
+   894→          {/* پیش‌نمایش آخرین پیام */}
+   895→          {preview && (
+   896→            <details className="rounded-lg border border-white/10 bg-black/20 p-2.5" open>
+   897→              <summary className="cursor-pointer text-[10px] font-semibold text-cyan-300">پیش‌نمایش پیام تلگرام (HTML)</summary>
+   898→              <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap text-[10px] leading-4 text-foreground/80" dir="rtl" style={{ fontFamily: "Vazirmatn, Tahoma, sans-serif" }}>
+   899→                {preview}
+   900→              </pre>
+   901→              <Button size="sm" variant="ghost" className="mt-1 h-6 gap-1 px-2 text-[10px] text-muted-foreground" onClick={() => void navigator.clipboard?.writeText(preview)}>
+   902→                <Copy className="size-3" /> کپی متن
+   903→              </Button>
+   904→            </details>
+   905→          )}
+   906→
+   907→          {/* صندوق ارسال‌ها */}
+   908→          {ledger && ledger.outbox.length > 0 && (
+   909→            <div className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+   910→              <p className="mb-1 text-[10px] font-semibold text-muted-foreground">صندوق پیام‌های کانال (۲۵ مورد اخیر)</p>
+   911→              <ul className="space-y-1">
+   912→                {ledger.outbox.slice(0, 8).map((o) => (
+   913→                  <li key={o.id} className="flex items-center gap-1.5 text-[10px]">
+   914→                    {o.ok ? <Check className="size-3 shrink-0 text-emerald-400" /> : <EyeOff className="size-3 shrink-0 text-rose-400" />}
+   915→                    <span className="text-muted-foreground">{o.kind}</span>
+   916→                    <span className="truncate text-muted-foreground/70">{o.detail}</span>
+   917→                    <span className="ms-auto shrink-0 text-muted-foreground/60" dir="ltr">{new Date(o.createdAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}</span>
+   918→                  </li>
+   919→                ))}
+   920→              </ul>
+   921→            </div>
+   922→          )}
+   923→        </div>
+   924→      </div>
+   925→
+   926→      {/* ═══ جدول کارنامه ═══ */}
+   927→      <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+   928→        <div className="flex items-center justify-between gap-2 px-3 py-2.5">
+   929→          <p className="flex items-center gap-1.5 text-xs font-semibold">
+   930→            <Sparkles className="size-3.5 text-amber-400" /> جدول کارنامه — تسویه ۱۰۰٪ خودکار با نتیجه رسمی ESPN
+   931→          </p>
+   932→          <p className="text-[10px] text-muted-foreground">
+   933→            فرمول سند ارتقا: <b className="font-num" dir="ltr">stakeA×oddsA−۱۰۰</b> / <b className="font-num" dir="ltr">stakeB×oddsB−۱۰۰</b>
+   934→          </p>
+   935→        </div>
+   936→        {loading ? (
+   937→          <div className="flex min-h-[120px] items-center justify-center gap-2 text-xs text-muted-foreground">
+   938→            <Loader2 className="size-4 animate-spin" /> در حال بارگذاری کارنامه…
+   939→          </div>
+   940→        ) : !ledger || ledger.slips.length === 0 ? (
+   941→          <div className="flex min-h-[120px] flex-col items-center justify-center gap-2 p-6 text-center">
+   942→            <ClipboardList className="size-6 text-muted-foreground" />
+   943→            <p className="text-xs text-muted-foreground">
+   944→              کارنامه خالی است — زوج‌تیپ‌های سبد را «صدور همه به کارنامه» کنید؛ پس از FT شدن بازی در ESPN، تسویه خودکار انجام و همین‌جا ثبت می‌شود.
+   945→            </p>
+   946→          </div>
+   947→        ) : (
+   948→          <ScrollArea className="max-h-[480px]">
+   949→            <Table>
+   950→              <TableHeader className="sticky top-0 z-10 bg-[rgba(9,13,24,0.95)] backdrop-blur">
+   951→                <TableRow className="border-white/8">
+   952→                  <TableHead className="text-right text-[10px]">بازی (نتیجه FT واقعی)</TableHead>
+   953→                  <TableHead className="text-right text-[10px]">وضعیت تسویه</TableHead>
+   954→                  <TableHead className="text-right text-[10px]">تیپ A</TableHead>
+   955→                  <TableHead className="text-right text-[10px]">تیپ B</TableHead>
+   956→                  <TableHead className="text-left text-[10px]">سود خالص</TableHead>
+   957→                  <TableHead className="text-right text-[10px]">هش SHA-256 + راستی‌آزمایی</TableHead>
+   958→                  <TableHead className="text-center text-[10px]">تلگرام</TableHead>
+   959→                </TableRow>
+   960→              </TableHeader>
+   961→              <TableBody>
+   962→                {ledger.slips.map((s) => (
+   963→                  <SlipRow key={s.id} slip={s} />
+   964→                ))}
+   965→              </TableBody>
+   966→            </Table>
+   967→          </ScrollArea>
+   968→        )}
+   969→      </div>
+   970→
+   971→      {/* ═══ v10.0 — 🧠 حلقه یادگیری: ژورنال تسویه + دفتر دکترین (پاسخ مستقیم: «آیا سیستم آموزش‌پذیر است؟») ═══ */}
+   972→      <div className="grid gap-3 lg:grid-cols-2">
+   973→        {/* ─── ژورنال تسویه: درس ساختاریافته هر نتیجه ─── */}
+   974→        <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+   975→          <div className="flex items-center justify-between gap-2 border-b border-white/8 px-3 py-2.5">
+   976→            <p className="flex items-center gap-1.5 text-xs font-semibold">
+   977→              <BookOpen className="size-3.5 text-cyan-400" /> ژورنال تسویه — درس ثبت‌شده هر نتیجه
+   978→            </p>
+   979→            <Badge variant="outline" className="border-cyan-500/30 text-[9px] text-cyan-300">{faNum(journal.length, 0)} ردیف</Badge>
+   980→          </div>
+   981→          <p className="px-3 pt-2 text-[10px] leading-4 text-muted-foreground">
+   982→            بله — سیستم ۱۰۰٪ آموزش‌پذیر است. پس از هر تسویه خودکار، یک درس قطعی (بدون LLM) از نتیجه واقعی ESPN در ژورنال ثبت می‌شود؛
+   983→            هم بردها و هم باخت‌های صادقانه (تله میانی) به‌عنوان داده آموزشی وارد می‌شوند.
+   984→          </p>
+   985→          {journal.length === 0 ? (
+   986→            <p className="p-4 text-center text-[10px] text-muted-foreground">هنوز درسی ثبت نشده — با اولین تسویه خودکار پر می‌شود.</p>
+   987→          ) : (
+   988→            <ScrollArea className="max-h-72">
+   989→              <ul className="space-y-1.5 p-3">
+   990→                {journal.slice(0, 12).map((j) => {
+   991→                  const tone =
+   992→                    j.status === "DOUBLE_WIN"
+   993→                      ? "border-amber-500/30 bg-amber-500/[0.05]"
+   994→                      : j.status === "MIDDLE_TRAP"
+   995→                        ? "border-rose-500/25 bg-rose-500/[0.04]"
+   996→                        : j.status === "WON_A" || j.status === "WON_B"
+   997→                          ? "border-emerald-500/25 bg-emerald-500/[0.04]"
+   998→                          : "border-white/10 bg-white/[0.02]";
+   999→                  return (
+  1000→                    <li key={j.id} className={cn("rounded-lg border p-2", tone)}>
+  1001→                      <div className="flex flex-wrap items-center justify-between gap-1">
+  1002→                        <p className="text-[10px] font-bold">{j.matchLabel}</p>
+  1003→                        <span className="flex items-center gap-1.5">
+  1004→                          {(j.netProfit ?? 0) !== 0 && (
+  1005→                            <b className={cn("font-num text-[10px]", (j.netProfit ?? 0) > 0 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+  1006→                              {(j.netProfit ?? 0) > 0 ? "+" : ""}{faNum(j.netProfit ?? 0, 1)}
+  1007→                            </b>
+  1008→                          )}
+  1009→                          <span className="text-[8px] text-muted-foreground" dir="ltr">
+  1010→                            {new Date(j.createdAt).toLocaleDateString("fa-IR", { month: "short", day: "numeric" })}
+  1011→                          </span>
+  1012→                        </span>
+  1013→                      </div>
+  1014→                      <p className="mt-0.5 text-[9px] leading-4 text-muted-foreground">{j.lesson}</p>
+  1015→                    </li>
+  1016→                  );
+  1017→                })}
+  1018→              </ul>
+  1019→            </ScrollArea>
+  1020→          )}
+  1021→        </div>
+  1022→
+  1023→        {/* ─── دفتر دکترین: قوانین عددی آموخته‌شده که مستقیم به موتور می‌روند ─── */}
+  1024→        <div className="rounded-xl border border-white/10 bg-white/[0.02]">
+  1025→          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 px-3 py-2.5">
+  1026→            <p className="flex items-center gap-1.5 text-xs font-semibold">
+  1027→              <Sparkles className="size-3.5 text-amber-400" /> دفتر دکترین — قوانین عددی آموخته‌شده
+  1028→            </p>
+  1029→            <div className="flex flex-wrap gap-1" role="tablist" aria-label="فیلتر نوع دکترین">
+  1030→              {([
+  1031→                ["ALL", `همه (${doctrineCounts.ALL})`],
+  1032→                ["LEAGUE_LAMBDA", `لیگ (${doctrineCounts.LEAGUE_LAMBDA})`],
+  1033→                ["ARCHETYPE", `الگو (${doctrineCounts.ARCHETYPE})`],
+  1034→                ["TIMING_WINDOW", `زمان (${doctrineCounts.TIMING_WINDOW})`],
+  1035→              ] as const).map(([k, lbl]) => (
+  1036→                <button
+  1037→                  key={k}
+  1038→                  type="button"
+  1039→                  role="tab"
+  1040→                  aria-selected={doctrineFilter === k}
+  1041→                  onClick={() => setDoctrineFilter(k)}
+  1042→                  className={cn(
+  1043→                    "rounded-full border px-2 py-0.5 text-[9px] transition-colors",
+  1044→                    doctrineFilter === k ? "border-amber-500/50 bg-amber-500/15 text-amber-300" : "border-white/10 text-muted-foreground hover:bg-white/5"
+  1045→                  )}
+  1046→                >
+  1047→                  {lbl}
+  1048→                </button>
+  1049→              ))}
+  1050→            </div>
+  1051→          </div>
+  1052→          <p className="px-3 pt-2 text-[10px] leading-4 text-muted-foreground">
+  1053→            این دفتر نیازی به ثبت دستی ندارد — خودکار ساخته می‌شود: از هر ۳۰ روز کارنامه، بردار عددی هر لیگ (ضریب λ)، پاداش/جریمه هر الگو
+  1054→            و عملکرد هر پنجره زمانی استخراج و مستقیم در موتور پیش‌بینی و امتیاز سوپروایزر اعمال می‌شود.
+  1055→          </p>
+  1056→          {doctrine.length === 0 ? (
+  1057→            <p className="p-4 text-center text-[10px] text-muted-foreground">
+  1058→              هنوز دکترینی ثبت نشده — پس از حداقل ۳ تسویه در یک لیگ، قانون عددی آن لیگ خودکار مهر و تاریخ می‌خورد.
+  1059→            </p>
+  1060→          ) : (
+  1061→            <ScrollArea className="max-h-72">
+  1062→              <ul className="space-y-1.5 p-3">
+  1063→                {doctrine.map((d) => (
+  1064→                  <li key={d.id} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+  1065→                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+  1066→                      <p className="text-[10px] font-bold">
+  1067→                        {d.kind === "LEAGUE_LAMBDA" ? "🏟️" : d.kind === "ARCHETYPE" ? "📐" : "⏱️"} {d.scope}
+  1068→                      </p>
+  1069→                      <span className="flex items-center gap-1.5 text-[9px]">
+  1070→                        <Badge variant="outline" className="border-white/15 px-1.5 py-0 text-[8px] text-muted-foreground">{faNum(d.sampleSize, 0)} نمونه</Badge>
+  1071→                        <b className={cn("font-num", d.netProfit > 0 ? "text-emerald-300" : d.netProfit < 0 ? "text-rose-300" : "text-muted-foreground")} dir="ltr">
+  1072→                          {d.netProfit > 0 ? "+" : ""}{faNum(d.netProfit, 1)}
+  1073→                        </b>
+  1074→                        <b className="font-num text-cyan-300" dir="ltr">{faNum(d.winRate, 1)}٪</b>
+  1075→                      </span>
+  1076→                    </div>
+  1077→                    <p className="mt-0.5 text-[9px] leading-4 text-muted-foreground">{d.summary}</p>
+  1078→                  </li>
+  1079→                ))}
+  1080→              </ul>
+  1081→            </ScrollArea>
+  1082→          )}
+  1083→        </div>
+  1084→      </div>
+  1085→    </section>
+  1086→  );
+  1087→}
+  1088→
+  1089→// ═══════════ سطر کارنامه ═══════════
+  1090→
+  1091→/** v10.0.2 — نشان ارزش عددی نسبت به خط مرجع (پاسخ «چرا عددی ندارد؟» — همیشه عدد دارد) */
+  1092→function EdgeChip({ edge, source, pin }: { edge: number | null; source: string | null; pin: number | null }) {
+  1093→  if (edge === null) return null;
+  1094→  const tone = edge > 0 ? "text-emerald-300" : edge < 0 ? "text-rose-300" : "text-muted-foreground";
+  1095→  const srcLabel = source === "PINNACLE" ? `پیناکل ${pin?.toFixed(2) ?? ""}` : "خط منصفانه";
+  1096→  return (
+  1097→    <p className="mt-0.5 text-[8px] leading-3 text-muted-foreground" title="ارزش عددی = (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰؛ یا مزیت قیمت نسبت به خط شارپ پیناکل">
+  1098→      📈 ارزش <b className={cn("font-num", tone)} dir="ltr">{edge > 0 ? "+" : ""}{faNum(edge, 1)}٪</b> نسبت به {srcLabel}
+  1099→    </p>
+  1100→  );
+  1101→}
+  1102→
+  1103→function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
+  1104→  const meta = STATUS_META[slip.status] ?? STATUS_META.PENDING;
+  1105→  const StatusIcon = meta.icon;
+  1106→  const score = slip.homeGoals !== null && slip.awayGoals !== null ? `${slip.homeGoals}−${slip.awayGoals}` : null;
+  1107→  const profitTone = (slip.netProfit ?? 0) > 0 ? "text-emerald-300" : (slip.netProfit ?? 0) < 0 ? "text-rose-300" : "text-muted-foreground";
+  1108→  const [copied, setCopied] = useState(false);
+  1109→
+  1110→  const copyHash = (e: React.MouseEvent) => {
+  1111→    e.stopPropagation();
+  1112→    void navigator.clipboard?.writeText(slip.hash);
+  1113→    setCopied(true);
+  1114→    setTimeout(() => setCopied(false), 1500);
+  1115→  };
+  1116→
+  1117→  return (
+  1118→    <TableRow className={cn("border-white/6 align-top", !slip.supervisorApproved && "bg-rose-500/[0.04]")}>
+  1119→      <TableCell className="max-w-[190px] py-2.5">
+  1120→        <p className="truncate text-[11px] font-bold">
+  1121→          {slip.homeTeam} <span className="text-muted-foreground">×</span> {slip.awayTeam}
+  1122→        </p>
+  1123→        <p className="text-[9px] text-muted-foreground">
+  1124→          {slip.league} · <span dir="ltr">{new Date(slip.kickoff).toLocaleDateString("fa-IR", { month: "short", day: "numeric" })}</span>
+  1125→          {score && (
+  1126→            <b className="mr-1 font-num text-foreground" dir="ltr">
+  1127→              FT {score}
+  1128→            </b>
+  1129→          )}
+  1130→        </p>
+  1131→        {slip.archetype && <p className="mt-0.5 truncate text-[9px] text-fuchsia-300">📐 {slip.archetype}</p>}
+  1132→      </TableCell>
+  1133→
+  1134→      <TableCell className="py-2.5">
+  1135→        <Badge variant="outline" className={cn("gap-1 whitespace-nowrap text-[9px]", meta.cls)}>
+  1136→          <StatusIcon className={cn("size-2.5", slip.status === "LIVE" && "animate-spin")} />
+  1137→          {meta.label}
+  1138→        </Badge>
+  1139→        {!slip.supervisorApproved && (
+  1140→          <Badge variant="outline" className="mt-1 gap-1 whitespace-nowrap border-rose-500/40 bg-rose-500/10 text-[9px] text-rose-300">
+  1141→            <ShieldOff className="size-2.5" />
+  1142→            وتو — تسویه کاغذی
+  1143→          </Badge>
+  1144→        )}
+  1145→        {!slip.supervisorApproved && slip.vetoReason && (
+  1146→          <p className="mt-1 break-words text-[9px] leading-4 text-rose-300/80" title={slip.vetoReason}>
+  1147→            {slip.vetoReason}
+  1148→          </p>
+  1149→        )}
+  1150→        {slip.settleNote && (
+  1151→          <p className="mt-1 break-words text-[9px] leading-4 text-muted-foreground" title={slip.settleNote}>
+  1152→            {slip.settleNote}
+  1153→          </p>
+  1154→        )}
+  1155→      </TableCell>
+  1156→
+  1157→      <TableCell className="max-w-[170px] py-2.5">
+  1158→        <p className="break-words text-[10px] leading-4">{slip.labelA}</p>
+  1159→        <p className="mt-0.5 text-[9px] text-muted-foreground">
+  1160→          ضریب <b className="font-num text-sky-300" dir="ltr">{slip.oddsA.toFixed(2)}</b> · استیک{" "}
+  1161→          <b className="font-num" dir="ltr">{faNum(slip.stakeA, 1)}</b>
+  1162→          {slip.status === "WON_A" || slip.status === "DOUBLE_WIN" ? (
+  1163→            <b className="mr-1 font-num text-emerald-300" dir="ltr"> ✓</b>
+  1164→          ) : ["WON_B", "MIDDLE_TRAP"].includes(slip.status) ? (
+  1165→            <b className="mr-1 font-num text-rose-300" dir="ltr"> ✗</b>
+  1166→          ) : null}
+  1167→        </p>
+  1168→        <EdgeChip edge={slip.edgeA} source={slip.edgeSourceA} pin={slip.pinnacleOddsA} />
+  1169→      </TableCell>
+  1170→
+  1171→      <TableCell className="max-w-[170px] py-2.5">
+  1172→        <p className="break-words text-[10px] leading-4">{slip.labelB}</p>
+  1173→        <p className="mt-0.5 text-[9px] text-muted-foreground">
+  1174→          ضریب <b className="font-num text-emerald-300" dir="ltr">{slip.oddsB.toFixed(2)}</b> · استیک{" "}
+  1175→          <b className="font-num" dir="ltr">{faNum(slip.stakeB, 1)}</b>
+  1176→          {slip.status === "WON_B" || slip.status === "DOUBLE_WIN" ? (
+  1177→            <b className="mr-1 font-num text-emerald-300" dir="ltr"> ✓</b>
+  1178→          ) : ["WON_A", "MIDDLE_TRAP"].includes(slip.status) ? (
+  1179→            <b className="mr-1 font-num text-rose-300" dir="ltr"> ✗</b>
+  1180→          ) : null}
+  1181→        </p>
+  1182→        <EdgeChip edge={slip.edgeB} source={slip.edgeSourceB} pin={slip.pinnacleOddsB} />
+  1183→      </TableCell>
+  1184→
+  1185→      <TableCell className="py-2.5 text-left">
+  1186→        {slip.netProfit !== null ? (
+  1187→          <>
+  1188→            <b className={cn("font-num text-sm", profitTone)} dir="ltr">
+  1189→              {slip.netProfit >= 0 ? "+" : ""}
+  1190→              {faNum(slip.netProfit, 1)}
+  1191→            </b>
+  1192→            {(slip.status === "WON_A" || slip.status === "WON_B") && (
+  1193→              <p className="text-[8px] leading-3 text-muted-foreground" dir="ltr">
+  1194→                {slip.status === "WON_A" ? `${slip.stakeA.toFixed(1)}×${slip.oddsA.toFixed(2)}−100` : `${slip.stakeB.toFixed(1)}×${slip.oddsB.toFixed(2)}−100`}
+  1195→              </p>
+  1196→            )}
+  1197→            {slip.status === "DOUBLE_WIN" && (
+  1198→              <p className="text-[8px] leading-3 text-amber-300/80">A: {faNum(slip.profitA ?? 0, 1)} + B: {faNum(slip.profitB ?? 0, 1)}</p>
+  1199→            )}
+  1200→          </>
+  1201→        ) : (
+  1202→          <span className="text-[10px] text-muted-foreground">—</span>
+  1203→        )}
+  1204→      </TableCell>
+  1205→
+  1206→      <TableCell className="py-2.5 align-middle">
+  1207→        {/* v13.0-⑪ — هش در کادر تمیز مونو + دکمه کپی */}
+  1208→        <span className="inline-flex items-center gap-1 rounded bg-slate-800/80 px-2 py-0.5 font-mono text-xs text-cyan-300">
+  1209→          <span dir="ltr">{slip.hash.slice(0, 14)}…</span>
+  1210→          <button
+  1211→            type="button"
+  1212→            onClick={copyHash}
+  1213→            title={`کپی هش کامل: ${slip.hash}`}
+  1214→            aria-label="کپی هش SHA-256 کارت"
+  1215→            className="text-cyan-200 hover:text-white"
+  1216→          >
+  1217→            {copied ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+  1218→          </button>
+  1219→        </span>
+  1220→        {slip.espnUrl && (
+  1221→          <a href={slip.espnUrl} target="_blank" rel="noreferrer" className="mt-1 flex items-center gap-0.5 text-[9px] text-cyan-400 hover:underline">
+  1222→            راستی‌آزمایی ESPN <ExternalLink className="size-2.5" />
+  1223→          </a>
+  1224→        )}
+  1225→      </TableCell>
+  1226→
+  1227→      <TableCell className="py-2.5 align-middle">
+  1228→        {/* v13.0-⑪ — آیکون‌های عملیات: inline-flex + gap-۲ + تراز عمودی */}
+  1229→        <div className="inline-flex items-center justify-center gap-2" aria-label="وضعیت انتشار تلگرام">
+  1230→          <TgDot on={slip.telegramCard} title="کارت کامل" icon="📤" />
+  1231→          <TgDot on={slip.telegramTeaser} title="تیزر VIP (تیپ B سانسور)" icon="🔒" />
+  1232→          <TgDot on={slip.telegramResult} title="نتیجه پس از FT (جام/رختکن)" icon={slip.status === "MIDDLE_TRAP" ? "🧹" : "🏆"} />
+  1233→        </div>
+  1234→      </TableCell>
+  1235→    </TableRow>
+  1236→  );
+  1237→}
+  1238→
+  1239→function TgDot({ on, title, icon }: { on: boolean; title: string; icon: string }) {
+  1240→  return (
+  1241→    <span title={`${title}: ${on ? "ارسال شد" : "ارسال نشده"}`} className={cn("flex size-5 items-center justify-center rounded-full text-[9px]", on ? "bg-emerald-500/20 ring-1 ring-emerald-500/40" : "bg-white/5 opacity-35 grayscale")} aria-label={`${title} ${on ? "ارسال شد" : "ارسال نشده"}`}>
+  1242→      {icon}
+  1243→    </span>
+  1244→  );
+  1245→}
+  1246→
+  1247→function StatCard({ label, value, tone, sub }: { label: string; value: number | string; tone: string; sub?: string }) {
+  1248→  return (
+  1249→    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
+  1250→      <p className="text-[9px] text-muted-foreground">{label}</p>
+  1251→      <p className={cn("font-num text-lg font-bold leading-6", tone)} dir="ltr">
+  1252→        {typeof value === "number" ? faNum(value, 0) : value}
+  1253→      </p>
+  1254→      {sub && <p className="text-[8px] text-muted-foreground">{sub}</p>}
+  1255→    </div>
+  1256→  );
+  1257→}
+  1258→

@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
+  BarChart3,
   Bot,
   BookOpen,
   Calculator,
@@ -34,6 +35,7 @@ import {
   SendHorizonal,
   ServerCog,
   Settings2,
+  Shield,
   ShieldCheck,
   ShieldOff,
   Sparkles,
@@ -356,8 +358,13 @@ export function SettlementTab() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ botToken: tgToken, channelId: tgChannel, publicChannelId: tgPublic, test }),
         });
-        const data = (await res.json()) as { success: boolean; test?: { ok: boolean; detail: string } | null };
+        const data = (await res.json()) as { success: boolean; tokenError?: string | null; test?: { ok: boolean; detail: string } | null };
         patchConfig({ telegramBotToken: tgToken, telegramChannelId: tgChannel, telegramPublicChannelId: tgPublic });
+        // v13.2 — گیت اعتبارسنجی توکن سرور: توکن ناقص/نامعتبر ذخیره نمی‌شود
+        if (data.tokenError) {
+          toast.error("🚫 توکن بات تایید نشد — ذخیره نشد", { description: data.tokenError });
+          return;
+        }
         if (test) {
           if (data.test?.ok) toast.success("✅ پیام آزمون به کانال VIP ارسال شد — اتصال برقرار است");
           else toast.error(`پیام آزمون ناموفق: ${data.test?.detail ?? "?"}`, { description: "توکن بات و شناسه کانال (مثل @channel یا -100...) را بررسی کنید" });
@@ -465,6 +472,28 @@ export function SettlementTab() {
         </div>
       )}
 
+      {/* ═══ v13.2 — دفتر بازخوانی: شفافیت کارت‌های چندروزه (خارج از آمار واقعی) ═══ */}
+      {ledger?.retroBook && ledger.retroBook.total > 0 && (
+        <div
+          className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border border-slate-400/25 bg-slate-400/[0.06] px-4 py-2.5"
+          role="note"
+          aria-label="دفتر بازخوانی"
+        >
+          <p className="text-[11px] leading-5 text-muted-foreground">
+            📚 <b className="text-slate-200">دفتر بازخوانی:</b> {faNum(ledger.retroBook.total, 0)} بازی FT که خط لوله چندروزه کارت‌شان را
+            <b className="text-amber-300"> هرگز پیش از بازی صادر و تایید نکرده بود</b> — فقط تسویه کاغذی تحلیلی برای یادگیری دکترین؛
+            هرگز در وین‌ریت کانال، اعلام نتایج و دسته الف شمرده نمی‌شوند.
+          </p>
+          <p className="shrink-0 text-[11px] text-muted-foreground" dir="rtl">
+            وین‌ریت کاغذی <b className="text-slate-200" dir="ltr">{faNum(ledger.retroBook.winRate ?? 0, 1)}٪</b> · برد {faNum(ledger.retroBook.wins, 0)} · باخت {faNum(ledger.retroBook.losses, 0)} · سود کاغذی{" "}
+            <b className={cn(ledger.retroBook.netProfit >= 0 ? "text-emerald-300" : "text-rose-300")} dir="ltr">
+              {ledger.retroBook.netProfit >= 0 ? "+" : ""}
+              {faNum(ledger.retroBook.netProfit, 1)}
+            </b>
+          </p>
+        </div>
+      )}
+
       {/* ═══ v11.0-④ — بج طلایی سرمایه نجات‌یافته توسط وتوی سوپروایزر ═══ */}
       {savedByVeto > 0 && (
         <div
@@ -564,6 +593,107 @@ export function SettlementTab() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ═══ v13.4 — 📊 پوشش کامل عملکرد هر دسته فلش‌کارت (معادل دفتری فیلترهای دک) ═══ */}
+      {categories?.filterPerformance && categories.filterPerformance.length > 0 && (
+        <div
+          className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-4"
+          aria-label="پوشش کامل عملکرد هر دسته فلش‌کارت"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <BarChart3 className="size-3.5 text-emerald-300" />
+              📊 پوشش کامل عملکرد هر دسته فلش‌کارت
+            </p>
+            <Badge variant="outline" className="border-white/15 text-[9px] text-muted-foreground">
+              ۶ فیلتر دک — دسته‌های همپوشان
+            </Badge>
+          </div>
+          <p className="text-[10px] leading-5 text-muted-foreground">
+            برخلاف افراز مجزای بالا، این‌ها همان <b className="text-foreground/90">فیلترهای دک فلش‌کارت</b> هستند و
+            همپوشان‌اند: یک کارت می‌تواند هم‌زمان در «ریسک زیر ۱۰٪» و «سود بالای ۱۵٪» شمرده شود. کارت‌های بازخوانی
+            (retro — هرگز پیش از بازی صادر و منتشر نشده‌اند) از وین‌ریت و سود واقعی حذف شده‌اند تا کارنامه پول واقعی
+            دست‌نخورده بماند.
+          </p>
+          <div className="grid max-h-96 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 xl:grid-cols-3" role="list">
+            {categories.filterPerformance.map((c) => {
+              // v13.4 — آیکن هر فیلتر مطابق دک فلش‌کارت (همان ترتیب/هویت فیلترها)
+              const icon =
+                c.key === "APPROVED"
+                  ? ShieldCheck
+                  : c.key === "RISK10"
+                    ? TriangleAlert
+                    : c.key === "BOOSTER"
+                      ? Rocket
+                      : c.key === "PROFIT15"
+                        ? Wallet
+                        : c.key === "FORTRESS"
+                          ? Shield
+                          : ShieldOff;
+              const Icon = icon;
+              return (
+                <div
+                  key={c.key}
+                  role="listitem"
+                  className={cn(
+                    "space-y-1.5 rounded-lg border p-3",
+                    c.paper ? "border-rose-500/25 bg-rose-500/[0.05]" : "border-white/10 bg-black/20"
+                  )}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Icon className={cn("size-3.5 shrink-0", c.paper ? "text-rose-300" : "text-emerald-300")} aria-hidden />
+                    <p className="min-w-0 flex-1 truncate text-[10px] font-bold text-foreground/90" title={c.label}>
+                      <span dir="rtl">{c.label}</span>
+                    </p>
+                    {c.paper && (
+                      <span className="shrink-0 rounded border border-rose-500/40 bg-rose-500/10 px-1 py-px text-[8px] font-bold text-rose-300">
+                        کاغذی
+                      </span>
+                    )}
+                  </div>
+                  <p className="line-clamp-2 text-[9px] leading-4 text-muted-foreground" title={c.description}>
+                    {c.description}
+                  </p>
+                  <div className="flex items-baseline gap-1">
+                    <span
+                      className={cn(
+                        "text-lg font-black tabular-nums",
+                        c.winRate === null ? "text-zinc-500" : c.winRate >= 50 ? "text-emerald-300" : "text-rose-300"
+                      )}
+                      dir="ltr"
+                    >
+                      {c.winRate === null ? "—" : `${faNum(c.winRate, 1)}٪`}
+                    </span>
+                    <span className="text-[9px] text-muted-foreground">وین‌ریت</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px] leading-4 text-muted-foreground" dir="rtl">
+                    <p>کل: <b className="font-num text-foreground/80">{faNum(c.total, 0)}</b></p>
+                    <p>تسویه‌شده: <b className="font-num text-foreground/80">{faNum(c.settled, 0)}</b></p>
+                    <p>در انتظار: <b className="font-num text-foreground/80">{faNum(c.pending, 0)}</b></p>
+                    <p>🏆 دوبل‌وین: <b className="font-num text-amber-300">{faNum(c.doubleWinHits, 0)}</b></p>
+                    <p>🟢 برد: <b className="font-num text-emerald-300">{faNum(c.wins, 0)}</b></p>
+                    <p>🔴 باخت: <b className="font-num text-rose-300">{faNum(c.losses, 0)}</b></p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-white/8 pt-1.5 text-[9px]" dir="rtl">
+                    <span className={cn("font-num", c.netProfit >= 0 ? "text-emerald-300/90" : "text-rose-300/90")} dir="ltr">
+                      {c.netProfit >= 0 ? "+" : ""}{faNum(c.netProfit, 1)} unit
+                    </span>
+                    {c.avgJointLossRiskPct !== null && (
+                      <span className="text-muted-foreground">میانگین ریسک: <b className="font-num" dir="ltr">{faNum(c.avgJointLossRiskPct, 1)}%</b></span>
+                    )}
+                    {c.avgGuaranteedProfitPct !== null && (
+                      <span className="text-muted-foreground">میانگین سود: <b className="font-num" dir="ltr">{faNum(c.avgGuaranteedProfitPct, 1)}%</b></span>
+                    )}
+                    {c.avgDoubleWinProbPct !== null && (
+                      <span className="text-muted-foreground">احتمال برد طلایی: <b className="font-num" dir="ltr">{faNum(c.avgDoubleWinProbPct, 1)}%</b></span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

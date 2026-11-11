@@ -431,100 +431,272 @@ export interface MatchCardInput {
   homeLogo?: Buffer | null;
   awayLogo?: Buffer | null;
   teaser?: boolean;
+  /**
+   * v13.2 — بلوک داده حرفه‌ای پوستر تجاری:
+   * احتمال ۱X۲ مدل · λ · پوشش/ریسک/جکپات · امتیاز سوپروایزر · رتبه و فرم تیم‌ها · استادیوم
+   */
+  stats?: {
+    pHome: number | null;
+    pDraw: number | null;
+    pAway: number | null;
+    lambdaHome: number | null;
+    lambdaAway: number | null;
+    coveragePct: number | null;
+    jointLossRiskPct: number | null;
+    doubleWinProbPct: number | null;
+    supervisorScore: number | null;
+    score100: number | null;
+    fortress: boolean;
+    archetypeCode: string | null;
+    archetype: string | null;
+    homeRank: number | null;
+    awayRank: number | null;
+    homeForm: string | null;
+    awayForm: string | null;
+    venue: string | null;
+  };
+}
+
+// ═══════════ v13.2 — دیکشنری آموزشی استراتژی هر الگو (خط پایینی پوستر) ═══════════
+
+const STRATEGY_EN: Record<string, { title: string; line: string }> = {
+  A1: {
+    title: "DEFENSIVE LOCK",
+    line: "One tip rides the open game, the other locks the tactical cage — cash lands unless the match script breaks twice.",
+  },
+  A2: {
+    title: "FAVORITE STRIKE",
+    line: "Back the favorite to convert pressure while the complementary tip hedges the corner siege.",
+  },
+  A3: {
+    title: "ASIAN SPLIT",
+    line: "Asian handicap and goal line own disjoint score corridors — the two tips never fight for the same cells.",
+  },
+  A4: {
+    title: "FAST START VS GRIND",
+    line: "First-half storm against second-half card grinder — the clock is priced in two separate markets.",
+  },
+  A5: {
+    title: "CLEAN SHEET BATTLE",
+    line: "Clean-sheet shield against both-teams-score — opposite scoring scripts, one of them always pays.",
+  },
+};
+const STRATEGY_DEFAULT = {
+  title: "DUTCH COVER",
+  line: "Two complementary tips split a 100-unit stake so either winning outcome pays the same guaranteed profit.",
+};
+
+/** نقطه‌های فرم تیم (W/D/L) — ۵ بازی آخر */
+function formDots(form: string | null, cx: number, cy: number): string {
+  const seq = String(form ?? "")
+    .toUpperCase()
+    .replace(/[^WDL]/g, "")
+    .slice(-5)
+    .split("");
+  if (seq.length === 0) return "";
+  const gap = 21;
+  const x0 = cx - ((seq.length - 1) * gap) / 2;
+  return seq
+    .map((ch, i) => {
+      const color = ch === "W" ? C.emerald : ch === "L" ? C.rose : "#93a7c4";
+      return `<circle cx="${(x0 + i * gap).toFixed(1)}" cy="${cy}" r="7.5" fill="${color}" fill-opacity="0.92"/>`;
+    })
+    .join("");
+}
+
+/** چیپ رتبه فصل تیم */
+function rankChip(cx: number, cy: number, rank: number | null): string {
+  if (!rank || rank <= 0) return "";
+  return `
+  <rect x="${cx - 44}" y="${cy - 16}" width="88" height="30" rx="15" fill="rgba(6,10,20,0.7)" stroke="rgba(255,255,255,0.22)" stroke-width="1.2"/>
+  <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${C.inkDim}" letter-spacing="1">RANK ${rank}</text>`;
+}
+
+/** نوار احتمال ۱X۲ مدل — سه‌بخشی تجاری با برچسب درصد */
+function probBar1x2(pHome: number, pDraw: number, pAway: number, x: number, y: number, w: number, h: number): string {
+  const total = Math.max(0.0001, pHome + pDraw + pAway);
+  const hW = (pHome / total) * w;
+  const dW = (pDraw / total) * w;
+  const aW = (pAway / total) * w;
+  const seg = (sx: number, sw: number, color: string, fillOp: string) =>
+    `<rect x="${sx.toFixed(1)}" y="${y}" width="${sw.toFixed(1)}" height="${h}" fill="${color}" fill-opacity="${fillOp}"/>`;
+  return `
+  <g>
+    ${seg(x, hW, C.cyan, "0.55")}
+    ${seg(x + hW, dW, "#93a7c4", "0.4")}
+    ${seg(x + hW + dW, aW, C.emerald, "0.55")}
+    <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1.6"/>
+    ${
+      hW > 62
+        ? `<text x="${x + hW / 2}" y="${y + h / 2 + 7}" text-anchor="middle" font-family="${C.mono}" font-size="19" font-weight="bold" fill="${C.ink}">${Math.round(pHome * 100)}%</text><text x="${x + hW / 2}" y="${y + h + 24}" text-anchor="middle" font-family="${C.sans}" font-size="13.5" fill="${C.cyan}" letter-spacing="1.5">HOME</text>`
+        : `<text x="${x + hW / 2}" y="${y - 10}" text-anchor="middle" font-family="${C.mono}" font-size="15" font-weight="bold" fill="${C.cyan}">${Math.round(pHome * 100)}%</text>`
+    }
+    ${
+      dW > 62
+        ? `<text x="${x + hW + dW / 2}" y="${y + h / 2 + 7}" text-anchor="middle" font-family="${C.mono}" font-size="19" font-weight="bold" fill="${C.ink}">${Math.round(pDraw * 100)}%</text><text x="${x + hW + dW / 2}" y="${y + h + 24}" text-anchor="middle" font-family="${C.sans}" font-size="13.5" fill="${C.inkDim}" letter-spacing="1.5">DRAW</text>`
+        : ""
+    }
+    ${
+      aW > 62
+        ? `<text x="${x + hW + dW + aW / 2}" y="${y + h / 2 + 7}" text-anchor="middle" font-family="${C.mono}" font-size="19" font-weight="bold" fill="${C.ink}">${Math.round(pAway * 100)}%</text><text x="${x + hW + dW + aW / 2}" y="${y + h + 24}" text-anchor="middle" font-family="${C.sans}" font-size="13.5" fill="${C.emerald}" letter-spacing="1.5">AWAY</text>`
+        : `<text x="${x + w - 4}" y="${y - 10}" text-anchor="end" font-family="${C.mono}" font-size="15" font-weight="bold" fill="${C.emerald}">${Math.round(pAway * 100)}%</text>`
+    }
+  </g>`;
+}
+
+/** نشان (badge) دایره‌ای کوچک با آیکون برداری + متن */
+function statBadge(x: number, y: number, w: number, icon: "crown" | "shield" | "target" | "vault", label: string, value: string, color: string): string {
+  const icons: Record<string, string> = {
+    crown: `<path d="M${x + 18} ${y + 16} l6 8 h10 l6 -8 v13 h-22 z" fill="${color}" fill-opacity="0.9"/>`,
+    shield: `<path d="M${x + 14} ${y + 12} l6 -3 6 3 v7 c0 4 -3 6.5 -6 8 c-3 -1.5 -6 -4 -6 -8 z" fill="none" stroke="${color}" stroke-width="2.2"/>`,
+    target: `<circle cx="${x + 20}" cy="${y + 20}" r="8.5" fill="none" stroke="${color}" stroke-width="2.2"/><circle cx="${x + 20}" cy="${y + 20}" r="2.6" fill="${color}"/>`,
+    vault: `<rect x="${x + 12}" y="${y + 12}" width="16" height="15" rx="3" fill="none" stroke="${color}" stroke-width="2.2"/><circle cx="${x + 20}" cy="${y + 19.5}" r="3.4" fill="none" stroke="${color}" stroke-width="1.8"/><path d="M${x + 20} ${y + 16.5} v6 M${x + 16.5} ${y + 19.5} h7" stroke="${color}" stroke-width="1.4"/>`,
+  };
+  return `
+  <rect x="${x}" y="${y}" width="${w}" height="40" rx="20" fill="rgba(6,10,20,0.78)" stroke="${color}" stroke-opacity="0.55" stroke-width="1.6"/>
+  ${icons[icon]}
+  <text x="${x + 42}" y="${y + 17}" font-family="${C.sans}" font-size="12.5" fill="${C.inkDim}" letter-spacing="1.2">${esc(label)}</text>
+  <text x="${x + 42}" y="${y + 33}" font-family="${C.mono}" font-size="15.5" font-weight="bold" fill="${color}">${esc(value)}</text>`;
 }
 
 export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer> {
   const dw = input.doubleWin;
   const accent = dw ? C.gold : C.cyan;
+  const st = input.stats;
   const homeLogo = logoDataUrl(input.homeLogo ?? null);
   const awayLogo = logoDataUrl(input.awayLogo ?? null);
 
   // متن تیپ‌ها داخل باکس‌های ۴۲۰px
-  const aLines = wrapText(input.labelAEn, 420 - 56, 25, 400, 4);
+  const aLines = wrapText(input.labelAEn, 420 - 56, 24, 400, 4);
   const bLines = input.teaser
     ? ["Full complementary pick +", "stake locked for", "VIP members"]
-    : wrapText(input.labelBEn, 420 - 56, 25, 400, 4);
-  const tLines = wrapText(input.timingDetail, 900 - 220, 23, 400, 2);
-  const edgeTotal = (input.edgeA ?? 0) + (input.edgeB ?? 0);
-  const edgeColor = edgeTotal >= 0 ? C.emerald : C.rose;
-  const edgeTxt =
-    input.edgeA !== null && input.edgeB !== null
-      ? `A ${sign(input.edgeA)}% · B ${sign(input.edgeB)}% (${input.edgeSource === "PINNACLE" ? "vs Pinnacle" : "vs fair"})`
-      : `model edge vs ${input.edgeSource === "PINNACLE" ? "Pinnacle" : "market fair"}`;
-  const edgeSize = fitSize(edgeTxt, 900 - 380, 23, 14, 700);
-  const timingColor = input.timingState === "OPEN" ? C.emerald : input.timingState === "WAITING" ? C.gold : C.rose;
+    : wrapText(input.labelBEn, 420 - 56, 24, 400, 4);
+  const tLines = wrapText(input.timingDetail, 900 - 300, 21, 400, 2);
   const homeSize = fitSize(input.homeTeam, 380, 30, 15, 700);
   const awaySize = fitSize(input.awayTeam, 380, 30, 15, 700);
-  const leagueSize = fitSize(input.league, 560, 24, 15, 600);
+  const leagueSize = fitSize(input.league, 500, 23, 14, 600);
+
+  // ─── v13.2 — استراتژی آموزشی الگو ───
+  const strategy = STRATEGY_EN[st?.archetypeCode ?? ""] ?? STRATEGY_DEFAULT;
+  const strategyLines = wrapText(strategy.line, 900 - 240, 16, 400, 2);
+
+  // ─── v13.2 — نشان‌های بالای کارت (امتیاز سوپروایزر/دژ/جکپات) ───
+  const badgeSpecs: { icon: "crown" | "shield" | "target" | "vault"; label: string; value: string; color: string }[] = [];
+  {
+    const score = st?.score100 ?? null;
+    const risk = st?.jointLossRiskPct ?? null;
+    const jw = st?.doubleWinProbPct ?? null;
+    if (score !== null) badgeSpecs.push({ icon: "crown", label: "SUPERVISOR SCORE", value: `${score}/100`, color: C.gold });
+    if (st?.fortress) badgeSpecs.push({ icon: "vault", label: "FORTRESS MODE", value: "RISK < 7%", color: C.emerald });
+    else if (risk !== null) badgeSpecs.push({ icon: "shield", label: "JOINT-LOSS RISK", value: `${risk.toFixed(1)}%`, color: risk < 10 ? C.emerald : C.rose });
+    if (jw !== null && jw > 0.2) badgeSpecs.push({ icon: "target", label: "DOUBLE-WIN CHANCE", value: `${jw.toFixed(1)}%`, color: C.cyan });
+  }
+  const badgeW = 236;
+  const badgeGap = 18;
+  const badgesStartX = (W - (badgeSpecs.length * badgeW + Math.max(0, badgeSpecs.length - 1) * badgeGap)) / 2;
+  const badges = badgeSpecs.map((b, i) => statBadge(badgesStartX + i * (badgeW + badgeGap), 160, badgeW, b.icon, b.label, b.value, b.color));
+
+  // ─── v13.2 — نوار احتمال ۱X۲ + λ ───
+  const pHome = st?.pHome ?? null;
+  const pDraw = st?.pDraw ?? null;
+  const pAway = st?.pAway ?? null;
+  const hasProbs = pHome != null && pAway != null;
+  const lambdaLine =
+    st?.lambdaHome != null && st?.lambdaAway != null
+      ? `MODEL GOALS λ  ${st.lambdaHome.toFixed(2)} — ${st.lambdaAway.toFixed(2)}`
+      : null;
 
   const overlay = `
   ${brandHeader(W, accent)}
 
   <!-- لیگ + زمان -->
-  <rect x="90" y="112" width="${textWidth(input.league, leagueSize, 600) + 56}" height="46" rx="23" fill="rgba(6,10,20,0.75)" stroke="rgba(56,214,245,0.5)" stroke-width="1.5"/>
-  <circle cx="118" cy="135" r="7" fill="${C.cyan}"/>
-  <text x="138" y="144" font-family="${C.sans}" font-size="${leagueSize}" font-weight="600" fill="${C.cyan}">${esc(input.league)}</text>
-  <text x="${W - 90}" y="144" text-anchor="end" font-family="${C.sans}" font-size="22" fill="${C.inkDim}">${esc(fmtKickoff(input.kickoffIso))}</text>
+  <rect x="90" y="108" width="${textWidth(input.league, leagueSize, 600) + 56}" height="44" rx="22" fill="rgba(6,10,20,0.75)" stroke="rgba(56,214,245,0.5)" stroke-width="1.5"/>
+  <circle cx="118" cy="130" r="7" fill="${C.cyan}"/>
+  <text x="138" y="138" font-family="${C.sans}" font-size="${leagueSize}" font-weight="600" fill="${C.cyan}">${esc(input.league)}</text>
+  <text x="${W - 90}" y="130" text-anchor="end" font-family="${C.sans}" font-size="21" fill="${C.inkDim}">${esc(fmtKickoff(input.kickoffIso))}</text>
 
-  <!-- بج نوع کارت -->
-  <rect x="${W / 2 - 170}" y="170" width="340" height="46" rx="23" fill="${dw ? "rgba(245,197,66,0.2)" : "rgba(56,214,245,0.14)"}" stroke="${accent}" stroke-opacity="0.7" stroke-width="1.8"/>
-  <text x="${W / 2}" y="201" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${accent}" letter-spacing="3">${dw ? "DOUBLE-WIN OPPORTUNITY" : "PRE-MATCH TIP CARD"}</text>
+  <!-- نشان‌های داده v13.2 -->
+  ${badges.join("")}
 
-  <!-- لوگوی باشگاه‌ها (مختصات رسمی v12.0) -->
-  ${clubBadge(260, 290, 115, input.homeTeam, C.cyan, homeLogo)}
-  ${clubBadge(820, 290, 115, input.awayTeam, C.emerald, awayLogo)}
-  <text x="260" y="452" text-anchor="middle" font-family="${C.sans}" font-size="${homeSize}" font-weight="bold" fill="${C.ink}">${esc(input.homeTeam)}</text>
-  <text x="820" y="452" text-anchor="middle" font-family="${C.sans}" font-size="${awaySize}" font-weight="bold" fill="${C.ink}">${esc(input.awayTeam)}</text>
-  <rect x="${W / 2 - 52}" y="262" width="104" height="56" rx="14" fill="rgba(4,8,16,0.78)" stroke="rgba(255,255,255,0.2)"/>
-  <text x="${W / 2}" y="300" text-anchor="middle" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}">VS</text>
+  <!-- لوگوی باشگاه‌ها + فرم/رتبه -->
+  ${clubBadge(260, 296, 100, input.homeTeam, C.cyan, homeLogo)}
+  ${clubBadge(820, 296, 100, input.awayTeam, C.emerald, awayLogo)}
+  <text x="260" y="436" text-anchor="middle" font-family="${C.sans}" font-size="${homeSize}" font-weight="bold" fill="${C.ink}">${esc(input.homeTeam)}</text>
+  <text x="820" y="436" text-anchor="middle" font-family="${C.sans}" font-size="${awaySize}" font-weight="bold" fill="${C.ink}">${esc(input.awayTeam)}</text>
+  ${formDots(st?.homeForm ?? null, 260, 462)}
+  ${formDots(st?.awayForm ?? null, 820, 462)}
+  ${rankChip(260, 496, st?.homeRank ?? null)}
+  ${rankChip(820, 496, st?.awayRank ?? null)}
+  <rect x="${W / 2 - 52}" y="268" width="104" height="56" rx="14" fill="rgba(4,8,16,0.78)" stroke="rgba(255,255,255,0.2)"/>
+  <text x="${W / 2}" y="306" text-anchor="middle" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}">VS</text>
 
-  <!-- ═══ باکس تیپ A (چپ - آبی) x90 y520 w420 h530 ═══ -->
-  ${glassBox(90, 520, 420, 530, C.cyan)}
-  <text x="118" y="566" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${C.cyan}" letter-spacing="2.5">TIP A · JUDGE SIDE</text>
-  <text x="482" y="614" text-anchor="end" font-family="${C.mono}" font-size="42" font-weight="bold" fill="${C.cyan}">@${input.oddsA.toFixed(2)}</text>
-  <text x="118" y="678" font-family="${C.sans}" font-size="25" fill="${C.ink}">${tspans(aLines, 118, 678, 36)}</text>
-  <rect x="118" y="912" width="364" height="56" rx="13" fill="rgba(0,0,0,0.5)"/>
-  <text x="140" y="948" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">DUTCH STAKE</text>
-  <text x="460" y="950" text-anchor="end" font-family="${C.mono}" font-size="27" font-weight="bold" fill="${C.ink}">${input.stakeA.toFixed(1)} u</text>
-  <text x="118" y="1010" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">VALUE vs ${input.edgeSource === "PINNACLE" ? "PINNACLE" : "FAIR"} LINE</text>
-  <text x="118" y="1032" font-family="${C.mono}" font-size="20" font-weight="bold" fill="${input.edgeA !== null && input.edgeA >= 0 ? C.emerald : C.rose}">${input.edgeA !== null ? sign(input.edgeA) + "%" : "—"}</text>
+  <!-- ═══ نوار احتمال مدل 1X2 + λ (جزئیات داده تجاری) ═══ -->
+  ${
+    hasProbs && pHome != null && pAway != null
+      ? `
+  <text x="90" y="530" font-family="${C.sans}" font-size="15.5" font-weight="bold" fill="${C.inkDim}" letter-spacing="2">AI MODEL WIN PROBABILITY (1X2)</text>
+  ${probBar1x2(pHome, pDraw ?? 0, pAway, 90, 544, 900, 32)}
+  ${lambdaLine ? `<text x="${W - 90}" y="530" text-anchor="end" font-family="${C.mono}" font-size="14.5" fill="${C.inkFaint}">${esc(lambdaLine)}</text>` : ""}`
+      : ""
+  }
 
-  <!-- ═══ باکس تیپ B (راست - سبز) x570 y520 w420 h530 ═══ -->
-  ${input.teaser ? glassBox(570, 520, 420, 530, C.gold) : glassBox(570, 520, 420, 530, C.emerald)}
-  <text x="598" y="566" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${input.teaser ? C.gold : C.emerald}" letter-spacing="2.5">TIP B · COMPLEMENT</text>
+  <!-- ═══ باکس تیپ A (چپ - آبی) ═══ -->
+  ${glassBox(90, 614, 420, 408, C.cyan)}
+  <text x="118" y="656" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.cyan}" letter-spacing="2.5">TIP A · JUDGE SIDE</text>
+  <text x="482" y="700" text-anchor="end" font-family="${C.mono}" font-size="40" font-weight="bold" fill="${C.cyan}">@${input.oddsA.toFixed(2)}</text>
+  <text x="118" y="758" font-family="${C.sans}" font-size="24" fill="${C.ink}">${tspans(aLines, 118, 758, 34)}</text>
+  <rect x="118" y="912" width="364" height="52" rx="13" fill="rgba(0,0,0,0.5)"/>
+  <text x="140" y="946" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">DUTCH STAKE</text>
+  <text x="460" y="948" text-anchor="end" font-family="${C.mono}" font-size="26" font-weight="bold" fill="${C.ink}">${input.stakeA.toFixed(1)} u</text>
+  <text x="118" y="994" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">VALUE vs ${input.edgeSource === "PINNACLE" ? "PINNACLE" : "FAIR"} LINE</text>
+  <text x="460" y="994" text-anchor="end" font-family="${C.mono}" font-size="20" font-weight="bold" fill="${input.edgeA !== null && input.edgeA >= 0 ? C.emerald : C.rose}">${input.edgeA !== null ? sign(input.edgeA) + "%" : "—"}</text>
+
+  <!-- ═══ باکس تیپ B (راست - سبز/قفل) ═══ -->
+  ${input.teaser ? glassBox(570, 614, 420, 408, C.gold) : glassBox(570, 614, 420, 408, C.emerald)}
+  <text x="598" y="656" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${input.teaser ? C.gold : C.emerald}" letter-spacing="2.5">TIP B · COMPLEMENT</text>
   ${
     input.teaser
-      ? `<g>${lockIcon(880, 558, 13, C.gold)}<text x="962" y="614" text-anchor="end" font-family="${C.sans}" font-size="27" font-weight="bold" fill="${C.gold}" letter-spacing="2">LOCKED</text></g>`
-      : `<text x="962" y="614" text-anchor="end" font-family="${C.mono}" font-size="42" font-weight="bold" fill="${C.emerald}">@${input.oddsB.toFixed(2)}</text>`
+      ? `<g>${lockIcon(880, 648, 13, C.gold)}<text x="962" y="700" text-anchor="end" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}" letter-spacing="2">LOCKED</text></g>`
+      : `<text x="962" y="700" text-anchor="end" font-family="${C.mono}" font-size="40" font-weight="bold" fill="${C.emerald}">@${input.oddsB.toFixed(2)}</text>`
   }
-  <text x="598" y="678" font-family="${C.sans}" font-size="25" fill="${C.ink}">${tspans(bLines, 598, 678, 36)}</text>
-  <rect x="598" y="912" width="364" height="56" rx="13" fill="rgba(0,0,0,0.5)"/>
-  <text x="620" y="948" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">DUTCH STAKE</text>
+  <text x="598" y="758" font-family="${C.sans}" font-size="24" fill="${C.ink}">${tspans(bLines, 598, 758, 34)}</text>
+  <rect x="598" y="912" width="364" height="52" rx="13" fill="rgba(0,0,0,0.5)"/>
+  <text x="620" y="946" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">DUTCH STAKE</text>
   ${
     input.teaser
-      ? `<text x="940" y="950" text-anchor="end" font-family="${C.sans}" font-size="24" font-weight="bold" fill="${C.gold}">VIP ONLY</text>`
-      : `<text x="940" y="950" text-anchor="end" font-family="${C.mono}" font-size="27" font-weight="bold" fill="${C.ink}">${input.stakeB.toFixed(1)} u</text>`
+      ? `<text x="940" y="948" text-anchor="end" font-family="${C.sans}" font-size="23" font-weight="bold" fill="${C.gold}">VIP ONLY</text>`
+      : `<text x="940" y="948" text-anchor="end" font-family="${C.mono}" font-size="26" font-weight="bold" fill="${C.ink}">${input.stakeB.toFixed(1)} u</text>`
   }
-  <text x="598" y="1010" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">VALUE vs ${input.edgeSource === "PINNACLE" ? "PINNACLE" : "FAIR"} LINE</text>
-  <text x="598" y="1032" font-family="${C.mono}" font-size="20" font-weight="bold" fill="${input.edgeB !== null && input.edgeB >= 0 ? C.emerald : C.rose}">${input.edgeB !== null ? sign(input.edgeB) + "%" : "—"}</text>
+  <text x="598" y="994" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">VALUE vs ${input.edgeSource === "PINNACLE" ? "PINNACLE" : "FAIR"} LINE</text>
+  <text x="940" y="994" text-anchor="end" font-family="${C.mono}" font-size="20" font-weight="bold" fill="${input.edgeB !== null && input.edgeB >= 0 ? C.emerald : C.rose}">${input.edgeB !== null ? sign(input.edgeB) + "%" : "—"}</text>
 
-  <!-- ارزش ترکیبی -->
-  <rect x="90" y="1068" width="900" height="46" rx="14" fill="rgba(6,10,20,0.75)" stroke="${C.line}"/>
-  <path d="M120 1082 l14 19 h-28 z" fill="${edgeColor}"/>
-  <text x="150" y="1099" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">COMBINED MODEL VALUE</text>
-  <text x="${W - 118}" y="1100" text-anchor="end" font-family="${C.mono}" font-size="${edgeSize}" font-weight="bold" fill="${edgeColor}">${esc(edgeTxt)}</text>
+  <!-- ═══ نوار پوشش/ریسک/جکپات — جزئیات داده ═══ -->
+  ${
+    st?.coveragePct != null
+      ? `
+  <rect x="90" y="1036" width="900" height="46" rx="14" fill="rgba(6,10,20,0.75)" stroke="${C.line}"/>
+  <text x="${W / 2}" y="1066" text-anchor="middle" font-family="${C.mono}" font-size="18.5" fill="${C.inkDim}">COVERS <tspan fill="${C.emerald}" font-weight="bold">${st.coveragePct.toFixed(1)}%</tspan> OF SCOREBOARD  ·  JOINT-LOSS RISK <tspan fill="${(st.jointLossRiskPct ?? 0) < 10 ? C.emerald : C.rose}" font-weight="bold">${(st.jointLossRiskPct ?? 0).toFixed(1)}%</tspan>  ·  DOUBLE-WIN <tspan fill="${C.gold}" font-weight="bold">${(st.doubleWinProbPct ?? 0).toFixed(1)}%</tspan></text>`
+      : ""
+  }
 
-  <!-- ═══ نوار شیشه‌ای پایینی x90 y1135 w900 h145 ═══ -->
-  ${glassBox(90, 1135, 900, 145, C.gold, 20)}
-  <text x="${W / 2}" y="1178" text-anchor="middle" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">GUARANTEED COVER PROFIT · ${esc(input.timingTitle)}</text>
-  <text x="${W / 2}" y="1222" text-anchor="middle" font-family="${C.mono}" font-size="36" font-weight="bold" fill="${C.gold}">${input.guaranteedPct >= 0 ? "+" : ""}${input.guaranteedPct.toFixed(1)}%</text>
-  <text x="${W / 2}" y="1258" text-anchor="middle" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">${esc(tLines.join(" · "))}</text>
+  <!-- ═══ نوار شیشه‌ای پایینی — سود تضمینی + بهترین زمان ثبت ═══ -->
+  ${glassBox(90, 1096, 900, 132, C.gold, 20)}
+  <text x="${W / 2}" y="1134" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">GUARANTEED COVER PROFIT · ${esc(input.timingTitle)}</text>
+  <text x="290" y="1190" text-anchor="middle" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${C.gold}">+${input.guaranteedPct.toFixed(1)}%</text>
+  <rect x="408" y="1156" width="128" height="34" rx="17" fill="${input.timingState === "OPEN" ? "rgba(61,220,151,0.18)" : "rgba(245,197,66,0.16)"}" stroke="${input.timingState === "OPEN" ? C.emerald : C.gold}" stroke-width="1.6"/>
+  <text x="472" y="1179" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${input.timingState === "OPEN" ? C.emerald : C.gold}" letter-spacing="1">${input.timingState === "OPEN" ? "WINDOW OPEN" : input.timingState === "WAITING" ? "UPCOMING" : input.timingState === "LATE" ? "CLOSING" : "KICKED OFF"}</text>
+  <text x="775" y="1190" text-anchor="middle" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">${esc(tLines.join(" · "))}</text>
+
+  <!-- ═══ خط آموزشی استراتژی v13.2 ═══ -->
+  <rect x="90" y="1240" width="900" height="86" rx="14" fill="rgba(6,10,20,0.72)" stroke="rgba(56,214,245,0.35)" stroke-width="1.4"/>
+  <text x="118" y="1269" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${C.cyan}" letter-spacing="1.6">📚 STRATEGY · ${esc(strategy.title)}</text>
+  <text x="118" y="1293" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">${tspans(strategyLines, 118, 1293, 20)}</text>
 
   <!-- هش -->
-  <rect x="90" y="1296" width="900" height="52" rx="12" fill="rgba(0,0,0,0.55)" stroke="${C.line}"/>
-  <text x="118" y="1330" font-family="${C.mono}" font-size="19" fill="${C.gold}">SHA-256</text>
-  <text x="238" y="1330" font-family="${C.mono}" font-size="19" fill="${C.inkDim}">${esc(input.hashShort)}…</text>
-  <text x="${W - 118}" y="1330" text-anchor="end" font-family="${C.mono}" font-size="18" fill="${C.cyan}">${input.espnUrl ? "VERIFY: espn.com/soccer" : "ESPN-GRADED"} · ${BRAND_HANDLE}</text>
+  <rect x="90" y="1338" width="900" height="48" rx="12" fill="rgba(0,0,0,0.55)" stroke="${C.line}"/>
+  <text x="118" y="1370" font-family="${C.mono}" font-size="18" fill="${C.gold}">SHA-256</text>
+  <text x="238" y="1370" font-family="${C.mono}" font-size="18" fill="${C.inkDim}">${esc(input.hashShort)}…</text>
+  <text x="${W - 118}" y="1370" text-anchor="end" font-family="${C.mono}" font-size="17" fill="${C.cyan}">${input.espnUrl ? "VERIFY: espn.com/soccer" : "ESPN-GRADED"} · ${BRAND_HANDLE}</text>
 
   ${footer(W, H, "NEOBET QUANT PRO · auto-graded on official ESPN scoreboard · not financial advice")}`;
 
@@ -1080,6 +1252,9 @@ export interface LockedTeaserInput {
   oddsA: number;
   hashShort: string;
   freeGift: boolean; // پست ۲ قیف: ۱ کارت کاملاً رایگان در روز
+  /** v13.5 — لوگوی رسمی باشگاه/پرچم تیم (ESPN) — null = مونوگرام */
+  homeLogo?: Buffer | null;
+  awayLogo?: Buffer | null;
 }
 
 export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<Buffer> {
@@ -1087,6 +1262,8 @@ export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<B
   const homeSize = fitSize(input.homeTeam, 380, 30, 15, 700);
   const awaySize = fitSize(input.awayTeam, 380, 30, 15, 700);
   const aLines = wrapText(input.labelAEn, 820, 24, 400, 2);
+  const homeLogo = logoDataUrl(input.homeLogo ?? null);
+  const awayLogo = logoDataUrl(input.awayLogo ?? null);
 
   const overlay = `
   ${brandHeader(W, accent)}
@@ -1094,8 +1271,8 @@ export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<B
   <rect x="${W / 2 - 220}" y="150" width="440" height="46" rx="23" fill="${input.freeGift ? "rgba(61,220,151,0.16)" : "rgba(245,197,66,0.16)"}" stroke="${accent}" stroke-opacity="0.7" stroke-width="1.8"/>
   <text x="${W / 2}" y="181" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${accent}" letter-spacing="3">${input.freeGift ? "FREE GIFT CARD · TODAY" : "VIP TEASER · LOCKED"}</text>
 
-  ${clubBadge(260, 330, 105, input.homeTeam, C.cyan, null)}
-  ${clubBadge(820, 330, 105, input.awayTeam, C.emerald, null)}
+  ${clubBadge(260, 330, 105, input.homeTeam, C.cyan, homeLogo)}
+  ${clubBadge(820, 330, 105, input.awayTeam, C.emerald, awayLogo)}
   <text x="260" y="486" text-anchor="middle" font-family="${C.sans}" font-size="${homeSize}" font-weight="bold" fill="${C.ink}">${esc(input.homeTeam)}</text>
   <text x="820" y="486" text-anchor="middle" font-family="${C.sans}" font-size="${awaySize}" font-weight="bold" fill="${C.ink}">${esc(input.awayTeam)}</text>
   <rect x="${W / 2 - 52}" y="302" width="104" height="56" rx="14" fill="rgba(4,8,16,0.78)" stroke="rgba(255,255,255,0.2)"/>
@@ -1187,4 +1364,114 @@ export async function renderDailyRadarPNG(input: DailyRadarInput): Promise<Buffe
   ${footer(W, H, "NEOBET QUANT PRO · morning transparency radar · not financial advice")}`;
 
   return compose("RADAR", overlay, accent);
+}
+
+// ═════════════════════ v13.5 — بنر بازاریابی هوشمند ساعتی (VIP Marketing Banner) ═════════════════════
+// پوستر ۱۰۸۰×۱۴۴۰ کاملاً انگلیسی (هیچ کلمه فارسی در تصویر) — هر ساعت یک موضوع چرخشی با
+// نماد برداری، KPI واقعی کانال، جدول قیمت تومان/USDT، شبکه‌های پرداخت و CTA عضویت.
+
+export interface VipAdInput {
+  topicKey: string;
+  headline: string;
+  sub: string;
+  bullets: { icon: "shield" | "crown" | "target" | "vault" | "clock" | "bolt"; title: string; line: string }[];
+  /** KPI واقعی — وین‌ریت و سود تجمعی کانال (صفر عدد جعلی) */
+  winRatePct: number | null;
+  settled: number | null;
+  netProfit: number | null;
+  /** قیمت — فقط انگلیسی داخل تصویر (مثلاً "FROM 25 USDT" و "62,500,000 TOMAN") */
+  priceToman: string;
+  priceUsdt: string;
+  hashtag: string;
+  generatedAtIso: string;
+}
+
+const AD_ICON: Record<VipAdInput["bullets"][number]["icon"], (x: number, y: number, c: string) => string> = {
+  shield: (x, y, c) => `<path d="M${x + 16} ${y + 8} l10 -4 10 4 v12 c0 8 -5 12 -10 15 c-5 -3 -10 -7 -10 -15 z" fill="none" stroke="${c}" stroke-width="3"/>`,
+  crown: (x, y, c) => `<path d="M${x + 8} ${y + 26} l3 -14 7 8 7 -13 7 13 7 -8 3 14 z" fill="${c}" fill-opacity="0.85"/>`,
+  target: (x, y, c) => `<circle cx="${x + 26}" cy="${y + 20}" r="12" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${x + 26}" cy="${y + 20}" r="4" fill="${c}"/>`,
+  vault: (x, y, c) => `<rect x="${x + 14}" y="${y + 8}" width="24" height="24" rx="5" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${x + 26}" cy="${y + 20}" r="5.5" fill="none" stroke="${c}" stroke-width="2.4"/><path d="M${x + 26} ${y + 14.5} v11 M${x + 20.5} ${y + 20} h11" stroke="${c}" stroke-width="2"/>`,
+  clock: (x, y, c) => `${clockIcon(x + 26, y + 20, 13, c)}`,
+  bolt: (x, y, c) => `<path d="M${x + 28} ${y + 4} l-12 18 h9 l-4 14 13 -19 h-9 z" fill="${c}" fill-opacity="0.9"/>`,
+};
+
+export async function renderVipAdPNG(input: VipAdInput): Promise<Buffer> {
+  const accentByTopic: Record<string, string> = {
+    DUTCH_COVER: C.emerald,
+    SUPERVISOR_GATE: C.cyan,
+    ESPN_SETTLEMENT: C.emerald,
+    FORTRESS_MODE: C.cyan,
+    SHA_PROOF: C.gold,
+    BANK_STRATEGY: C.gold,
+    TIMING_WINDOWS: C.cyan,
+    SNIPER_LINE: "#a78bfa",
+    COMBO_LINE: C.emerald,
+    LIFETIME_PLAN: C.gold,
+  };
+  const accent = accentByTopic[input.topicKey] ?? C.gold;
+  const good = (input.netProfit ?? 0) >= 0;
+
+  const headlineSize = fitSize(input.headline, 900, 62, 34, 800);
+  const subLines = wrapText(input.sub, 880, 24, 400, 2);
+
+  const bulletRows = input.bullets
+    .slice(0, 4)
+    .map((b, i) => {
+      const y = 680 + i * 122;
+      const titleSize = fitSize(b.title, 700, 25, 17, 700);
+      const lineLines = wrapText(b.line, 720, 18.5, 400, 1);
+      return `
+    <rect x="90" y="${y}" width="900" height="104" rx="18" fill="rgba(6,10,20,0.72)" stroke="${accent}" stroke-opacity="0.4" stroke-width="1.6"/>
+    <circle cx="150" cy="${y + 52}" r="34" fill="rgba(6,10,20,0.65)" stroke="${accent}" stroke-opacity="0.55" stroke-width="2"/>
+    ${AD_ICON[b.icon](116, y + 32, accent)}
+    <text x="204" y="${y + 46}" font-family="${C.sans}" font-size="${titleSize}" font-weight="bold" fill="${C.ink}">${esc(b.title)}</text>
+    <text x="204" y="${y + 76}" font-family="${C.sans}" font-size="18.5" fill="${C.inkDim}">${tspans(lineLines, 204, y + 76, 24)}</text>`;
+    })
+    .join("");
+
+  const kpiBoxes = [
+    { label: "CHANNEL WIN-RATE", value: input.winRatePct != null ? `${input.winRatePct.toFixed(1)}%` : "—", color: C.emerald },
+    { label: "REAL SETTLED TICKETS", value: input.settled != null ? String(input.settled) : "—", color: C.cyan },
+    { label: "NET UNITS (ALL-TIME)", value: input.netProfit != null ? sign(input.netProfit) : "—", color: good ? C.gold : C.rose },
+  ]
+    .map(
+      (k, i) => `
+  ${glassBox(90 + i * 310, 1170, 280, 150, k.color, 16)}
+  <text x="${90 + i * 310 + 140}" y="${1170 + 74}" text-anchor="middle" font-family="${C.mono}" font-size="${fitSize(k.value, 244, 44, 24, 700)}" font-weight="bold" fill="${k.color}">${esc(k.value)}</text>
+  <text x="${90 + i * 310 + 140}" y="${1170 + 118}" text-anchor="middle" font-family="${C.sans}" font-size="13.5" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.2">${esc(k.label)}</text>`
+    )
+    .join("");
+
+  const overlay = `
+  ${brandHeader(W, accent)}
+
+  <!-- تیتر بزرگ + زیرتیتر -->
+  <text x="${W / 2}" y="270" text-anchor="middle" font-family="${C.sans}" font-size="${headlineSize}" font-weight="800" fill="${C.ink}" letter-spacing="1.5">${esc(input.headline)}</text>
+  <text x="${W / 2}" y="322" text-anchor="middle" font-family="${C.sans}" font-size="24" fill="${C.inkDim}">${tspans(subLines, W / 2, 322, 32)}</text>
+
+  <!-- نشان هشتگ موضوع -->
+  <rect x="${W / 2 - 250}" y="392" width="500" height="52" rx="26" fill="rgba(6,10,20,0.8)" stroke="${accent}" stroke-opacity="0.65" stroke-width="2"/>
+  <text x="${W / 2}" y="427" text-anchor="middle" font-family="${C.sans}" font-size="21" font-weight="bold" fill="${accent}" letter-spacing="2.5">${esc(input.hashtag)}</text>
+
+  <!-- نماد بزرگ موضوع: سپر دوتایی با تیک تایید -->
+  <g transform="translate(${W / 2} 572) scale(0.82)" opacity="0.92">
+    <path d="M-120 -52 L0 -104 L120 -52 L120 30 Q120 86 0 118 Q-120 86 -120 30 Z" fill="${accent}" fill-opacity="0.10" stroke="${accent}" stroke-opacity="0.6" stroke-width="3"/>
+    <path d="M-84 -38 L0 -76 L84 -38 L84 22 Q84 66 0 92 Q-84 66 -84 22 Z" fill="none" stroke="${accent}" stroke-opacity="0.35" stroke-width="2"/>
+    <path d="M-34 4 L-8 30 L44 -26" fill="none" stroke="${accent}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- ردیف ویژگی‌ها -->
+  ${bulletRows}
+
+  <!-- KPI واقعی کانال -->
+  ${kpiBoxes}
+
+  <!-- جدول قیمت — ۱۰۰٪ انگلیسی داخل تصویر (منع متن فارسی در پوستر) -->
+  ${glassBox(90, 1340, 900, 52, C.gold, 14, 0.9)}
+  <text x="112" y="1373" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.2">VIP PLANS · 1-MONTH 25 · LIFETIME 50 ★ · 3-MONTH 60</text>
+  <text x="${W - 112}" y="1373" text-anchor="end" font-family="${C.mono}" font-size="16.5" font-weight="bold" fill="${C.gold}">${esc(input.priceUsdt)}  ·  ${esc(input.priceToman)}</text>
+
+  ${footer(W, H, `JOIN ${BRAND_HANDLE} VIP · USDT TRC-20 / SOL / BSC / POLYGON · instant auto-verify`)}`;
+
+  return compose("TEASER", overlay, accent);
 }

@@ -20,12 +20,16 @@ import {
   renderSniperPosterPNG,
   renderLockedTeaserPNG,
   renderDailyRadarPNG,
+  renderVipAdPNG,
   englishSelectionLabel,
   type ResultKind,
+  type VipAdInput,
 } from "./card-render";
 import { fetchTeamLogoBuffer } from "./stadium-store";
 import { fetchEspnEvents, normTeam } from "./live-sources";
+import { computeMatchEngine } from "@/lib/engine/matchEngine";
 import { TIMING_WINDOWS, type TimingWindowKey } from "@/lib/timing-window";
+import { db } from "@/lib/db";
 
 function parseLegs(json: string | null): string[] {
   if (!json) return [];
@@ -81,11 +85,22 @@ async function logoUrlMap(): Promise<Map<string, string>> {
   return map;
 }
 
-/** لوگوی دو تیم یک اسلیپ (به‌صورت بافر PNG کش‌شده) — صفر شکست سخت */
+/**
+ * لوگوی دو تیم یک اسلیپ (به‌صورت بافر PNG کش‌شده) — صفر شکست سخت.
+ * v13.5 — رفع باگ «لوگو در پوستر نیست»: اول لوگوی ذخیره‌شده همان بازی در ردیف Match
+ * (homeLogo/awayLogo از فید ESPN هنگام ثبت بازی) خوانده می‌شود؛ فید زنده فقط فالبک است.
+ * پرچم تیم‌های ملی هم با همین مسیر می‌آید (لوگوی ESPN تیم‌های ملی = پرچم رسمی).
+ */
 async function clubLogos(slip: IssuedSlip): Promise<{ homeLogo: Buffer | null; awayLogo: Buffer | null }> {
   try {
-    const map = await logoUrlMap();
-    const [homeUrl, awayUrl] = [map.get(normTeam(slip.homeTeam)) ?? null, map.get(normTeam(slip.awayTeam)) ?? null];
+    const [dbRow, map] = await Promise.all([
+      slip.matchId
+        ? db.match.findUnique({ where: { id: slip.matchId }, select: { homeLogo: true, awayLogo: true } })
+        : Promise.resolve(null),
+      logoUrlMap().catch(() => new Map<string, string>()),
+    ]);
+    const homeUrl = dbRow?.homeLogo ?? map.get(normTeam(slip.homeTeam)) ?? null;
+    const awayUrl = dbRow?.awayLogo ?? map.get(normTeam(slip.awayTeam)) ?? null;
     const [homeLogo, awayLogo] = await Promise.all([
       fetchTeamLogoBuffer(homeUrl, slip.homeTeam),
       fetchTeamLogoBuffer(awayUrl, slip.awayTeam),
@@ -100,7 +115,7 @@ async function cardBase(slip: IssuedSlip) {
   const legsA = parseLegs(slip.legsA);
   const legsB = parseLegs(slip.legsB);
   const timing = timingLineOf(slip);
-  const logos = await clubLogos(slip);
+  const [logos, stats] = await Promise.all([clubLogos(slip), cardStatsOf(slip)]);
   return {
     homeTeam: slip.homeTeam,
     awayTeam: slip.awayTeam,
@@ -124,6 +139,8 @@ async function cardBase(slip: IssuedSlip) {
     doubleWin: (slip.cellsA && slip.cellsB ? overlapCells(slip.cellsA, slip.cellsB) : false) || false,
     homeLogo: logos.homeLogo,
     awayLogo: logos.awayLogo,
+    /** v13.2 — بلوک داده تجاری پوستر */
+    stats,
   };
 }
 
@@ -136,6 +153,72 @@ function overlapCells(cellsAJson: string, cellsBJson: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * v13.2 — بلوک داده حرفه‌ای پوستر: احتمال ۱X۲ مدل از ماتریس دیکسون-کولز،
+ * λ ترکیبی، پوشش/ریسک/جکپات لحظه صدور، امتیاز سوپروایزر، رتبه/فرم تیم‌ها و استادیوم.
+ * هر عدد از دیتابیس/موتور واقعی است — صفر عدد ساختگی. شکست = null (قالب بدون بلوک رندر می‌شود).
+ */
+async function cardStatsOf(slip: IssuedSlip) {
+  const out = {
+    pHome: null as number | null,
+    pDraw: null as number | null,
+    pAway: null as number | null,
+    lambdaHome: slip.lambdaHome ?? null,
+    lambdaAway: slip.lambdaAway ?? null,
+    coveragePct: (slip.jointLossRiskPct != null ? Math.min(100, 100 - slip.jointLossRiskPct) : null) as number | null,
+    jointLossRiskPct: slip.jointLossRiskPct ?? null,
+    doubleWinProbPct: slip.doubleWinProbPct ?? null,
+    supervisorScore: slip.supervisorScore ?? null,
+    score100:
+      slip.supervisorScore != null
+        ? Math.max(0, Math.min(100, Math.round(((slip.supervisorScore + 280) / 480) * 100)))
+        : (null as number | null),
+    fortress: slip.supervisorApproved && (slip.jointLossRiskPct ?? 99) < 7,
+    archetypeCode: slip.archetypeCode ?? null,
+    archetype: slip.archetype ?? null,
+    homeRank: null as number | null,
+    awayRank: null as number | null,
+    homeForm: null as string | null,
+    awayForm: null as string | null,
+    venue: null as string | null,
+  };
+  try {
+    if (slip.matchId) {
+      const m = await db.match.findUnique({ where: { id: slip.matchId }, include: { referee: true } });
+      if (m) {
+        out.homeRank = m.homeRank ?? null;
+        out.awayRank = m.awayRank ?? null;
+        out.homeForm = m.homeForm ?? null;
+        out.awayForm = m.awayForm ?? null;
+        out.venue = m.venueName ? `${m.venueName}${m.venueCity ? ` · ${m.venueCity}` : ""}` : null;
+        // احتمال ۱X۲ از ماتریس امتیاز موتور (نرمال‌شده روی ۱۰۰٪)
+        const engine = computeMatchEngine(m);
+        const M = engine.dc.matrix;
+        let h = 0;
+        let d = 0;
+        let a = 0;
+        for (let i = 0; i < M.length; i++) {
+          for (let j = 0; j < M[i].length; j++) {
+            const p = M[i][j];
+            if (i > j) h += p;
+            else if (i === j) d += p;
+            else a += p;
+          }
+        }
+        const total = h + d + a;
+        if (total > 0.01) {
+          out.pHome = h / total;
+          out.pDraw = d / total;
+          out.pAway = a / total;
+        }
+      }
+    }
+  } catch {
+    /* آمار جانبی — شکست سخت ندارد */
+  }
+  return out;
 }
 
 /** تصویر کارت کامل فلش‌کارت (English broadcast card — قالب استادیومی 1080×1440) */
@@ -167,12 +250,12 @@ export async function renderSlipResultPNG(slip: IssuedSlip): Promise<Buffer> {
           ? `${slip.stakeA.toFixed(1)} x ${slip.oddsA.toFixed(2)} + ${slip.stakeB.toFixed(1)} x ${slip.oddsB.toFixed(2)} - 100`
           : "both tips lost";
 
-  // وین‌ریت لحظه‌ای کانال (فقط کارت‌های تاییدشده) برای نوار پایینی WIN
+  // وین‌ریت لحظه‌ای کانال (فقط کارت‌های تاییدشده — بدون کارت‌های بازخوانی) برای نوار پایینی WIN
   let winRatePct: number | null = null;
   try {
     const { db } = await import("@/lib/db");
     const rows = await db.issuedSlip.findMany({
-      where: { supervisorApproved: true, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+      where: { supervisorApproved: true, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
       select: { status: true },
     });
     if (rows.length > 0) {
@@ -182,6 +265,10 @@ export async function renderSlipResultPNG(slip: IssuedSlip): Promise<Buffer> {
   } catch {
     /* آمار جانبی — شکست سخت ندارد */
   }
+
+  // v13.5 — «هیچ کلمه فارسی در تصویر»: درس تسویه که قبلاً فارسی (settleNote) در پوستر چاپ
+  // می‌شد با معادل انگلیسیِ وضعیت جایگزین شد.
+  const lessonEn = EN_LESSON[slip.status] ?? null;
 
   const logos = await clubLogos(slip);
   return renderResultPNG({
@@ -198,13 +285,21 @@ export async function renderSlipResultPNG(slip: IssuedSlip): Promise<Buffer> {
     oddsAHint: slip.oddsA,
     oddsBHint: slip.oddsB,
     winRatePct,
-    lesson: slip.settleNote,
+    lesson: lessonEn,
     formula,
     hashShort: slip.hash.slice(0, 12),
     homeLogo: logos.homeLogo,
     awayLogo: logos.awayLogo,
   });
 }
+
+/** درس انگلیسی هر وضعیت تسویه — جایگزین settleNote فارسی روی پوستر (منع متن فارسی در تصویر) */
+const EN_LESSON: Record<string, string> = {
+  WON_A: "Tip A cashed — auto-graded on the official ESPN final score",
+  WON_B: "Tip B cashed — auto-graded on the official ESPN final score",
+  DOUBLE_WIN: "Both tips cashed the same moment — golden sweep recorded",
+  MIDDLE_TRAP: "Both tips lost — honestly recorded, shadow doctrine updated",
+};
 
 export { renderWinRateReportPNG, renderDailyReportPNG, renderRolloverLadderPNG };
 export type { WinRateReportInput, DailyReportInput, RolloverLadderInput } from "./card-render";
@@ -216,3 +311,37 @@ export {
   renderDailyRadarPNG,
 };
 export type { ComboPosterInput, ComboPosterLeg, SniperPosterInput, LockedTeaserInput, DailyRadarInput } from "./card-render";
+
+// ═══════════════════ v13.5 — بنر بازاریابی ساعتی VIP (KPI واقعی + قیمت انگلیسی) ═══════════════════
+
+/**
+ * بنر بازاریابی VIP با اعداد واقعی کانال (وین‌ریت/تعداد تسویه/سود تجمعی).
+ * قیمت‌ها فقط انگلیسی داخل تصویر: USDT + تومان با ارقام لاتین (منع متن فارسی در پوستر).
+ */
+export async function renderVipAdBannerPNG(input: Omit<VipAdInput, "winRatePct" | "settled" | "netProfit" | "priceToman" | "priceUsdt">): Promise<Buffer> {
+  let winRatePct: number | null = null;
+  let settled: number | null = null;
+  let netProfit: number | null = null;
+  try {
+    const rows = await db.issuedSlip.findMany({
+      where: { supervisorApproved: true, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+      select: { status: true, netProfit: true },
+    });
+    if (rows.length > 0) {
+      const wins = rows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+      winRatePct = (wins / rows.length) * 100;
+      settled = rows.length;
+      netProfit = rows.reduce((a, r) => a + (r.netProfit ?? 0), 0);
+    }
+  } catch {
+    /* آمار جانبی — بنر بدون KPI هم رندر می‌شود */
+  }
+  return renderVipAdPNG({
+    ...input,
+    winRatePct,
+    settled,
+    netProfit,
+    priceUsdt: "FROM 25 USDT",
+    priceToman: "LIFETIME 50 USDT ★",
+  });
+}

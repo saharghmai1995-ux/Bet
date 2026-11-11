@@ -6,6 +6,7 @@
 // نمایش داده می‌شود (بدون دکمه «الگوی بعدی» — حذف سرگردانی کاربر).
 // + سوییچ استراتژی اجرایی ضد گوبینگ (دو سایت مجزا ↔ سایت واحد امن)
 // + فیلتر پیش‌فرض «فقط بازی‌های تاییدشده سوپروایزر» + نمایش وتو شده‌ها
+// + v13.4 — تفکیک فلش‌کارت‌های «بازی امروز» از «بازی‌های روزهای آینده» (منطقه زمانی تهران)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -37,6 +38,39 @@ const FILTERS: { key: FilterKey; label: string; icon: typeof Layers; golden?: bo
 
 /** فاصله حداقل بین درخواست‌های LLM در اجرای توالی ۳ بازی برتر (سپر سمت کلاینت) */
 const LLM_GAP_MS = 15_000;
+
+// ═══ v13.4 — تفکیک «بازی امروز» از «روزهای آینده» بر اساس کیک‌آف در منطقه زمانی تهران (UTC+3:30 ثابت، بدون DST) ═══
+
+/** شروع روز تقویمی تهران */
+function tehranDayStart(d = new Date()): Date {
+  const OFFSET = 3.5 * 3600_000;
+  const shifted = d.getTime() + OFFSET;
+  return new Date(Math.floor(shifted / 86_400_000) * 86_400_000 - OFFSET);
+}
+
+type DayKind = "TODAY" | "UPCOMING" | "PAST";
+
+/** دسته روز کارت بر اساس کیک‌آف: پنجره امروز تهران (شروع تا ۲۴ ساعت بعد) vs آینده vs در جریان/گذشته */
+function tehranDayKind(kickoff: string | Date, now = new Date()): DayKind {
+  const start = tehranDayStart(now).getTime();
+  const t = new Date(kickoff).getTime();
+  if (t >= start + 86_400_000) return "UPCOMING";
+  if (t >= start) return "TODAY";
+  return "PAST";
+}
+
+/** ترتیب کاروسل: بازی‌های امروز اول، سپس آینده، سپس در جریان/گذشته (درون هر دسته صعودی کیک‌آف) */
+const DAY_RANK: Record<DayKind, number> = { TODAY: 0, UPCOMING: 1, PAST: 2 };
+
+/** نشان قرصی بالای کارت در نمای کاروسل — دسته روز بازی جاری */
+const DAY_PILL: Record<DayKind, { label: string; cls: string }> = {
+  TODAY: { label: "⚽ بازی امروز", cls: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" },
+  UPCOMING: { label: "📅 روزهای آینده", cls: "border-amber-500/40 bg-amber-500/10 text-amber-300" },
+  PAST: { label: "🕐 در جریان/گذشته", cls: "border-white/10 bg-white/[0.03] text-zinc-400" },
+};
+
+/** ساعت محلی تهران برای خط کیک‌آف (ارقام فارسی با fa-IR) */
+const TEHRAN_TIME = new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tehran" });
 
 export function FlashcardDeck({
   compact = false,
@@ -90,6 +124,21 @@ export function FlashcardDeck({
     }
   }, [cards, filter]);
 
+  // ═══ v13.4 — ترتیب تفکیک‌شده روی «لیست فیلترشده» (بدون دور زدن فیلترها): امروز → آینده → در جریان/گذشته ═══
+  const ordered = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      const ra = DAY_RANK[tehranDayKind(a.match.kickoff)];
+      const rb = DAY_RANK[tehranDayKind(b.match.kickoff)];
+      if (ra !== rb) return ra - rb;
+      return new Date(a.match.kickoff).getTime() - new Date(b.match.kickoff).getTime();
+    });
+    return arr;
+  }, [filtered]);
+
+  // سطل‌بندی نمای گرید: پنجره امروز تهران (۰..۲۴ ساعت) در برابر بقیه (روزهای آینده + در جریان/گذشته)
+  const todayCards = useMemo(() => ordered.filter((c) => tehranDayKind(c.match.kickoff) === "TODAY"), [ordered]);
+  const laterCards = useMemo(() => ordered.filter((c) => tehranDayKind(c.match.kickoff) !== "TODAY"), [ordered]);
 
   // ═══ v8.0 — تحلیل عمیق LLM تقاضامحور (کش ۶۰ دقیقه‌ای + صف سرور ۱۵ ثانیه‌ای) ═══
   const deepLlmFor = useCallback(
@@ -176,24 +225,24 @@ export function FlashcardDeck({
   }, [bulkRunning, cards, deepLlmFor]);
 
   // ایندکس امن بدون افکت — هنگام رندر نرمال می‌شود
-  const safeIndex = filtered.length === 0 ? 0 : index % filtered.length;
+  const safeIndex = ordered.length === 0 ? 0 : index % ordered.length;
   let effectiveIndex = safeIndex;
 
   // «باز کردن فلش‌کارت بازی» از رادار → کاروسل به کارت همان بازی می‌رود
   const [lastWanted, setLastWanted] = useState<string | null>(null);
   if (activeMatchId && activeMatchId !== lastWanted) {
-    const wi = filtered.findIndex((c) => c.match.id === activeMatchId);
+    const wi = ordered.findIndex((c) => c.match.id === activeMatchId);
     if (wi >= 0) {
       setLastWanted(activeMatchId);
       setIndex(wi);
       effectiveIndex = wi;
     }
   }
-  const activeKey = filtered.length > 0 ? filtered[effectiveIndex].key : "";
+  const activeKey = ordered.length > 0 ? ordered[effectiveIndex].key : "";
 
   const go = useCallback(
-    (dir: 1 | -1) => setIndex((i) => (filtered.length === 0 ? 0 : (i + dir + filtered.length) % filtered.length)),
-    [filtered.length]
+    (dir: 1 | -1) => setIndex((i) => (ordered.length === 0 ? 0 : (i + dir + ordered.length) % ordered.length)),
+    [ordered.length]
   );
 
   // کلیدهای جهت‌نما برای کاروسل
@@ -210,6 +259,19 @@ export function FlashcardDeck({
   }, [view, go]);
 
   const loading = matchesCount > 0 && cards.length < matchesCount;
+
+  // v13.4 — رندر مشترک فلش‌کارت در سکشن‌های گرید (همه رفتارها حفظ شده)
+  const cardNode = (c: (typeof ordered)[number]) => (
+    <FlashCard
+      key={c.key}
+      view={c}
+      inCart={cart.includes(c.key)}
+      onToggleCart={() => toggleCart(c.key)}
+      compact={compact}
+      onDeepLlm={() => void deepLlmFor(c.match.id, c.lambdaHome)}
+      deepLlmState={deepLlm[c.match.id] ?? "IDLE"}
+    />
+  );
 
   return (
     <section className="space-y-3" aria-label={title}>
@@ -336,7 +398,7 @@ export function FlashcardDeck({
       </p>
 
       {/* بدنه */}
-      {filtered.length === 0 ? (
+      {ordered.length === 0 ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-center">
           {loading || scanning ? (
             <>
@@ -380,15 +442,29 @@ export function FlashcardDeck({
           <div className="flex justify-center px-8">
             <div className="w-full max-w-md">
               {activeKey && (
-                <FlashCard
-                  key={activeKey}
-                  view={filtered[effectiveIndex]}
-                  inCart={cart.includes(activeKey)}
-                  onToggleCart={() => toggleCart(activeKey)}
-                  compact={compact}
-                  onDeepLlm={() => void deepLlmFor(filtered[effectiveIndex].match.id, filtered[effectiveIndex].lambdaHome)}
-                  deepLlmState={deepLlm[filtered[effectiveIndex].match.id] ?? "IDLE"}
-                />
+                <>
+                  {/* v13.4 — نشان قرصی دسته روز: بازی امروز / روزهای آینده / در جریان (فقط نمای کاروسل) */}
+                  <div className="mb-2 flex justify-center">
+                    <span
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1 rounded-full border px-3 text-[10px] font-semibold sm:text-[11px]",
+                        DAY_PILL[tehranDayKind(ordered[effectiveIndex].match.kickoff)].cls
+                      )}
+                      aria-label={DAY_PILL[tehranDayKind(ordered[effectiveIndex].match.kickoff)].label}
+                    >
+                      {DAY_PILL[tehranDayKind(ordered[effectiveIndex].match.kickoff)].label}
+                    </span>
+                  </div>
+                  <FlashCard
+                    key={activeKey}
+                    view={ordered[effectiveIndex]}
+                    inCart={cart.includes(activeKey)}
+                    onToggleCart={() => toggleCart(activeKey)}
+                    compact={compact}
+                    onDeepLlm={() => void deepLlmFor(ordered[effectiveIndex].match.id, ordered[effectiveIndex].lambdaHome)}
+                    deepLlmState={deepLlm[ordered[effectiveIndex].match.id] ?? "IDLE"}
+                  />
+                </>
               )}
             </div>
           </div>
@@ -411,22 +487,52 @@ export function FlashcardDeck({
             <ChevronLeft className="size-4" />
           </Button>
           <p className="mt-2 text-center text-[11px] text-muted-foreground" aria-live="polite">
-            کارت <b className="font-num" dir="ltr">{index + 1}</b> از <b className="font-num" dir="ltr">{filtered.length}</b> · با کلیدهای جهت‌نما هم می‌توانید ورق بزنید
+            کارت <b className="font-num" dir="ltr">{index + 1}</b> از <b className="font-num" dir="ltr">{ordered.length}</b> · با کلیدهای جهت‌نما هم می‌توانید ورق بزنید
           </p>
+          {/* v13.4 — ساعت محلی کیک‌آف با برچسب تهران */}
+          {activeKey && (
+            <p className="mt-0.5 text-center text-[10px] text-muted-foreground" dir="rtl">
+              ⏰ کیک‌آف: <b className="font-num text-foreground/80">{TEHRAN_TIME.format(new Date(ordered[effectiveIndex].match.kickoff))}</b> تهران
+            </p>
+          )}
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((c) => (
-            <FlashCard
-              key={c.key}
-              view={c}
-              inCart={cart.includes(c.key)}
-              onToggleCart={() => toggleCart(c.key)}
-              compact={compact}
-              onDeepLlm={() => void deepLlmFor(c.match.id, c.lambdaHome)}
-              deepLlmState={deepLlm[c.match.id] ?? "IDLE"}
-            />
-          ))}
+        <div className="space-y-5">
+          {/* v13.4 — گرید دو‌سکشنی: فلش‌کارت‌های بازی‌های امروز جدا از روزهای آینده */}
+          {todayCards.length > 0 && (
+            <section className="space-y-2" aria-label="فلش‌کارت‌های بازی‌های امروز">
+              <div className="flex items-center gap-2">
+                <h3 className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
+                  <span aria-hidden>⚽</span>
+                  فلش‌کارت‌های بازی‌های امروز
+                </h3>
+                <span
+                  className="inline-flex h-7 items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-300"
+                  dir="ltr"
+                >
+                  {faNum(todayCards.length, 0)}
+                </span>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{todayCards.map(cardNode)}</div>
+            </section>
+          )}
+          {laterCards.length > 0 && (
+            <section className="space-y-2" aria-label="فلش‌کارت‌های بازی‌های روزهای آینده">
+              <div className="flex items-center gap-2">
+                <h3 className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                  <span aria-hidden>📅</span>
+                  فلش‌کارت‌های بازی‌های روزهای آینده
+                </h3>
+                <span
+                  className="inline-flex h-7 items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 text-[10px] font-semibold text-amber-300"
+                  dir="ltr"
+                >
+                  {faNum(laterCards.length, 0)}
+                </span>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{laterCards.map(cardNode)}</div>
+            </section>
+          )}
         </div>
       )}
     </section>

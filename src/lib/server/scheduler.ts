@@ -1,14 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// زمان‌بند سرور (Server-Side Automation Loop) — v10.0
+// زمان‌بند سرور (Server-Side Automation Loop) — v13.5 NeoBet Official Broadcast
 //
 // پاسخ به مستقیم‌ترین دستور کارفرما: «سیستم و ارسال پیام‌ها به تلگرام نباید
-// وابسته به مرورگر باشد» + «همگام‌سازی و تسویه خودکار باید اتوماتیک باشد نه دستی»
-//
-// این حلقه با instrumentation.ts هنگام بوت سرور Next.js (runtime nodejs) بالا
-// می‌آید و کاملاً مستقل از مرورگر کار می‌کند:
-//   · هر ۹۰ ثانیه: اسکن ESPN (۳ روز + امروز) → صدور کارت تازه → تسویه FT →
-//     ژورنال/دکترین → انتشار خودکار تلگرام (کارت/نتیجه/گزارش وین‌ریت)
-//   · هر روز ساعت ۲۱:۰۰ تهران: گزارش وین‌ریت تصویری کانال
+// وابسته به مرورگر باشد» + خط لوله جدید کانال‌ها (v13.5):
+//   · هر ۹۰ ثانیه: اسکن ESPN → صدور کارت → تسویه FT → انتشار خودکار:
+//       کانال VIP  = فلش‌کارت‌های تاییدشده (فقط بازی‌های امروز تهران)
+//       کانال عمومی @aineobet = فقط نتایج FT
+//   · ۱۲:۰۰ تهران: ۱ کارت VIP رایگان روزانه (اولویت دژ نفوذناپذیر)
+//   · ۰۹ تا ۲۳ تهران: هر ساعت یک بنر بازاریابی تصویری چرخشی
+//   · ۲۱:۰۰ تهران: کارت نتیجه برایند روزانه → هر دو کانال
+//   · ۲۳:۳۰ تهران: برآیند واقعی شب با افراز مجزا → کانال عمومی
 //   · heartbeat در Setting — برای نمایش «اتوماسیون سرور فعال» در UI
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -18,10 +19,12 @@ import { setSetting } from "./telegram-service";
 const TICK_INTERVAL_MS = 90_000;
 const DAILY_REPORT_HOUR_TEHRAN = 21;
 const DAILY_REPORT_MINUTE_WINDOW = 5; // پنجره ۵ دقیقه‌ای پس از ساعت هدف
-// v13.0 — ساعت‌های قیف کانال عمومی
-const FUNNEL_RADAR_HOUR = 11; // رادار شفافیت صبح
+// v13.5 — ساعت‌های مدیر کانال‌ها
+const DAILY_GIFT_HOUR_TEHRAN = 12; // ۱ کارت VIP رایگان روزانه (اولویت دژ نفوذناپذیر)
 const FUNNEL_PNL_HOUR = 23;   // برآیند واقعی شب
 const FUNNEL_PNL_MINUTE = 30;
+const MARKETING_START_HOUR = 9;  // پنجره بنر بازاریابی ساعتی ۰۹ تا ۲۳ تهران
+const MARKETING_END_HOUR = 23;
 
 interface SchedulerState {
   timer: ReturnType<typeof setInterval> | null;
@@ -92,27 +95,33 @@ async function runTick(): Promise<void> {
       }
     }
 
-    // ═══ v13.0 — ۴) ایجنت مدیر کانال عمومی و VIP (قیف تبدیل @aineobet) ═══
+    // ═══ v13.5 — ۴) مدیر کانال عمومی @aineobet و کانال VIP (خط لوله جدید کارفرما) ═══
+    //   کانال عمومی: فقط نتایج (کارت نتیجه FT از مرحله ۲ می‌آید) + ۱ کارت رایگان روزانه
+    //   (۱۲:۰۰) + بنر بازاریابی ساعتی (۰۹ تا ۲۳) + برآیند شب ۲۳:۳۰
+    //   کانال VIP: فلش‌کارت‌ها (از مرحله ۲ می‌آید) + برآیند روزانه ۲۱:۰۰
     try {
       const funnel = await import("./telegram-service");
-      // پست ۱ — رادار شفافیت ۱۱:۰۰ تهران (Dedupe روزانه داخلی)
-      if (th.hour === FUNNEL_RADAR_HOUR && th.minute < 10) {
-        const ok = await funnel.sendPublicRadar(false);
-        if (ok) console.log("[scheduler] funnel morning radar sent to public channel");
+
+      // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — ۱۲:۰۰ تهران ───
+      if (th.hour === DAILY_GIFT_HOUR_TEHRAN && th.minute < 10) {
+        const gift = await funnel.sendDailyGiftCard(false);
+        if (gift.ok) console.log(`[scheduler] daily free VIP card sent to public (${gift.detail})`);
+        else if (!gift.detail.startsWith("ALREADY")) console.warn(`[scheduler] daily gift card skipped: ${gift.detail}`);
       }
-      // پست ۲ — گیفت + تیزرهای قفل‌شده در پنجره T-60 (Dedupe با outbox)
-      const tq = await funnel.sendFunnelTeasers(false);
-      if (tq.gift || tq.teasers > 0) console.log(`[scheduler] funnel T-60 dispatched: gift=${tq.gift} teasers=${tq.teasers}`);
-      // پست ۳ — بازگشایی قفل + اثبات SHA-256 پس از FT (Dedupe با outbox)
-      const unblurred = await funnel.sendPublicUnblur();
-      if (unblurred > 0) console.log(`[scheduler] funnel unblur proof sent: ${unblurred}`);
-      // پست ۴ — برآیند واقعی شب ۲۳:۳۰ تهران با افراز مجزا (Dedupe روزانه داخلی)
+
+      // ─── بنر بازاریابی هوشمند ساعتی — ۰۹ تا ۲۳ تهران، هر ساعت یک‌بار (Dedupe داخلی) ───
+      if (th.hour >= MARKETING_START_HOUR && th.hour <= MARKETING_END_HOUR) {
+        const ad = await funnel.sendHourlyVipAd(false);
+        if (ad.ok) console.log(`[scheduler] hourly VIP marketing banner sent: ${ad.topic}`);
+      }
+
+      // ─── برآیند واقعی شب ۲۳:۳۰ تهران با افراز مجزا (Dedupe روزانه داخلی) ───
       if (th.hour === FUNNEL_PNL_HOUR && th.minute >= FUNNEL_PNL_MINUTE && th.minute < FUNNEL_PNL_MINUTE + 10) {
         const ok = await funnel.sendNightlyPnl(false);
         if (ok) console.log("[scheduler] funnel nightly disjoint PnL sent to public channel");
       }
     } catch (err) {
-      console.warn("[scheduler] funnel director failed:", err instanceof Error ? err.message : err);
+      console.warn("[scheduler] channel director failed:", err instanceof Error ? err.message : err);
     }
 
     patchSchedulerStatus({ lastTickAt: Date.now(), tickCount: st.tickCount + 1 });

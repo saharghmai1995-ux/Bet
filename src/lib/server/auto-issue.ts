@@ -276,6 +276,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           lambdaAway: engine.dc.lambdaAway,
           /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
           pinnaclePrices: sharpPrices,
+          /** v13.2 — کارت بازخوانی: بازی هنگام صدور از قبل FT بود (هرگز پیش‌بازی صادر/تایید/منتشر نشده) */
+          retroIssued: isFinished,
           /** v11.0 — دفتر سایه: کارت واقعی یا سایه + سنجه‌های لحظه تصمیم */
           supervisorApproved: !shadow,
           supervisorScore: decision.score.raw,
@@ -287,8 +289,11 @@ export async function autoSyncPastAndPresentMatches(options?: {
         await issueSlip(item, { autoIssued: true });
         if (shadow) {
           vetoed += 1;
-        } else if (isFinished) registeredPast += 1;
-        else registeredToday += 1;
+        } else if (isFinished) {
+          // v13.2 — کارت‌های FT همیشه «بازخوانی» هستند؛ دیگر به‌عنوان کارت واقعی تاییدشده
+          // در وین‌ریت کانال شمرده نمی‌شوند (رفع باگ ۳ مورد MIDDLE_TRAP هرگز-صادرنشده)
+          registeredPast += 1;
+        } else registeredToday += 1;
       } catch (err) {
         console.warn(`auto-issue failed for ${ev.externalId}:`, err);
       }

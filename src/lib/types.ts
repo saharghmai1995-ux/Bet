@@ -686,6 +686,8 @@ export interface IssuedSlipDTO {
   supervisorApproved: boolean;
   /** v9.0 — صادرشده توسط خط لوله خودکار سرور (Zero-Click) */
   autoIssued: boolean;
+  /** v13.2 — کارت بازخوانی (بازی FT پیش از صدور) — مستثنا از وین‌ریت واقعی و اعلام کانال */
+  retroIssued: boolean;
   // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
   supervisorScore: number | null;
   vetoReason: string | null;
@@ -770,6 +772,15 @@ export interface LedgerDTO {
     netProfit: number;
     byStatus: Record<string, number>;
   };
+  /** v13.2 — دفتر بازخوانی: کارت‌های چندروزه که هرگز پیش‌بازی صادر نشده‌اند (جدا از آمار واقعی) */
+  retroBook: {
+    total: number;
+    settled: number;
+    wins: number;
+    losses: number;
+    winRate: number | null;
+    netProfit: number;
+  };
   outbox: { id: string; kind: string; ok: boolean; detail: string | null; slipHash: string | null; createdAt: string }[];
   telegram: { configured: boolean; channelSet: boolean };
   // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور + مبنا واحد ───
@@ -777,6 +788,21 @@ export interface LedgerDTO {
   doctrine: DoctrineSummaryDTO[];
   automation: { schedulerActive: boolean; lastTickAt: string | null; lastDailyReportAt: string | null; intervalSec: number };
   unitBasis: { stakePerTicket: number; unitPctOfBankroll: number; exampleBankrollUsd: number };
+  /**
+   * v13.5 — منحنی رشد بانک ۱۰۰۰ واحدی (محاسبه سمت سرور از «تمام» تاریخ کارنامه).
+   * رفع باگ قبلی: منحنی فقط از ۱۲۰ ردیف آخر دیتابیس ساخته می‌شد و کارت‌های بازخوانی
+   * (retroIssued) را هم شامل می‌شد → انتهای منحنی با «سود خالص مجموع» تیتر یکی نبود.
+   * اکنون سرور همه کارت‌های تاییدشده غیربازخوانی تسویه‌شده را به‌ترتیب settledAt جمع می‌زند
+   * و نقطه اول دقیقاً ۱۰۰۰ و نقطه آخر دقیقاً ۱۰۰۰ + stats.netProfit است.
+   */
+  equity: {
+    startBank: number;
+    points: number[];
+    finalBank: number;
+    roiPct: number;
+    /** تعداد کارت‌های واقعاً لحاظ‌شده در منحنی (هم‌مبنا با stats.settled) */
+    basis: number;
+  };
 }
 
 /** آیتم صدور کارت از سبد فلش‌کارت‌ها (بدنه POST /api/settlement/issue) */
@@ -840,6 +866,12 @@ export interface IssueSlipItemDTO {
   pinnaclePrices?: Partial<Record<string, number>>;
   /** v9.0 — بازی وتوشده سوپروایزر هرگز صدور/ارسال نمی‌شود */
   supervisorApproved?: boolean;
+  /**
+   * v13.2 — کارت بازخوانی: بازی هنگام صدور از قبل FT بوده است (خط لوله چندروزه).
+   * هرگز پیش از بازی صادر و منتشر نشده — فقط تسویه کاغذی تحلیلی برای یادگیری دکترین؛
+   * از وین‌ریت کانال، اعلام نتایج و دسته الف مستثناست.
+   */
+  retroIssued?: boolean;
   /** v11.0 — دفتر سایه: سنجه‌های لحظه تصمیم سوپروایزر برای کارت‌های واقعی و سایه */
   supervisorScore?: number | null;
   vetoReason?: string | null;
@@ -849,7 +881,9 @@ export interface IssueSlipItemDTO {
 
 /** v11.0 — آمار عملکرد یک دسته فلش‌کارت (تایید/وتو/سود۱۵/ریسک۱۰/دوبل‌وین) */
 export interface CategoryPerformanceDTO {
-  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER"; // v13.0 — افراز مجزا (هر کارت فقط یک دسته)
+  // v13.4 — کلیدهای فیلتر دک فلش‌کارت (RISK10/BOOSTER/PROFIT15/FORTRESS) برای «پوشش کامل عملکرد هر فیلتر» اضافه شدند
+  // v13.2 — RETRO: دسته پنجم افراز مجزا — کارت‌های بازخوانی (بازی FT پیش از صدور؛ تسویه کاغذی تحلیلی)
+  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER" | "RETRO" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS";
   label: string;
   description: string;
   total: number;
@@ -869,6 +903,12 @@ export interface CategoryPerformanceDTO {
 export interface CategoryPerformanceResponseDTO {
   success: boolean;
   categories: CategoryPerformanceDTO[];
+  /**
+   * v13.4 — پوشش کامل عملکرد هر «فیلتر دک فلش‌کارت» (RISK10/BOOSTER/PROFIT15/FORTRESS/APPROVED/VETOED).
+   * برخلاف `categories` (افراز ۱۰۰٪ مجزا)، این دسته‌ها همپوشان‌اند: یک کارت می‌تواند هم‌زمان
+   * در RISK10 و PROFIT15 شمرده شود. کارت‌های بازخوانی (retroIssued) از عملکرد واقعی حذف می‌شوند.
+   */
+  filterPerformance?: CategoryPerformanceDTO[];
   shadowLedger: {
     approvedSlips: number;
     shadowSlips: number;
