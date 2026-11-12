@@ -19,6 +19,7 @@ import {
   Award,
   ChevronDown,
   Clock,
+  Clock4,
   ExternalLink,
   RefreshCw,
   SearchCheck,
@@ -300,6 +301,10 @@ export function FlashCard({
                 تیپ A — ضریب هدف ~۲
               </p>
               <p className="min-h-[42px] break-words text-[11px] leading-4 text-foreground/90">{pair.labelA}</p>
+              {/* v15.0 — نام رسمی بین‌المللی مارکت (Institutional Execution Metadata) */}
+              {pair.marketAEn && (
+                <p className="mt-1 border-t border-white/10 pt-1 text-[8.5px] leading-3 text-sky-200/70" dir="ltr">Market: {pair.marketAEn}</p>
+              )}
               <div className="mt-1.5 flex items-end justify-between gap-1">
                 <div>
                   <p className="text-[9px] text-muted-foreground">ضریب</p>
@@ -324,6 +329,10 @@ export function FlashCard({
               <p className={`min-h-[42px] break-words text-[11px] leading-4 text-foreground/90 ${isFree ? "select-none blur-[5px]" : ""}`} aria-hidden={isFree}>
                 {pair.labelB}
               </p>
+              {/* v15.0 — نام رسمی بین‌المللی مارکت (Institutional Execution Metadata) */}
+              {pair.marketBEn && (
+                <p className="mt-1 border-t border-white/10 pt-1 text-[8.5px] leading-3 text-emerald-200/70" dir="ltr">Market: {pair.marketBEn}</p>
+              )}
               {isFree ? (
                 <button
                   type="button"
@@ -358,6 +367,12 @@ export function FlashCard({
               </p>
             </div>
           </div>
+
+          {/* ═══ v15.0 — نشان رسمی قانون تسویه (Settlement Rule Badge) ═══ */}
+          <p className="flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1.5 text-[9.5px] font-semibold text-amber-200/90">
+            <Clock4 className="size-3 shrink-0" />
+            قانون تسویه: وقت قانونی ۹۰ دقیقه — بدون وقت اضافه (90 Minutes Regular Time Only)
+          </p>
 
           {/* شاخص‌های کلیدی — v8.0: فرمول صحیح سود واحد / حالت بیمه سرمایه */}
           <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-2.5">
@@ -539,7 +554,7 @@ export function FlashCard({
                 </b>{" "}
                 → امتیاز نهایی <b className="text-amber-300" dir="ltr">{sup.score100}/100</b>
                 <span className="mt-0.5 block text-[9px] text-muted-foreground">
-                  فرمول v11.0: پاداش فریبنده Double-Win حذف شد — ۱۰۰٪ بر پایه پهنای پوشش متعامد و کمینه‌سازی ریسک باخت همزمان (گیت سخت: ریسک &gt; ۹.۸٪ = وتو خودکار)
+                  فرمول v15.0: پاداش فریبنده Double-Win حذف شد — ۱۰۰٪ بر پایه پهنای پوشش و کمینه‌سازی ریسک باخت همزمان (گیت سخت اتمیک: ریسک &gt; ۴۵٪ = وتو خودکار · دژ نفوذناپذیر: ریسک &lt; ۷٪)
                 </span>
               </p>
               {sup.vetoReason && (

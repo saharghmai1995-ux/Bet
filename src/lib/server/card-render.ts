@@ -113,28 +113,31 @@ function tspans(lines: string[], x: number, y: number, lh: number): string {
 // ═════════════════════ برچسب انگلیسی انتخاب‌ها (از کلید بازار) ═════════════════════
 
 const KEY_EN: Record<string, string> = {
-  HOME: "Home Win (1)",
-  DRAW: "Draw (X)",
-  AWAY: "Away Win (2)",
+  HOME: "Full-Time Result: 1 — Home Win",
+  DRAW: "Full-Time Result: X — Draw",
+  AWAY: "Full-Time Result: 2 — Away Win",
   DC_1X: "Double Chance 1X",
   DC_X2: "Double Chance X2",
-  O15: "Over 1.5 Goals",
-  O25: "Over 2.5 Goals",
-  U25: "Under 2.5 Goals",
-  O35: "Over 3.5 Goals",
-  U35: "Under 3.5 Goals",
-  BTTS_Y: "Both Teams To Score · Yes",
-  BTTS_N: "Both Teams To Score · No",
+  O15: "Total Goals: Over 1.5",
+  O25: "Total Goals: Over 2.5",
+  U25: "Total Goals: Under 2.5",
+  O35: "Total Goals: Over 3.5",
+  U35: "Total Goals: Under 3.5",
+  BTTS_Y: "Both Teams To Score: Yes",
+  BTTS_N: "Both Teams To Score: No",
   DNB_HOME: "Draw No Bet · Home",
   DNB_AWAY: "Draw No Bet · Away",
   NO_DRAW: "No Draw (1 or 2)",
-  AH_AWAY_15: "Away +1.5 Asian HCP",
+  AH_AWAY_15: "Asian Handicap: Away +1.5",
+  AH_HOME_15: "Asian Handicap: Home −1.5",
   ASIAN_O20: "Asian Total Over 2.0",
   ASIAN_U20: "Asian Total Under 2.0",
   TGOAL_HOME: "Home To Score 1+",
   TGOAL_AWAY: "Away To Score 1+",
-  WIN_NIL_HOME: "Home Win To Nil",
+  WIN_NIL_HOME: "Home Team to Win to Nil: Yes",
   WIN_NIL_AWAY: "Away Win To Nil",
+  EXACT2: "Exact Total Goals: 2 Goals",
+  HOME_BY_1: "Winning Margin: Home by 1 Goal",
   C_O95: "Corners Over 9.5",
   C_U95: "Corners Under 9.5",
 };
@@ -460,31 +463,28 @@ export interface MatchCardInput {
 
 // ═══════════ v13.2 — دیکشنری آموزشی استراتژی هر الگو (خط پایینی پوستر) ═══════════
 
+/** v15.0 — استراتژی رسمی ۴ الگوی تک‌دکمه‌ای (Atomic Single-Button Patterns) */
 const STRATEGY_EN: Record<string, { title: string; line: string }> = {
   A1: {
-    title: "DEFENSIVE LOCK",
-    line: "One tip rides the open game, the other locks the tactical cage — cash lands unless the match script breaks twice.",
+    title: "OFFICIAL PATTERN 1 · 1X COVER",
+    line: "Two single buttons cover the full 1X space — Home Win and Draw, straight from the Dixon-Coles matrix with zero multiplication.",
   },
   A2: {
-    title: "FAVORITE STRIKE",
-    line: "Back the favorite to convert pressure while the complementary tip hedges the corner siege.",
+    title: "OFFICIAL PATTERN 2 · GOALS SPLIT",
+    line: "Over 2.5 Goals and Exact 2 Goals — two official single-button markets covering 2, 3, 4+ goal scorelines.",
   },
   A3: {
-    title: "ASIAN SPLIT",
-    line: "Asian handicap and goal line own disjoint score corridors — the two tips never fight for the same cells.",
+    title: "OFFICIAL PATTERN 3 · BTTS VS CLEAN SHEET",
+    line: "BTTS Yes against Home Win to Nil — if the visitors score one tip pays, if they do not the other does.",
   },
   A4: {
-    title: "FAST START VS GRIND",
-    line: "First-half storm against second-half card grinder — the clock is priced in two separate markets.",
-  },
-  A5: {
-    title: "CLEAN SHEET BATTLE",
-    line: "Clean-sheet shield against both-teams-score — opposite scoring scripts, one of them always pays.",
+    title: "OFFICIAL PATTERN 4 · HANDICAP SPLIT",
+    line: "Asian Handicap Home −1.5 with Home by 1 Goal — 100% of home-win scorelines covered by two atomic buttons.",
   },
 };
 const STRATEGY_DEFAULT = {
-  title: "DUTCH COVER",
-  line: "Two complementary tips split a 100-unit stake so either winning outcome pays the same guaranteed profit.",
+  title: "ATOMIC DUTCH COVER",
+  line: "Two official single-button markets split a 100-unit stake so either winning outcome pays the same guaranteed profit — zero same-game multiplication.",
 };
 
 /** نقطه‌های فرم تیم (W/D/L) — ۵ بازی آخر */
@@ -632,6 +632,10 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
   ${rankChip(820, 496, st?.awayRank ?? null)}
   <rect x="${W / 2 - 52}" y="268" width="104" height="56" rx="14" fill="rgba(4,8,16,0.78)" stroke="rgba(255,255,255,0.2)"/>
   <text x="${W / 2}" y="306" text-anchor="middle" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}">VS</text>
+
+  <!-- ═══ v15.0 — نشان رسمی قانون تسویه (Settlement Rule Badge) ═══ -->
+  <rect x="${W / 2 - 118}" y="344" width="236" height="42" rx="21" fill="rgba(6,10,20,0.82)" stroke="rgba(245,197,66,0.55)" stroke-width="1.5"/>
+  <text x="${W / 2}" y="372" text-anchor="middle" font-family="${C.sans}" font-size="15.5" font-weight="bold" fill="${C.gold}" letter-spacing="1.2">⏱ 90 MIN · REGULAR TIME ONLY</text>
 
   <!-- ═══ نوار احتمال مدل 1X2 + λ (جزئیات داده تجاری) ═══ -->
   ${
@@ -992,7 +996,7 @@ export async function renderRolloverLadderPNG(input: RolloverLadderInput): Promi
   <text x="${W / 2}" y="200" text-anchor="middle" font-family="${C.sans}" font-size="38" font-weight="bold" fill="${C.gold}" letter-spacing="3">DAILY COMPOUND ROLLOVER</text>
   <text x="${W / 2}" y="240" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">3-step ladder on sub-10% joint-risk approved cards · ${esc(input.dateLabelEn)}</text>
   <rect x="${W / 2 - 240}" y="262" width="480" height="44" rx="22" fill="rgba(61,220,151,0.12)" stroke="rgba(61,220,151,0.5)" stroke-width="1.5"/>
-  <text x="${W / 2}" y="291" text-anchor="middle" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.emerald}" letter-spacing="1.5">${input.principalLock ? "PRINCIPAL-LOCK BOOSTER MODE" : "EQUAL-PROFIT DUTCH MODE"} · RISK GATE 9.8%</text>
+  <text x="${W / 2}" y="291" text-anchor="middle" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.emerald}" letter-spacing="1.5">${input.principalLock ? "PRINCIPAL-LOCK BOOSTER MODE" : "EQUAL-PROFIT DUTCH MODE"} · ATOMIC RISK GATE V15</text>
 
   ${stepBoxes}
 
@@ -1352,7 +1356,7 @@ export async function renderDailyRadarPNG(input: DailyRadarInput): Promise<Buffe
     </g>
     <circle cx="${rcx}" cy="${rcy}" r="7" fill="${accent}"/>
     <text x="${rcx}" y="${rcy - 46}" text-anchor="middle" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${C.inkDim}" letter-spacing="2">LIVE SCAN</text>
-    <text x="${rcx}" y="${rcy + 44}" text-anchor="middle" font-family="${C.sans}" font-size="14" fill="${C.inkDim}">ESPN FEED · SUPERVISOR GATE 9.8%</text>
+    <text x="${rcx}" y="${rcy + 44}" text-anchor="middle" font-family="${C.sans}" font-size="14" fill="${C.inkDim}">ESPN FEED · SUPERVISOR GATE V15</text>
   </g>
 
   ${kpi(90, String(input.scanned), "MATCHES SCANNED", C.cyan)}

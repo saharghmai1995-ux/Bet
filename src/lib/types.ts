@@ -379,6 +379,12 @@ export interface PortfolioPairDTO {
   kind: "SINGLE_MATCH_BUILDER" | "TWO_MATCH_MIX";
   labelA: string;
   labelB: string;
+  /** v15.0 — نام رسمی بین‌المللی مارکت تیپ A (انگلیسی — Institutional Execution Metadata) */
+  marketAEn?: string;
+  /** v15.0 — نام رسمی بین‌المللی مارکت تیپ B (انگلیسی) */
+  marketBEn?: string;
+  /** v15.0 — نشان رسمی قانون تسویه: ۹۰ دقیقه وقت قانونی — بدون وقت اضافه */
+  settlementRule?: string;
   structure: PairStructureDTO;
   selectionA: PortfolioSelectionDTO;
   selectionB: PortfolioSelectionDTO;

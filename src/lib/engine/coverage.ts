@@ -53,6 +53,11 @@ export function selectionCoversCell(key: string, h: number, a: number): boolean 
     case "TGOAL_AWAY": return a >= 1;
     case "WIN_NIL_HOME": return h > a && a === 0;
     case "WIN_NIL_AWAY": return a > h && h === 0;
+    // ═══ v15.0 — بازارهای رسمی تک‌دکمه‌ای (Atomic Single-Button Markets) ═══
+    // استخراج مستقیم از ماتریس دیکسون-کولز — بدون هیچ ضرب گزینه‌های وابسته
+    case "EXACT2": return tot === 2; // دقیقاً ۲ گل کل مسابقه
+    case "AH_HOME_15": return h - a >= 2; // هندیکپ آسیایی میزبان −۱.۵
+    case "HOME_BY_1": return h - a === 1; // برد میزبان دقیقاً با اختلاف ۱ گل
     default: return false; // کرنر/کارت/نیمه اول خارج از ماتریس نمره است
   }
 }

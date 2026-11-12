@@ -24,6 +24,7 @@ import {
   // v13.5.1 — رفع باگ «RENDER_FAILED» بنر بازاریابی ساعتی: این تابع هیچ‌وقت import نشده بود
   renderVipAdBannerPNG,
 } from "./slip-images";
+import { marketEnLabel, SETTLEMENT_RULE_EN, SETTLEMENT_RULE_FA } from "@/lib/engine/orthogonal";
 import type { IssuedSlip } from "@prisma/client";
 
 // ═════════════════════ تنظیمات (Setting + env) ═════════════════════
@@ -35,13 +36,19 @@ export const KEY_PUBLIC_CHANNEL = "telegram_public_channel_id";
 /** v9.0 — کلید سوییچ ارسال خودکار کارت‌های تایید سوپروایزر (پیش‌فرض: روشن) */
 const KEY_AUTODISPATCH = "telegram_autodispatch";
 
-/** v13.2 — کانال پیش‌فرض رسمی کانال VIP کارفرما (شناسه عددی کانال VIP واقعی) */
-export const DEFAULT_VIP_CHANNEL = "-1004487154797";
 /**
  * v13.5 — کانال عمومی رسمی کارفرما: @aineobet (رفع باگ ریشه‌ای انتشار).
  * قبلاً «@aineobet_public» بود که وجود خارجی ندارد → همه پست‌های عمومی «chat not found» می‌شدند.
  */
 export const DEFAULT_PUBLIC_CHANNEL = "@aineobet";
+/** v13.2 — کانال پیش‌فرض رسمی کانال VIP کارفرما (شناسه عددی کانال VIP واقعی) */
+export const DEFAULT_VIP_CHANNEL = "-1004487154797";
+
+/**
+ * v15.0 — لینک رسمی عضویت VIP در کپشن‌های کانال عمومی (تصحیح‌شده به دستور کارفرما:
+ * شناسه درست «@Aineobet_bot» است — نه «@aineobet_vip_bot»).
+ */
+export const VIP_MEMBERSHIP_LINK = "@Aineobet_bot";
 
 /**
  * v13.2 — اعتبارسنجی قالب توکن بات تلگرام.
@@ -214,18 +221,32 @@ function esc(s: string): string {
 /** پیام HTML فلش‌کارت کامل — تیپ A + تیپ B + داچینگ + SHA-256 + لینک ESPN */
 export function buildCardMessage(slip: IssuedSlip): string {
   const kickoff = new Date(slip.kickoff).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+  // v15.0 — نام رسمی بین‌المللی مارکت هر تیپ (Institutional Execution Metadata)
+  const legKeys = (json: string): string[] => {
+    try {
+      const arr = JSON.parse(json);
+      return Array.isArray(arr) ? arr.map((l: { key?: string }) => String(l?.key ?? l)) : [];
+    } catch {
+      return [];
+    }
+  };
+  const marketAEn = marketEnLabel(legKeys(slip.legsA)[0] ?? "");
+  const marketBEn = marketEnLabel(legKeys(slip.legsB)[0] ?? "");
   const lines: string[] = [];
-  lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت تیپ مکمل</b>`);
+  lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت بازار اتمیک رسمی v15.0</b>`);
   lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
   lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
   if (slip.archetype) lines.push(`📐 الگو: ${esc(slip.archetype)}`);
   lines.push("");
   lines.push(`🔹 <b>تیپ A</b> (ضریب ${slip.oddsA.toFixed(2)}): ${esc(slip.labelA)}`);
+  lines.push(`🏷 Market (EN): <i>${esc(marketAEn)}</i>`);
   lines.push(`💵 مبلغ داچینگ A: <b>${slip.stakeA.toFixed(1)}</b> واحد`);
   lines.push("");
   lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): ${esc(slip.labelB)}`);
+  lines.push(`🏷 Market (EN): <i>${esc(marketBEn)}</i>`);
   lines.push(`💵 مبلغ داچینگ B: <b>${slip.stakeB.toFixed(1)}</b> واحد`);
   lines.push("");
+  lines.push(`${esc(SETTLEMENT_RULE_FA)}`);
   // ─── v10.0 — ارزش عددی نسبت به خط مرجع (همیشه عدد دارد) ───
   if (slip.edgeA !== null || slip.edgeB !== null) {
     const isPin = slip.edgeSourceA === "PINNACLE" || slip.edgeSourceB === "PINNACLE";
@@ -579,6 +600,55 @@ export async function previewDispatchQueue(): Promise<{ queue: DispatchQueueItem
 }
 
 /**
+ * v15.0 — تعمیر پرچم‌های انتشار پیش‌ماتره (Premature Broadcast Repair).
+ * ریشه باگ «فلش‌کارت‌های بازی‌های روز به کانال VIP ارسال نمی‌شود»:
+ * کارت‌های بازی‌های فردا/آینده قبل از فعال‌شدن قانون «فقط کارت‌های روزانه» به کانال
+ * رفته و پرچم telegramCard=true گرفته‌اند؛ پس از آن صف روز بازی، کارت را «ارسال‌شده»
+ * می‌بیند و هرگز دوباره ارسال نمی‌کند. این تابع پرچم کارت‌هایی که ارسال موفقشان
+ * بیرون از «روز تهرانِ کیک‌آف» انجام شده را بازنشانی می‌کند تا روز بازی واقعاً منتشر شوند.
+ */
+async function repairPrematureCardFlags(): Promise<number> {
+  try {
+    const flagged = await db.issuedSlip.findMany({
+      where: { status: { in: ["PENDING", "LIVE"] }, telegramCard: true, supervisorApproved: true, retroIssued: false },
+      select: { id: true, kickoff: true },
+      take: 40,
+    });
+    if (flagged.length === 0) return 0;
+    const sends = await db.telegramOutbox.findMany({
+      where: { kind: { in: ["CARD", "FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null }, ok: true },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      select: { slipId: true, createdAt: true },
+    });
+    const lastSend = new Map<string, Date>();
+    for (const s of sends) {
+      if (s.slipId && !lastSend.has(s.slipId)) lastSend.set(s.slipId, s.createdAt);
+    }
+    let repaired = 0;
+    for (const slip of flagged) {
+      const sentAt = lastSend.get(slip.id);
+      if (!sentAt) {
+        // پرچم خورده ولی هیچ ارسال موفقی ثبت نشده — قطعاً پیش‌ماتره یا خطای نیمه‌کاره
+        await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: false } });
+        repaired += 1;
+        continue;
+      }
+      const day = tehranDayRange(slip.kickoff);
+      if (sentAt.getTime() < day.start.getTime() || sentAt.getTime() >= day.end.getTime()) {
+        await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: false } });
+        repaired += 1;
+      }
+    }
+    if (repaired > 0) console.log(`[telegram] v15 premature-card repair: ${repaired} flags reset for match-day re-broadcast`);
+    return repaired;
+  } catch (err) {
+    console.warn("premature card repair failed:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}
+
+/**
  * صف ارسال خودکار دو مرحله‌ای (Auto-Dispatch Queue):
  *   · پیام نوع اول (پیش از بازی): فقط کارت‌های تاییدشده سوپروایزر (وتوشده‌ها اسکیپ)
  *   · پیام نوع دوم (پس از FT): برگه نتیجه + به‌روزرسانی وین‌ریت کل کانال
@@ -598,6 +668,8 @@ export async function autoDispatchApprovedSlips(options?: {
 }> {
   const maxCards = Math.max(1, Math.min(12, options?.maxCards ?? 3));
   const maxResults = Math.max(1, Math.min(12, options?.maxResults ?? 3));
+  // v15.0 — تعمیر پرچم‌های پیش‌ماتره قبل از هر پاس انتشار (ریشه باگ کانال VIP)
+  await repairPrematureCardFlags();
   const [tg, autoOn] = await Promise.all([telegramStatus(), getAutoDispatch()]);
   // v13.5.1 — کارت‌های بازخوانی (retroIssued) وتو نیستند — شمارش وتو فقط برای کارت‌های زنده
   const skippedVetoed = await db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false, telegramCard: false } });
@@ -918,7 +990,7 @@ export async function sendDailyGiftCard(force = false): Promise<{ ok: boolean; d
     `———————\n` +
     `🎁 <b>کارت رایگان امروز — تایید سوپروایزر${isFortress ? " · دژ نفوذناپذیر (ریسک زیر ۷٪)" : ""}</b>\n` +
     `هر روز فقط ۱ کارت کامل و باز در کانال عمومی منتشر می‌شود؛ بقیه کارت‌ها مخصوص اعضای VIP است.\n` +
-    `👑 عضویت VIP: @aineobet_vip_bot`;
+    `👑 عضویت VIP: @Aineobet_bot`;
 
   let ok = false;
   if (photo) {
@@ -957,7 +1029,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "vault", title: "100-UNIT STANDARD", line: "1 unit = 1% of your own bankroll — fully scalable." },
       { icon: "clock", title: "AUTO ESPN GRADING", line: "Every ticket settles itself on the official final score." },
     ],
-    faCaption: "💰 <b>پوشش داچینگ تضمینی — امضای NeoBet</b>\nدو تیپ مکمل یک بلیت ۱۰۰ واحدی را پوشش می‌دهند؛ هر نتیجه‌ای دربیاید سود ثابت همان است.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "💰 <b>پوشش داچینگ تضمینی — امضای NeoBet</b>\nدو تیپ مکمل یک بلیت ۱۰۰ واحدی را پوشش می‌دهند؛ هر نتیجه‌ای دربیاید سود ثابت همان است.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "SUPERVISOR_GATE",
@@ -965,12 +1037,12 @@ export const MARKETING_ADS: MarketingAd[] = [
     sub: "Every match is scanned and scored — high-risk patterns are vetoed before a card is ever issued.",
     hashtag: "#AI_SUPERVISOR",
     bullets: [
-      { icon: "shield", title: "9.8% JOINT-LOSS RISK GATE", line: "Cards above the loss-corridor threshold never reach the channel." },
+      { icon: "shield", title: "V15 ATOMIC RISK GATE", line: "Degenerate pairs above the 45% joint-loss corridor are vetoed before a card is ever issued." },
       { icon: "target", title: "SIX-FACTOR SCORING", line: "Odds movement, λ model, form, variance and market value." },
       { icon: "vault", title: "SHADOW LEDGER", line: "Vetoed cards are paper-settled publicly for full transparency." },
       { icon: "crown", title: "HUMAN-GRADE DISCIPLINE", line: "No chasing, no tilt, no revenge tickets — pure process." },
     ],
-    faCaption: "🛡️ <b>دروازه وتوی سوپروایزر هوشمند</b>\nبازی‌های پرریسک قبل از صدور کارت حذف می‌شوند؛ ریسک باخت همزمان بالای ۹.۸٪ هرگز منتشر نمی‌شود.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "🛡️ <b>دروازه وتوی سوپروایزر هوشمند v15</b>\nبازی‌های پرریسک قبل از صدور کارت حذف می‌شوند؛ زوج‌های افسرنده با ریسک باخت همزمان بالای ۴۵٪ هرگز منتشر نمی‌شوند و ریسک هر کارت روی خودش شفاف چاپ می‌شود.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "ESPN_SETTLEMENT",
@@ -983,7 +1055,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "vault", title: "SHA-256 ON EVERY CARD", line: "Pre-match hash proves the tip was never edited." },
       { icon: "target", title: "WIN / LOSS POSTED ALIKE", line: "Losses are published too — full transparency policy." },
     ],
-    faCaption: "⚡ <b>تسویه ۱۰۰٪ خودکار با اسکوربورد رسمی ESPN</b>\nچند دقیقه پس از سوت پایان، نتیجه هر کارت خودکار اعلام می‌شود — بدون هیچ دخالت انسانی.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "⚡ <b>تسویه ۱۰۰٪ خودکار با اسکوربورد رسمی ESPN</b>\nچند دقیقه پس از سوت پایان، نتیجه هر کارت خودکار اعلام می‌شود — بدون هیچ دخالت انسانی.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "FORTRESS_MODE",
@@ -996,7 +1068,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "clock", title: "BANK-FRIENDLY PACE", line: "Designed for steady compounding, not adrenaline." },
       { icon: "crown", title: "DAILY FORTRESS PICK", line: "The daily free card prefers fortress patterns first." },
     ],
-    faCaption: "🏰 <b>دژ نفوذناپذیر — امن‌ترین خط تولید NeoBet</b>\nفقط کارت‌هایی با ریسک باخت همزمان زیر ۷٪ نشان دژ می‌گیرند؛ کارت رایگان روزانه اولویت با دژهاست.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "🏰 <b>دژ نفوذناپذیر — امن‌ترین خط تولید NeoBet</b>\nفقط کارت‌هایی با ریسک باخت همزمان زیر ۷٪ نشان دژ می‌گیرند؛ کارت رایگان روزانه اولویت با دژهاست.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "SHA_PROOF",
@@ -1009,7 +1081,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "shield", title: "ESPN VERIFICATION LINK", line: "Each card carries its official ESPN match link." },
       { icon: "crown", title: "AUDIT-FRIENDLY", line: "Anyone can re-verify the full track record." },
     ],
-    faCaption: "🔐 <b>اثبات SHA-256 پیش از بازی</b>\nهش هر کارت قبل از شروع مسابقه منتشر می‌شود؛ بعد از بازی هم همان است — صفر ادیت، صفر حذف.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "🔐 <b>اثبات SHA-256 پیش از بازی</b>\nهش هر کارت قبل از شروع مسابقه منتشر می‌شود؛ بعد از بازی هم همان است — صفر ادیت، صفر حذف.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "BANK_STRATEGY",
@@ -1022,7 +1094,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "shield", title: "DRAWDOWN CONTROLLED", line: "Veto gate keeps the loss-corridor rare and small." },
       { icon: "vault", title: "TRACKED IN PUBLIC", line: "The bank growth curve is computed from real settled cards." },
     ],
-    faCaption: "📈 <b>نقشه رشد بانک ۱۰۰۰ واحدی</b>\nهر کارت ۱۰۰ واحد ثابت روی بانک ۱۰۰۰ واحدی — رشد قابل اندازه‌گیری و شفاف، بدون مارتینگل.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "📈 <b>نقشه رشد بانک ۱۰۰۰ واحدی</b>\nهر کارت ۱۰۰ واحد ثابت روی بانک ۱۰۰۰ واحدی — رشد قابل اندازه‌گیری و شفاف، بدون مارتینگل.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "TIMING_WINDOWS",
@@ -1035,7 +1107,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "target", title: "LATE UNDERDOG PEAK", line: "The best underdog price often lands in the last 30 minutes." },
       { icon: "vault", title: "PRINTED ON THE CARD", line: "The exact Tehran-time window is on every poster." },
     ],
-    faCaption: "⏱️ <b>بهترین ساعت ثبت ضریب — روی خود کارت</b>\nهر پوستر پنجره دقیق ثبت (به وقت تهران) را چاپ می‌کند؛ در پنجره درست وارد شوید.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "⏱️ <b>بهترین ساعت ثبت ضریب — روی خود کارت</b>\nهر پوستر پنجره دقیق ثبت (به وقت تهران) را چاپ می‌کند؛ در پنجره درست وارد شوید.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "COMBO_LINE",
@@ -1048,7 +1120,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "target", title: "MONTE-CARLO 10K RUNS", line: "Joint probability is simulated, not guessed." },
       { icon: "shield", title: "DISJOINT ACCOUNTING", line: "A combo ticket never counts in two product lines." },
     ],
-    faCaption: "🧩 <b>موتور میکس هوشمند — اعتماد مونت‌کارلو</b>\nپایه‌های مستقل با احتمال مشترک شبیه‌سازی‌شده روی پوستر چاپ می‌شود؛ هیچ عدد ساختگی وجود ندارد.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "🧩 <b>موتور میکس هوشمند — اعتماد مونت‌کارلو</b>\nپایه‌های مستقل با احتمال مشترک شبیه‌سازی‌شده روی پوستر چاپ می‌شود؛ هیچ عدد ساختگی وجود ندارد.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "SNIPER_LINE",
@@ -1061,7 +1133,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "bolt", title: "FRACTIONAL KELLY 0.15x", line: "Quarter-Kelly discipline on every shot." },
       { icon: "crown", title: "SINGLE SHOT ONLY", line: "One sniper per match — no parlays of longshots." },
     ],
-    faCaption: "🎯 <b>تک‌تیرانداز ضریب بالا — ارزش پنهان بازار</b>\nشات‌های تک با استیک کپ‌شده و لبه ریورس‌پواسون؛ بانک شما هرگز گروگان شات بلند نیست.\n👑 عضویت VIP: @aineobet_vip_bot",
+    faCaption: "🎯 <b>تک‌تیرانداز ضریب بالا — ارزش پنهان بازار</b>\nشات‌های تک با استیک کپ‌شده و لبه ریورس‌پواسون؛ بانک شما هرگز گروگان شات بلند نیست.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "LIFETIME_PLAN",
@@ -1074,7 +1146,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "bolt", title: "INSTANT USDT AUTO-VERIFY", line: "TRC-20 / SOL / BSC / Polygon — 10-second activation." },
       { icon: "shield", title: "CARD-TO-CARD IN TOMAN", line: "Iranian bank transfer accepted inside the bot." },
     ],
-    faCaption: "♾️ <b>اشتراک مادام‌العمر — فقط یک پرداخت</b>\nهمه فلش‌کارت‌ها، برآیند روزانه و کل خط تولید کوانتوم، برای همیشه.\nپرداخت: USDT (TRC20/SOL/BSC/Polygon) یا کارت‌به‌کارت تومانی داخل ربات.\n👑 عضویت: @aineobet_vip_bot",
+    faCaption: "♾️ <b>اشتراک مادام‌العمر — فقط یک پرداخت</b>\nهمه فلش‌کارت‌ها، برآیند روزانه و کل خط تولید کوانتوم، برای همیشه.\nپرداخت: USDT (TRC20/SOL/BSC/Polygon) یا کارت‌به‌کارت تومانی داخل ربات.\n👑 عضویت: @Aineobet_bot",
   },
 ];
 

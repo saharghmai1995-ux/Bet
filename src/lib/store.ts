@@ -257,7 +257,9 @@ export const useQuantStore = create<AppState>()(
       setActiveRules: (rules) => set({ activeRules: rules }),
     }),
     {
-      name: "football-quant-v5",
+      // v15.0 — کلید کش جدید «Clean-Slate Ledger»: کارنامه قدیمی با ضرب درون‌بازی
+      // کاملاً از حافظه مرورگر پاک می‌شود و دفتر v15 با ۴ الگوی اتمیک بازمحاسبه می‌گردد
+      name: "neobet_v15_clean_ledger",
       storage: createJSONStorage(() => localStorage),
       // فقط کانفیگ و سبد پایدار می‌مانند — داده‌های زنده سرورمحورند
       partialize: (st) => ({ config: st.config, cart: st.cart, bankroll: st.bankroll }),

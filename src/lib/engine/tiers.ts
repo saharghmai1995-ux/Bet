@@ -11,6 +11,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { FlashcardView } from "@/lib/autopilot-types";
+import { assertNoSameGameMultiply } from "./orthogonal";
 
 /** یک لِگ امن میکس (پایه اصلی قاضی — Anchor) */
 export interface ComboLeg {
@@ -130,6 +131,12 @@ export function buildSmartCombos(cards: FlashcardView[]): { safe: SmartCombo | n
 
   let safe: SmartCombo | null = null;
   for (const pair of combos(legs, 2)) {
+    // v15.0 — نگهبان رسمی روی هر میکس نهایی: ضرب هم‌بازی مطلقاً ممنوع
+    try {
+      assertNoSameGameMultiply(pair, "combo2");
+    } catch {
+      continue;
+    }
     const totalOdds = r2(pair[0].odds * pair[1].odds);
     if (totalOdds < D2_MIN || totalOdds > D2_MAX) continue;
     const jointProb = pair[0].prob * pair[1].prob;
@@ -150,6 +157,12 @@ export function buildSmartCombos(cards: FlashcardView[]): { safe: SmartCombo | n
 
   let treble: SmartCombo | null = null;
   for (const triple of combos(legs, 3)) {
+    // v15.0 — نگهبان رسمی روی هر میکس نهایی: ضرب هم‌بازی مطلقاً ممنوع
+    try {
+      assertNoSameGameMultiply(triple, "combo3");
+    } catch {
+      continue;
+    }
     const totalOdds = r2(triple[0].odds * triple[1].odds * triple[2].odds);
     if (totalOdds < T3_MIN || totalOdds > T3_MAX) continue;
     const jointProb = triple[0].prob * triple[1].prob * triple[2].prob;

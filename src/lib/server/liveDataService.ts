@@ -131,8 +131,8 @@ interface EspnScoreInfo {
 }
 
 /** نقشه اسکوربورد ESPN امروز+دیروز — بر اساس externalId و تطبیق نام تیم */
-async function loadEspnScoreWindow(): Promise<{ byId: Map<string, EspnScoreInfo>; byName: Map<string, EspnScoreInfo>; count: number }> {
-  const events: LiveMatchEvent[] = await fetchEspnEvents(-RESULT_WINDOW_DAYS, 0);
+async function loadEspnScoreWindow(days = RESULT_WINDOW_DAYS): Promise<{ byId: Map<string, EspnScoreInfo>; byName: Map<string, EspnScoreInfo>; count: number }> {
+  const events: LiveMatchEvent[] = await fetchEspnEvents(-days, 0);
   const byId = new Map<string, EspnScoreInfo>();
   const byName = new Map<string, EspnScoreInfo>();
   for (const ev of events) {
@@ -192,9 +192,10 @@ function settlementProfit(
 /**
  * قلب موتور: بررسی همه کارت‌های در انتظار با فید FT واقعی ESPN و تسویه خودکار.
  */
-export async function settleFinishedSlips(options?: { notify?: boolean }): Promise<SettlementSyncResultDTO> {
+export async function settleFinishedSlips(options?: { notify?: boolean; /** v15.0 — پنجره جستجوی نتیجه (پیش‌فرض ۳ روز؛ بازمحاسبه Clean-Slate: ۷ روز) */ windowDays?: number }): Promise<SettlementSyncResultDTO> {
   const t0 = Date.now();
   const notify = options?.notify !== false;
+  const windowDays = options?.windowDays ?? RESULT_WINDOW_DAYS;
   const settled: SettlementSyncResultDTO["settled"] = [];
   let liveCount = 0;
   let notified = 0;
@@ -204,7 +205,7 @@ export async function settleFinishedSlips(options?: { notify?: boolean }): Promi
   let notifyBudget = NOTIFY_CAP;
 
   const [{ byId, byName, count }, pendingSlips] = await Promise.all([
-    loadEspnScoreWindow(),
+    loadEspnScoreWindow(windowDays),
     db.issuedSlip.findMany({
       where: { status: { in: ["PENDING", "LIVE"] } },
       orderBy: { createdAt: "asc" },

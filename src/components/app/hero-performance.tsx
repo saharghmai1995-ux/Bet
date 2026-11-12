@@ -245,7 +245,7 @@ function VetoEfficiency({ approved, vetoed, scanned, savedByVeto }: { approved: 
         <div className="h-1.5 flex-1 bg-rose-500/50" />
       </div>
       <p className="text-[10px] leading-4 text-muted-foreground">
-        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با آستانه باخت همزمان ۹.۸٪ وتو شده‌اند.
+        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با گیت اتمیک v15 وتو شده‌اند.
       </p>
       {savedByVeto > 0 && (
         <p

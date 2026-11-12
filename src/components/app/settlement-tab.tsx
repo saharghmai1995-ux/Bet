@@ -24,6 +24,7 @@ import {
   ExternalLink,
   EyeOff,
   Film,
+  History,
   Link2,
   Loader2,
   Lock,
@@ -102,6 +103,8 @@ export function SettlementTab() {
   // ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر + شبیه‌ساز فید کانال ═══
   const [autoDispatch, setAutoDispatch] = useState(true);
   const [dispatching, setDispatching] = useState(false);
+  // v15.0 — بازمحاسبه Clean-Slate دفتر (۴ الگوی اتمیک رسمی)
+  const [recalcing, setRecalcing] = useState(false);
   const [feed, setFeed] = useState<{ kind: string; matchLabel: string; message: string; status?: string }[]>([]);
   const [feedOpen, setFeedOpen] = useState(false);
   // ═══ v10.0 — ماشین‌حساب بانک‌رول شخصی (۱ واحد = ریسک هر کارت ÷ ۱۰۰) ═══
@@ -229,6 +232,37 @@ export function SettlementTab() {
       setDispatching(false);
     }
   }, [loadFeed, loadLedger]);
+
+  // ─── v15.0 — بازمحاسبه Clean-Slate دفتر با ۴ الگوی اتمیک رسمی ───
+  const recalcV15 = useCallback(async () => {
+    setRecalcing(true);
+    try {
+      const res = await fetch("/api/settlement/v15-recalculate", { method: "POST" });
+      const data = (await res.json()) as {
+        success: boolean;
+        error?: string;
+        rescanned?: { recalculated: number; todayPending: number; vetoed: number; settled: number };
+        ledgerV15?: { settled: number; winRatePct: number; netProfitUnits: number; wonA: number; wonB: number; doubleWin: number; middleTrap: number };
+      };
+      if (!data.success) {
+        toast.error(data.error ?? "بازمحاسبه Clean-Slate ناموفق بود");
+        return;
+      }
+      const lv = data.ledgerV15;
+      toast.success("🧹 دفتر Clean-Slate v15.0 ساخته شد — همه کارت‌ها با ۴ الگوی اتمیک رسمی بازمحاسبه شدند", {
+        description: lv
+          ? `${faNum(lv.settled, 0)} کارت تسویه‌شده · وین‌ریت ${faNum(lv.winRatePct, 1)}٪ · سود خالص ${lv.netProfitUnits >= 0 ? "+" : "−"}${faNum(Math.abs(lv.netProfitUnits), 1)} واحد (${faNum(lv.wonA, 0)}A/${faNum(lv.wonB, 0)}B/${faNum(lv.doubleWin, 0)}جکپات/${faNum(lv.middleTrap, 0)}تله)`
+          : undefined,
+      });
+      await loadLedger();
+      await loadCategories();
+      await loadFeed();
+    } catch {
+      toast.error("خطای شبکه در بازمحاسبه Clean-Slate");
+    } finally {
+      setRecalcing(false);
+    }
+  }, [loadLedger, loadCategories, loadFeed]);
 
   // ─── ساخت بدنه صدور از آیتم‌های سبد (تطبیق میکس دو بازی با externalId ESPN) ───
   const buildIssueItem = useCallback(
@@ -931,6 +965,17 @@ export function SettlementTab() {
             <Button size="sm" variant="outline" className="h-8 gap-1 border-white/15 text-[11px] text-foreground/80" onClick={() => { setFeedOpen((v) => !v); void loadFeed(); }}>
               <MonitorSmartphone className="size-3" />
               {feedOpen ? "بستن شبیه‌ساز فید کانال" : "پیش‌نمایش زنده فید کانال (شبیه‌ساز)"}
+            </Button>
+            {/* ═══ v15.0 — بازمحاسبه Clean-Slate با ۴ الگوی اتمیک رسمی ═══ */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1 whitespace-nowrap border-amber-500/40 px-4 py-2.5 text-[11px] text-amber-300 hover:bg-amber-500/10"
+              onClick={() => void recalcV15()}
+              disabled={recalcing}
+            >
+              {recalcing ? <Loader2 className="size-3 animate-spin" /> : <History className="size-3" />}
+              🧹 بازمحاسبه Clean-Slate دفتر با ۴ الگوی اتمیک v15.0
             </Button>
           </div>
 

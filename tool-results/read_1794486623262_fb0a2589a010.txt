@@ -1,0 +1,1403 @@
+     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→// سرویس کانال تلگرام VIP (Telegram VIP Broadcaster) — v7.0
+     3→//
+     4→//   ۱) انتشار فلش‌کارت کامل: تصویر فوتبالی + تیپ A + تیپ B + مبالغ داچینگ +
+     5→//      هش SHA-256 + لینک راستی‌آزمایی ESPN (پیام HTML فرمت‌بندی‌شده)
+     6→//   ۲) حالت تیزر جذب کاربر: نام مسابقه + درصد سود تضمینی + تیپ A —
+     7→//      تیپ B سانسور می‌شود (🔒 [مخصوص اعضای کانال VIP]) تا کاربران به خرید
+     8→//      اشتراک VIP ترغیب شوند.
+     9→//   ۳) اعلام خودکار نتیجه پس از FT: تصویر جام پیروزی برای کارت‌های برنده،
+    10→//      تصویر رختکن بهم‌ریخته برای کارت‌های بازنده (شفافیت کامل).
+    11→//
+    12→// توکن بات: env TELEGRAM_BOT_TOKEN یا ذخیره‌شده در Setting (مودال تنظیمات)
+    13→// کانال: env TELEGRAM_VIP_CHANNEL_ID یا Setting — v8.0 پیش‌فرض رسمی کانال: @aineobet
+    14→// ─────────────────────────────────────────────────────────────────────────────
+    15→
+    16→import { db } from "@/lib/db";
+    17→import {
+    18→  renderSlipCardPNG,
+    19→  renderSlipResultPNG,
+    20→  renderSlipTeaserPNG,
+    21→  renderWinRateReportPNG,
+    22→  renderDailyReportPNG,
+    23→  renderDailyRadarPNG,
+    24→  // v13.5.1 — رفع باگ «RENDER_FAILED» بنر بازاریابی ساعتی: این تابع هیچ‌وقت import نشده بود
+    25→  renderVipAdBannerPNG,
+    26→} from "./slip-images";
+    27→import type { IssuedSlip } from "@prisma/client";
+    28→
+    29→// ═════════════════════ تنظیمات (Setting + env) ═════════════════════
+    30→
+    31→const KEY_TOKEN = "telegram_bot_token";
+    32→const KEY_CHANNEL = "telegram_channel_id";
+    33→/** v13.0 — کانال عمومی ویترین (Public Showcase) — جدا از کانال VIP */
+    34→export const KEY_PUBLIC_CHANNEL = "telegram_public_channel_id";
+    35→/** v9.0 — کلید سوییچ ارسال خودکار کارت‌های تایید سوپروایزر (پیش‌فرض: روشن) */
+    36→const KEY_AUTODISPATCH = "telegram_autodispatch";
+    37→
+    38→/** v13.2 — کانال پیش‌فرض رسمی کانال VIP کارفرما (شناسه عددی کانال VIP واقعی) */
+    39→export const DEFAULT_VIP_CHANNEL = "-1004487154797";
+    40→/**
+    41→ * v13.5 — کانال عمومی رسمی کارفرما: @aineobet (رفع باگ ریشه‌ای انتشار).
+    42→ * قبلاً «@aineobet_public» بود که وجود خارجی ندارد → همه پست‌های عمومی «chat not found» می‌شدند.
+    43→ */
+    44→export const DEFAULT_PUBLIC_CHANNEL = "@aineobet";
+    45→
+    46→/**
+    47→ * v13.2 — اعتبارسنجی قالب توکن بات تلگرام.
+    48→ * توکن معتبر = <bot_id>:<hash> مثل «9147801427:AAH2...» (۴۶ کاراکتر).
+    49→ * باگ ریشه‌ای کشف‌شده: توکن ناقص (فقط بخش hash) ذخیره شده بود → همه ارسال‌ها 404 Not Found.
+    50→ */
+    51→export function isValidBotTokenFormat(token: string): boolean {
+    52→  return /^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(String(token ?? "").trim());
+    53→}
+    54→
+    55→/** v13.2 — راستی‌آزمایی زنده توکن با متد getMe — نام کاربری بات را برمی‌گرداند */
+    56→export async function verifyBotToken(token: string): Promise<{ ok: boolean; username: string | null; detail: string }> {
+    57→  try {
+    58→    const res = await fetch(`https://api.telegram.org/bot${token.trim()}/getMe`, { cache: "no-store" });
+    59→    const json = (await res.json()) as { ok?: boolean; result?: { username?: string }; description?: string };
+    60→    if (json.ok && json.result?.username) return { ok: true, username: json.result.username, detail: `@${json.result.username}` };
+    61→    return { ok: false, username: null, detail: json.description ?? `HTTP ${res.status}` };
+    62→  } catch (err) {
+    63→    return { ok: false, username: null, detail: err instanceof Error ? err.message : "network error" };
+    64→  }
+    65→}
+    66→
+    67→export async function getSetting(key: string): Promise<string | null> {
+    68→  try {
+    69→    const row = await db.setting.findUnique({ where: { key } });
+    70→    return row?.value ?? null;
+    71→  } catch {
+    72→    return null;
+    73→  }
+    74→}
+    75→
+    76→export async function setSetting(key: string, value: string): Promise<void> {
+    77→  await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
+    78→}
+    79→
+    80→async function botToken(): Promise<string | null> {
+    81→  const stored = await getSetting(KEY_TOKEN);
+    82→  return (stored && stored.trim()) || process.env.TELEGRAM_BOT_TOKEN || null;
+    83→}
+    84→
+    85→async function channelId(): Promise<string | null> {
+    86→  const stored = await getSetting(KEY_CHANNEL);
+    87→  const fromEnv = process.env.TELEGRAM_VIP_CHANNEL_ID;
+    88→  // v8.0 — کانال @aineobet پیش‌فرض رسمی است؛ تنظیم کاربر/env در اولویت است
+    89→  return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_VIP_CHANNEL;
+    90→}
+    91→
+    92→/** v13.0 — کانال عمومی ویترین (Public Showcase Chat ID) — پیش‌فرض @aineobet_public */
+    93→export async function publicChannelId(): Promise<string | null> {
+    94→  const stored = await getSetting(KEY_PUBLIC_CHANNEL);
+    95→  const fromEnv = process.env.TELEGRAM_PUBLIC_CHANNEL_ID;
+    96→  return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_PUBLIC_CHANNEL;
+    97→}
+    98→
+    99→export async function telegramStatus(): Promise<{
+   100→  configured: boolean;
+   101→  channelSet: boolean;
+   102→  publicSet: boolean;
+   103→  /** v13.2 — قالب توکن معتبر است؟ (تشخیص زودهنگام توکن ناقص بدون فراخوانی API) */
+   104→  tokenFormat: boolean;
+   105→}> {
+   106→  const [token, channel, pub] = await Promise.all([botToken(), channelId(), publicChannelId()]);
+   107→  return {
+   108→    configured: Boolean(token),
+   109→    channelSet: Boolean(channel),
+   110→    publicSet: Boolean(pub),
+   111→    tokenFormat: token ? isValidBotTokenFormat(token) : false,
+   112→  };
+   113→}
+   114→
+   115→// ═══════════ v9.0 — سوییچ ارسال خودکار (پیش‌فرض روشن) ═══════════
+   116→
+   117→export async function getAutoDispatch(): Promise<boolean> {
+   118→  const v = await getSetting(KEY_AUTODISPATCH);
+   119→  return v === null ? true : v === "on";
+   120→}
+   121→
+   122→export async function setAutoDispatch(on: boolean): Promise<void> {
+   123→  await setSetting(KEY_AUTODISPATCH, on ? "on" : "off");
+   124→}
+   125→
+   126→// ═════════════════════ فرستنده پایه Bot API ═════════════════════
+   127→
+   128→async function tgCall(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; detail: string }> {
+   129→  const token = await botToken();
+   130→  if (!token) return { ok: false, detail: "NO_TOKEN" };
+   131→  // v13.2 — سپر توکن ناقص: خطای 404 مبهم تلگرام را با پیام دقیق جایگزین می‌کند
+   132→  if (!isValidBotTokenFormat(token)) return { ok: false, detail: "INVALID_TOKEN_FORMAT" };
+   133→  try {
+   134→    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+   135→      method: "POST",
+   136→      headers: { "Content-Type": "application/json" },
+   137→      body: JSON.stringify(body),
+   138→      cache: "no-store",
+   139→    });
+   140→    const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
+   141→    if (json.ok) return { ok: true, detail: `message:${json.result?.message_id ?? "?"}` };
+   142→    return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
+   143→  } catch (err) {
+   144→    return { ok: false, detail: err instanceof Error ? err.message : "network error" };
+   145→  }
+   146→}
+   147→
+   148→async function tgSendPhotoTo(
+   149→  chatId: string | null,
+   150→  photo: Buffer,
+   151→  caption: string,
+   152→  filename = "slip-card.png",
+   153→  captionless = false
+   154→): Promise<{ ok: boolean; detail: string }> {
+   155→  const token = await botToken();
+   156→  if (!token) return { ok: false, detail: "NO_TOKEN" };
+   157→  if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
+   158→  // v13.2 — سپر توکن ناقص (بخش hash بدون bot_id) — ریشه باگ «انتشار انجام نمیشه»
+   159→  if (!isValidBotTokenFormat(token)) return { ok: false, detail: "INVALID_TOKEN_FORMAT" };
+   160→  try {
+   161→    const form = new FormData();
+   162→    form.append("chat_id", chatId);
+   163→    if (!captionless) {
+   164→      form.append("caption", caption.slice(0, 1024));
+   165→      form.append("parse_mode", "HTML");
+   166→    }
+   167→    form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), filename);
+   168→    const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: form });
+   169→    const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
+   170→    if (json.ok) return { ok: true, detail: `photo:${json.result?.message_id ?? "?"}${captionless ? ":broadcast" : ""}` };
+   171→    return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
+   172→  } catch (err) {
+   173→    return { ok: false, detail: err instanceof Error ? err.message : "network error" };
+   174→  }
+   175→}
+   176→
+   177→async function tgSendPhoto(
+   178→  photo: Buffer,
+   179→  caption: string,
+   180→  filename = "slip-card.png",
+   181→  captionless = false
+   182→): Promise<{ ok: boolean; detail: string }> {
+   183→  return tgSendPhotoTo(await channelId(), photo, caption, filename, captionless);
+   184→}
+   185→
+   186→/** v12.0 — ارسال مستقیم پوسترهای تولیدی سرور (نردبان مرکب/گزارش‌ها) با پشتیبانی Broadcast */
+   187→export async function sendBroadcastPhoto(
+   188→  photo: Buffer,
+   189→  caption: string,
+   190→  filename: string,
+   191→  captionless = false
+   192→): Promise<{ ok: boolean; detail: string }> {
+   193→  const res = await tgSendPhoto(photo, caption, filename, captionless);
+   194→  await logOutbox(null, "BROADCAST", res.ok, res.detail);
+   195→  return res;
+   196→}
+   197→
+   198→async function logOutbox(slipId: string | null, kind: string, ok: boolean, detail: string): Promise<void> {
+   199→  try {
+   200→    await db.telegramOutbox.create({ data: { slipId, kind, ok, detail: detail.slice(0, 400) } });
+   201→  } catch {
+   202→    // لاگ اختیاری
+   203→  }
+   204→}
+   205→
+   206→// ═════════════════════ فرار HTML تلگرام ═════════════════════
+   207→
+   208→function esc(s: string): string {
+   209→  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+   210→}
+   211→
+   212→// ═════════════════════ سازنده پیام کارت کامل ═════════════════════
+   213→
+   214→/** پیام HTML فلش‌کارت کامل — تیپ A + تیپ B + داچینگ + SHA-256 + لینک ESPN */
+   215→export function buildCardMessage(slip: IssuedSlip): string {
+   216→  const kickoff = new Date(slip.kickoff).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+   217→  const lines: string[] = [];
+   218→  lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت تیپ مکمل</b>`);
+   219→  lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
+   220→  lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
+   221→  if (slip.archetype) lines.push(`📐 الگو: ${esc(slip.archetype)}`);
+   222→  lines.push("");
+   223→  lines.push(`🔹 <b>تیپ A</b> (ضریب ${slip.oddsA.toFixed(2)}): ${esc(slip.labelA)}`);
+   224→  lines.push(`💵 مبلغ داچینگ A: <b>${slip.stakeA.toFixed(1)}</b> واحد`);
+   225→  lines.push("");
+   226→  lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): ${esc(slip.labelB)}`);
+   227→  lines.push(`💵 مبلغ داچینگ B: <b>${slip.stakeB.toFixed(1)}</b> واحد`);
+   228→  lines.push("");
+   229→  // ─── v10.0 — ارزش عددی نسبت به خط مرجع (همیشه عدد دارد) ───
+   230→  if (slip.edgeA !== null || slip.edgeB !== null) {
+   231→    const isPin = slip.edgeSourceA === "PINNACLE" || slip.edgeSourceB === "PINNACLE";
+   232→    const src = isPin ? "خط شارپ پیناکل" : "خط منصفانه بازار";
+   233→    const fa = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+   234→    const a = slip.edgeA !== null ? fa(slip.edgeA) : "—";
+   235→    const b = slip.edgeB !== null ? fa(slip.edgeB) : "—";
+   236→    lines.push(`📈 ارزش عددی نسبت به ${src}: تیپ A <b>${a}</b> · تیپ B <b>${b}</b>`);
+   237→    if (isPin) {
+   238→      const cmp = (odds: number, pin: number | null): string | null =>
+   239→        pin && pin > 1.01 ? `${odds.toFixed(2)} در برابر خط ${pin.toFixed(2)}` : null;
+   240→      const pa = slip.edgeSourceA === "PINNACLE" ? cmp(slip.oddsA, slip.pinnacleOddsA) : null;
+   241→      const pb = slip.edgeSourceB === "PINNACLE" ? cmp(slip.oddsB, slip.pinnacleOddsB) : null;
+   242→      const parts = [pa ? `تیپ A: ${pa}` : null, pb ? `تیپ B: ${pb}` : null].filter((x): x is string => Boolean(x));
+   243→      if (parts.length > 0) lines.push(`📌 مقایسه قیمت با خط پیناکل: ${parts.join(" · ")}`);
+   244→    }
+   245→  }
+   246→  // ─── v10.0 — بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ───
+   247→  if (slip.timingWindowA || slip.timingWindowB) {
+   248→    const winName = timingWindowLabel(slip.timingWindowA ?? slip.timingWindowB);
+   249→    const start = slip.timingStartA ?? slip.timingStartB;
+   250→    const end = slip.timingEndA ?? slip.timingEndB;
+   251→    const fmt = (d: Date) => new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tehran" }).format(d);
+   252→    const range = start && end ? ` | ساعت دقیق پیشنهادی ثبت: ${fmt(new Date(start))} تا ${fmt(new Date(end))} (تهران)` : "";
+   253→    lines.push(`⏱️ بهترین زمان ثبت این تیپ: <b>${esc(winName)}</b>${range}`);
+   254→  }
+   255→  lines.push(`💰 سود تضمینی پوشش: <b>+${slip.guaranteedProfit.toFixed(1)}%</b> (مجموع استیک ۱۰۰ واحد)`);
+   256→  lines.push(`🔐 هش راستی‌آزمایی SHA-256:\n<code>${slip.hash.slice(0, 32)}</code>`);
+   257→  if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">لینک راستی‌آزمایی رسمی ESPN</a>`);
+   258→  lines.push("");
+   259→  lines.push(`⚖️ ابزار تحلیل کمّی — مسئولیت استفاده با کاربر است.`);
+   260→  return lines.join("\n");
+   261→}
+   262→
+   263→/** برچسب فارسی پنجره زمانی v10.0 */
+   264→function timingWindowLabel(key: string | null): string {
+   265→  switch (key) {
+   266→    case "EARLY_FAVORITE":
+   267→      return "⏰ پنجره شکار فاوریت — Early Favorite (T-24h تا T-12h)";
+   268→    case "LINEUP_SHOCK":
+   269→      return "⚡ پنجره طلایی ترکیب رسمی — Lineup Shock (T-60m تا T-45m)";
+   270→    case "LATE_UNDERDOG":
+   271→      return "🎯 پنجره اوج آندرداگ — Late Underdog Peak (T-30m تا T-10m)";
+   272→    default:
+   273→      return "پنجره استاندارد";
+   274→  }
+   275→}
+   276→
+   277→// ═════════════════════ سازنده پیام تیزر (تیپ B سانسور) ═════════════════════
+   278→
+   279→/** پیام HTML تیزر جذب مشترک: تیپ A رایگان، تیپ B قفل VIP */
+   280→export function buildTeaserMessage(slip: IssuedSlip): string {
+   281→  const kickoff = new Date(slip.kickoff).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+   282→  const lines: string[] = [];
+   283→  lines.push(`🔥 <b>تیپ رایگان امروز — فوتبال‌کوانت</b> 🔥`);
+   284→  lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
+   285→  lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
+   286→  lines.push("");
+   287→  lines.push(`🔹 <b>تیپ A</b> (ضریب ${slip.oddsA.toFixed(2)}): ${esc(slip.labelA)}`);
+   288→  lines.push(`💵 مبلغ داچینگ A: <b>${slip.stakeA.toFixed(1)}</b> واحد`);
+   289→  lines.push(`💰 سود تضمینی داچینگ: <b>+${slip.guaranteedProfit.toFixed(1)}%</b>`);
+   290→  lines.push("");
+   291→  lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): 🔒 <b>[مخصوص اعضای کانال VIP]</b>`);
+   292→  lines.push(`💵 مبلغ داچینگ B: 🔒 <b>[مخصوص اعضای کانال VIP]</b>`);
+   293→  lines.push("");
+   294→  lines.push(`👑 برای دریافت پوشش کامل و تیپ B (ضریب ~۳) در کانال VIP عضو شوید.`);
+   295→  lines.push(`🔐 هش سند: <code>${slip.hash.slice(0, 16)}</code>`);
+   296→  if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">راستی‌آزمایی ESPN</a>`);
+   297→  return lines.join("\n");
+   298→}
+   299→
+   300→// ═════════════════════ سازنده پیام نتیجه پس از تسویه ═════════════════════
+   301→
+   302→export function slipResultLabel(status: string): { label: string; emoji: string; win: boolean } {
+   303→  switch (status) {
+   304→    case "WON_A":
+   305→      return { label: "برد تیپ A (Slip A Won)", emoji: "🟢", win: true };
+   306→    case "WON_B":
+   307→      return { label: "برد تیپ B (Slip B Won)", emoji: "🟢", win: true };
+   308→    case "DOUBLE_WIN":
+   309→      return { label: "برد طلایی هر دو تیپ — Double-Win Jackpot", emoji: "🏆", win: true };
+   310→    case "MIDDLE_TRAP":
+   311→      return { label: "تله میانی — باخت همزمان (Middle Trap)", emoji: "🔴", win: false };
+   312→    default:
+   313→      return { label: status, emoji: "⚪️", win: false };
+   314→  }
+   315→}
+   316→
+   317→export function buildResultMessage(slip: IssuedSlip): string {
+   318→  const r = slipResultLabel(slip.status);
+   319→  const score = slip.homeGoals !== null && slip.awayGoals !== null ? `${slip.homeGoals}−${slip.awayGoals}` : "؟";
+   320→  const lines: string[] = [];
+   321→  lines.push(`${r.emoji} <b>نتیجه نهایی کارت</b> ${r.emoji}`);
+   322→  lines.push(`🏆 <b>${esc(slip.homeTeam)} ${score} ${esc(slip.awayTeam)}</b>`);
+   323→  lines.push(`📡 ${esc(slip.league)} · FT (منبع رسمی ESPN)`);
+   324→  lines.push("");
+   325→  lines.push(`نتیجه: <b>${r.label}</b>`);
+   326→  if (slip.status === "DOUBLE_WIN") {
+   327→    lines.push(`💰 سود تیپ A: <b>+${(slip.profitA ?? 0).toFixed(1)}</b> · سود تیپ B: <b>+${(slip.profitB ?? 0).toFixed(1)}</b>`);
+   328→    lines.push(`🎯 جمع سود خالص (Jackpot): <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
+   329→  } else if (slip.status === "MIDDLE_TRAP") {
+   330→    lines.push(`📉 زیان کل: <b>${(slip.netProfit ?? 0).toFixed(1)}</b> واحد — ثبت صادقانه و شفاف`);
+   331→  } else {
+   332→    lines.push(`💰 سود خالص: <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
+   333→    lines.push(`🧮 فرمول: ${(slip.status === "WON_A" ? `stakeA×oddsA−۱۰۰ = ${slip.stakeA.toFixed(1)}×${slip.oddsA.toFixed(2)}−۱۰۰` : `stakeB×oddsB−۱۰۰ = ${slip.stakeB.toFixed(1)}×${slip.oddsB.toFixed(2)}−۱۰۰`)}`);
+   334→  }
+   335→  lines.push(`🔐 هش سند: <code>${slip.hash.slice(0, 32)}</code>`);
+   336→  if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">راستی‌آزمایی نتیجه در ESPN</a>`);
+   337→  return lines.join("\n");
+   338→}
+   339→
+   340→// ═════════════════════ انتشار عمومی ═════════════════════
+   341→
+   342→export type PublishMode = "CARD" | "TEASER";
+   343→
+   344→/**
+   345→ * انتشار کارت/تیزر به کانال VIP:
+   346→ * تصویر فوتبالی دو تیم + پیام HTML. تیپ B در حالت TEASER سانسور می‌شود.
+   347→ * v9.0 — فیلتر سختگیرانه سوپروایزر: بازی وتوشده مطلقاً به تلگرام ارسال نمی‌شود.
+   348→ */
+   349→export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode): Promise<{ ok: boolean; detail: string; preview: string }> {
+   350→  const preview = mode === "CARD" ? buildCardMessage(slip) : buildTeaserMessage(slip);
+   351→  if (!slip.supervisorApproved) {
+   352→    await logOutbox(slip.id, mode, false, "VETOED_BY_SUPERVISOR");
+   353→    return { ok: false, detail: "VETOED_BY_SUPERVISOR", preview };
+   354→  }
+   355→  // v13.2 — کارت بازخوانی (بازی هنگام صدور از قبل FT بود) هرگز به کانال نمی‌رود؛
+   356→  // انتشار «کارت پیش‌بازی» پس از پایان بازی فاقد اعتبار است.
+   357→  if (slip.retroIssued) {
+   358→    await logOutbox(slip.id, mode, false, "RETRO_CARD_NOT_PUBLISHABLE");
+   359→    return { ok: false, detail: "RETRO_CARD_NOT_PUBLISHABLE", preview };
+   360→  }
+   361→  const status = await telegramStatus();
+   362→  if (!status.configured || !status.channelSet || !status.tokenFormat) {
+   363→    await logOutbox(slip.id, mode, false, status.configured ? "TELEGRAM_NOT_CONFIGURED" : "INVALID_TOKEN_FORMAT");
+   364→    return { ok: false, detail: "TELEGRAM_NOT_CONFIGURED", preview };
+   365→  }
+   366→
+   367→  const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
+   368→
+   369→  let result: { ok: boolean; detail: string };
+   370→  if (photo) {
+   371→    result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
+   372→    // v13.2 — فالبک پیام متنی: اگر ارسال تصویر شکست، پیام HTML کامل همچنان به کانال می‌رود
+   373→    if (!result.ok) {
+   374→      const fb = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
+   375→      if (fb.ok) result = fb;
+   376→    }
+   377→  } else {
+   378→    // تصویر تولید نشد — پیام متنی HTML همچنان کامل ارسال می‌شود
+   379→    result = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
+   380→  }
+   381→
+   382→  await logOutbox(slip.id, mode, result.ok, result.detail);
+   383→  if (result.ok) {
+   384→    await db.issuedSlip.update({
+   385→      where: { id: slip.id },
+   386→      data: mode === "CARD" ? { telegramCard: true } : { telegramTeaser: true },
+   387→    });
+   388→  }
+   389→  return { ...result, preview };
+   390→}
+   391→
+   392→/**
+   393→ * اعلام خودکار نتیجه پس از FT:
+   394→ * برنده → تصویر جام پیروزی | بازنده → تصویر رختکن بهم‌ریخته
+   395→ * v13.5 — نتایج فقط به «کانال عمومی @aineobet» می‌روند (دستور کارفرما: کانال عمومی فقط نتیجه؛
+   396→ * کانال VIP فقط فلش‌کارت بازی + برآیند روزانه).
+   397→ */
+   398→export async function sendSettlementNotification(slip: IssuedSlip): Promise<boolean> {
+   399→  // v11.0 — سپر مطلق دفتر سایه: کارت وتوشده سوپروایزر هرگز نتیجه هم به کانال نمی‌رود
+   400→  if (!slip.supervisorApproved) return false;
+   401→  // v13.2 — کارت بازخوانی (بازی FT پیش از صدور) هرگز به کانال اعلام نمی‌شود —
+   402→  // کارتی که هرگز منتشر نشده نتیجه هم ندارد (جلوگیری از MIDDLE_TRAP‌های هرگز-صادرنشده)
+   403→  if (slip.retroIssued) return false;
+   404→  const status = await telegramStatus();
+   405→  if (!status.configured || !status.channelSet || !status.tokenFormat) return false;
+   406→  if (slip.homeGoals === null || slip.awayGoals === null) return false;
+   407→
+   408→  const chatId = await publicChannelId();
+   409→  if (!chatId) return false;
+   410→  const caption = buildResultMessage(slip);
+   411→
+   412→  // v10.0 — تصویربرداری قطعی: برد طلایی همزمان (Double-Win) طراحی طلایی اختصاصی دارد
+   413→  const photo = await renderSlipResultPNG(slip);
+   414→
+   415→  let ok = false;
+   416→  if (photo) {
+   417→    ok = (await tgSendPhotoTo(chatId, photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`)).ok;
+   418→    // v13.2 — فالبک پیام متنی برای اعلام نتیجه (تصویر 429 یا شکست رندر)
+   419→    if (!ok) {
+   420→      ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+   421→    }
+   422→  } else {
+   423→    ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+   424→  }
+   425→
+   426→  await logOutbox(slip.id, "RESULT", ok, ok ? "sent" : "send-failed");
+   427→  if (ok) {
+   428→    await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } });
+   429→  }
+   430→  return ok;
+   431→}
+   432→
+   433→/** پیام آزمون اتصال از مودال تنظیمات */
+   434→export async function sendConfigTestMessage(): Promise<{ ok: boolean; detail: string }> {
+   435→  const text =
+   436→    `✅ <b>اتصال موفق</b> — موتور تسویه خودکار فوتبال‌کوانت به این کانال متصل شد.\n` +
+   437→    `از این پس فلش‌کارت‌ها، تیزرهای VIP و نتایج تسویه‌شده به‌صورت خودکار اینجا منتشر می‌شوند.`;
+   438→  const chatId = await channelId();
+   439→  if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
+   440→  const res = await tgCall("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
+   441→  await logOutbox(null, "CONFIG_TEST", res.ok, res.detail);
+   442→  return res;
+   443→}
+   444→
+   445→// ═══════════════════════════════════════════════════════════════
+   446→// v9.0 — خط لوله ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر
+   447→// (Supervisor-Only Auto-Dispatch Queue) + گزارش وین‌ریت کانال
+   448→// ═══════════════════════════════════════════════════════════════
+   449→
+   450→/** آمار وین‌ریت کانال — مستقیم از دیتابیس (بدون وابستگی چرخه‌ای) */
+   451→async function channelWinRateStats() {
+   452→  // v11.0 — فقط کارت‌های واقعی تاییدشده؛ تسویه کاغذی دفتر سایه در وین‌ریت کانال دخالت نمی‌کند
+   453→  // v13.2 — فقط کارت‌های واقعی تاییدشده؛ کارت‌های بازخوانی (retroIssued) و دفتر سایه در وین‌ریت کانال دخالت نمی‌کنند
+   454→  const settled = await db.issuedSlip.findMany({
+   455→    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, supervisorApproved: true, retroIssued: false },
+   456→    select: { status: true, netProfit: true, stakeA: true, stakeB: true },
+   457→  });
+   458→  const st = { settled: settled.length, wonA: 0, wonB: 0, doubleWin: 0, middleTrap: 0, netProfit: 0, staked: 0 };
+   459→  for (const s of settled) {
+   460→    if (s.status === "WON_A") st.wonA += 1;
+   461→    else if (s.status === "WON_B") st.wonB += 1;
+   462→    else if (s.status === "DOUBLE_WIN") st.doubleWin += 1;
+   463→    else if (s.status === "MIDDLE_TRAP") st.middleTrap += 1;
+   464→    st.netProfit += s.netProfit ?? 0;
+   465→    st.staked += s.stakeA + s.stakeB;
+   466→  }
+   467→  const winRatePct = st.settled > 0 ? Math.round(((st.settled - st.middleTrap) / st.settled) * 1000) / 10 : 0;
+   468→  const netPct = st.staked > 0 ? Math.round((st.netProfit / st.staked) * 1000) / 10 : 0;
+   469→  // ─── v11.0 — دفتر سایه: شفافیت counterfactual وتوها (خط جداگانه گزارش) ───
+   470→  // v13.5.1 — سایه فقط وتوهای زنده است؛ کارت‌های بازخوانی (retroIssued) داخل سایه شمرده نمی‌شوند
+   471→  const shadowRows = await db.issuedSlip.findMany({
+   472→    where: { supervisorApproved: false, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+   473→    select: { status: true, netProfit: true },
+   474→  });
+   475→  const shadowWins = shadowRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
+   476→  const shadowNet = Math.round(shadowRows.reduce((a, b) => a + (b.netProfit ?? 0), 0) * 100) / 100;
+   477→  const shadowWinRate = shadowRows.length > 0 ? Math.round((shadowWins / shadowRows.length) * 1000) / 10 : null;
+   478→  // ─── v13.2 — دفتر بازخوانی: کارت‌های چندروزه‌ای که هرگز پیش‌بازی صادر نشده‌اند (تسویه کاغذی تحلیلی) ───
+   479→  // v13.5.1 — بازخوانی با پرچم retroIssued شناسایی می‌شود (مستقل از تایید — کارت بازخوانی هرگز تاییدشده نیست)
+   480→  const retroRows = await db.issuedSlip.findMany({
+   481→    where: { retroIssued: true, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+   482→    select: { status: true, netProfit: true },
+   483→  });
+   484→  const retroWins = retroRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
+   485→  return {
+   486→    ...st,
+   487→    winRatePct,
+   488→    netPct,
+   489→    netProfit: Math.round(st.netProfit * 100) / 100,
+   490→    shadow: { settled: shadowRows.length, wins: shadowWins, winRatePct: shadowWinRate, netProfit: shadowNet },
+   491→    retro: {
+   492→      settled: retroRows.length,
+   493→      wins: retroWins,
+   494→      winRatePct: retroRows.length > 0 ? Math.round((retroWins / retroRows.length) * 1000) / 10 : null,
+   495→      netProfit: Math.round(retroRows.reduce((a, b) => a + (b.netProfit ?? 0), 0) * 100) / 100,
+   496→    },
+   497→  };
+   498→}
+   499→
+   500→/** پیام نوع دوم — گزارش تسویه + به‌روزرسانی وین‌ریت کل کانال */
+   501→export function buildWinRateReportMessage(st: {
+   502→  settled: number;
+   503→  wonA: number;
+   504→  wonB: number;
+   505→  doubleWin: number;
+   506→  middleTrap: number;
+   507→  winRatePct: number;
+   508→  netProfit: number;
+   509→  netPct: number;
+   510→}): string {
+   511→  const pct = (n: number) => (st.settled > 0 ? `${Math.round((n / st.settled) * 1000) / 10}٪` : "۰٪");
+   512→  const lines: string[] = [];
+   513→  lines.push(`📊 <b>گزارش وین‌ریت کانال — تسویه ۱۰۰٪ خودکار ESPN</b>`);
+   514→  lines.push(`🎯 وین‌ریت زوج‌تیپ‌های تاییدشده: <b>${st.winRatePct}٪</b> (${st.settled} کارت تسویه‌شده)`);
+   515→  lines.push(`🟢 برد تیپ A: <b>${st.wonA}</b> (${pct(st.wonA)}) · برد تیپ B: <b>${st.wonB}</b> (${pct(st.wonB)})`);
+   516→  lines.push(`🏆 برد طلایی همزمان (Double-Win Jackpot): <b>${st.doubleWin}</b> (${pct(st.doubleWin)})`);
+   517→  lines.push(`🔴 تله میانی (ثبت صادقانه): <b>${st.middleTrap}</b> (${pct(st.middleTrap)})`);
+   518→  lines.push(`💰 سود خالص تجمعی کانال: <b>${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)}</b> واحد (${st.netPct >= 0 ? "+" : ""}${st.netPct}٪)`);
+   519→  lines.push(`🔐 همه نتایج با اسکوربورد رسمی ESPN و هش SHA-256 راستی‌آزمایی می‌شوند.`);
+   520→  return lines.join("\n");
+   521→}
+   522→
+   523→/** آیتم صف انتشار — برای ارسال واقعی و شبیه‌ساز زنده فید کانال */
+   524→export interface DispatchQueueItem {
+   525→  kind: "CARD" | "RESULT" | "WINRATE";
+   526→  slipId: string | null;
+   527→  slipHash: string | null;
+   528→  matchLabel: string;
+   529→  message: string;
+   530→  status?: string;
+   531→}
+   532→
+   533→/** صف انتشار بدون ارسال — پیش‌نمایش زنده فید کانال (Live Telegram Channel Simulator) */
+   534→export async function previewDispatchQueue(): Promise<{ queue: DispatchQueueItem[]; autoDispatch: boolean; configured: boolean }> {
+   535→  // v13.2 — فقط کارت‌های بازی‌های «امروز تهران» به کانال ارسال می‌شوند؛ بازی‌های روزهای آینده
+   536→  // در دک فلش‌کارت می‌مانند و نوبت انتشارشان روز بازی خودش می‌رسد.
+   537→  const day = tehranDayRange();
+   538→  const [pendingCards, pendingResults, autoDispatch, tg] = await Promise.all([
+   539→    db.issuedSlip.findMany({
+   540→      where: { status: { in: ["PENDING", "LIVE"] }, telegramCard: false, supervisorApproved: true, retroIssued: false, kickoff: { gte: day.start, lt: day.end } },
+   541→      orderBy: { kickoff: "asc" },
+   542→      take: 8,
+   543→    }),
+   544→    db.issuedSlip.findMany({
+   545→      where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true, retroIssued: false },
+   546→      orderBy: { settledAt: "asc" },
+   547→      take: 8,
+   548→    }),
+   549→    getAutoDispatch(),
+   550→    telegramStatus(),
+   551→  ]);
+   552→
+   553→  const queue: DispatchQueueItem[] = [];
+   554→  for (const s of pendingCards) {
+   555→    queue.push({
+   556→      kind: "CARD",
+   557→      slipId: s.id,
+   558→      slipHash: s.hash,
+   559→      matchLabel: `${s.homeTeam} × ${s.awayTeam}`,
+   560→      message: buildCardMessage(s),
+   561→      status: s.status,
+   562→    });
+   563→  }
+   564→  for (const s of pendingResults) {
+   565→    queue.push({
+   566→      kind: "RESULT",
+   567→      slipId: s.id,
+   568→      slipHash: s.hash,
+   569→      matchLabel: `${s.homeTeam} ${s.homeGoals ?? "?"}−${s.awayGoals ?? "?"} ${s.awayTeam}`,
+   570→      message: buildResultMessage(s),
+   571→      status: s.status,
+   572→    });
+   573→  }
+   574→  const st = await channelWinRateStats();
+   575→  if (pendingResults.length > 0) {
+   576→    queue.push({ kind: "WINRATE", slipId: null, slipHash: null, matchLabel: "گزارش وین‌ریت کانال", message: buildWinRateReportMessage(st) });
+   577→  }
+   578→  return { queue, autoDispatch, configured: tg.configured };
+   579→}
+   580→
+   581→/**
+   582→ * صف ارسال خودکار دو مرحله‌ای (Auto-Dispatch Queue):
+   583→ *   · پیام نوع اول (پیش از بازی): فقط کارت‌های تاییدشده سوپروایزر (وتوشده‌ها اسکیپ)
+   584→ *   · پیام نوع دوم (پس از FT): برگه نتیجه + به‌روزرسانی وین‌ریت کل کانال
+   585→ * Dedupe سمت سرور با پرچم‌های telegramCard/telegramResult — ارسال تکراری صفر.
+   586→ * v9.0 — سقف هر پاس قابل تنظیم است: پس‌زمینه ۳/۳ (حفظ تأخیر سینک) و دکمه فوری ۸/۸.
+   587→ */
+   588→export async function autoDispatchApprovedSlips(options?: {
+   589→  maxCards?: number;
+   590→  maxResults?: number;
+   591→}): Promise<{
+   592→  ok: boolean;
+   593→  sentCards: number;
+   594→  sentResults: number;
+   595→  winRateSent: boolean;
+   596→  skippedVetoed: number;
+   597→  detail: string;
+   598→}> {
+   599→  const maxCards = Math.max(1, Math.min(12, options?.maxCards ?? 3));
+   600→  const maxResults = Math.max(1, Math.min(12, options?.maxResults ?? 3));
+   601→  const [tg, autoOn] = await Promise.all([telegramStatus(), getAutoDispatch()]);
+   602→  // v13.5.1 — کارت‌های بازخوانی (retroIssued) وتو نیستند — شمارش وتو فقط برای کارت‌های زنده
+   603→  const skippedVetoed = await db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false, telegramCard: false } });
+   604→
+   605→  if (!tg.configured || !tg.channelSet) {
+   606→    return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed, detail: "TELEGRAM_NOT_CONFIGURED" };
+   607→  }
+   608→  if (!tg.tokenFormat) {
+   609→    return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed, detail: "INVALID_TOKEN_FORMAT" };
+   610→  }
+   611→  if (!autoOn) {
+   612→    return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed, detail: "AUTO_DISPATCH_OFF" };
+   613→  }
+   614→
+   615→  // v13.2 — «فقط کارت‌های روزانه»: پنجره انتشار کارت = بازی‌های امروز تهران
+   616→  const day = tehranDayRange();
+   617→
+   618→  let sentCards = 0;
+   619→  let sentResults = 0;
+   620→
+   621→  // ─── مرحله ۱: پست پیش از بازی — فقط کارت‌های 👑 تاییدشده سوپروایزر «بازی‌های امروز تهران» ───
+   622→  const cards = await db.issuedSlip.findMany({
+   623→    where: { status: { in: ["PENDING", "LIVE"] }, telegramCard: false, supervisorApproved: true, retroIssued: false, kickoff: { gte: day.start, lt: day.end } },
+   624→    orderBy: { kickoff: "asc" },
+   625→    take: maxCards,
+   626→  });
+   627→  for (const s of cards) {
+   628→    try {
+   629→      const res = await publishSlipToTelegram(s, "CARD");
+   630→      if (res.ok) sentCards += 1;
+   631→    } catch (err) {
+   632→      console.warn("auto dispatch card failed:", err);
+   633→    }
+   634→  }
+   635→
+   636→  // ─── مرحله ۲: پست تسویه‌حساب پس از بازی — برگه نتیجه FT (کارت‌های بازخوانی مستثنا) ───
+   637→  const results = await db.issuedSlip.findMany({
+   638→    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true, retroIssued: false },
+   639→    orderBy: { settledAt: "asc" },
+   640→    take: maxResults,
+   641→  });
+   642→  for (const s of results) {
+   643→    try {
+   644→      const ok = await sendSettlementNotification(s);
+   645→      if (ok) sentResults += 1;
+   646→    } catch (err) {
+   647→      console.warn("auto dispatch result failed:", err);
+   648→    }
+   649→  }
+   650→
+   651→  // ─── به‌روزرسانی وین‌ریت کل کانال — فقط وقتی نتیجه تازه‌ای مخابره شد ───
+   652→  let winRateSent = false;
+   653→  if (sentResults > 0) {
+   654→    winRateSent = await sendWinRateReport();
+   655→  }
+   656→
+   657→  return {
+   658→    ok: sentCards + sentResults > 0,
+   659→    sentCards,
+   660→    sentResults,
+   661→    winRateSent,
+   662→    skippedVetoed,
+   663→    detail: sentCards + sentResults > 0 ? "dispatched" : "QUEUE_EMPTY",
+   664→  };
+   665→}
+   666→
+   667→/** throttle گزارش وین‌ریت — حداکثر هر ۱۰ دقیقه یک‌بار */
+   668→let lastWinRateAt = 0;
+   669→
+   670→/**
+   671→ * v13.2 — بازه «امروز تهران» به UTC (تهران = UTC+۳:۳۰ ثابت، بدون DST).
+   672→ * مبنای فیلتر «فقط کارت‌های روزانه به کانال ارسال شود».
+   673→ */
+   674→export function tehranDayRange(d = new Date()): { start: Date; end: Date } {
+   675→  const TEHRAN_OFFSET_MS = 3.5 * 3600_000;
+   676→  const shifted = d.getTime() + TEHRAN_OFFSET_MS;
+   677→  const dayStartShifted = Math.floor(shifted / 86_400_000) * 86_400_000;
+   678→  const start = new Date(dayStartShifted - TEHRAN_OFFSET_MS);
+   679→  return { start, end: new Date(start.getTime() + 86_400_000) };
+   680→}
+   681→
+   682→/**
+   683→ * پیام نوع دوم (بخش وین‌ریت): به‌روزرسانی وین‌ریت کل کانال پس از تسویه.
+   684→ * v13.5 — مقصد: فقط کانال عمومی @aineobet (اثبات عملکرد برای جذب VIP).
+   685→ * throttle ۱۰ دقیقه.
+   686→ */
+   687→export async function sendWinRateReport(force = false): Promise<boolean> {
+   688→  if (!force && Date.now() - lastWinRateAt < 10 * 60_000) return false;
+   689→  const status = await telegramStatus();
+   690→  if (!status.configured || !status.channelSet) return false;
+   691→  const chatId = await publicChannelId();
+   692→  if (!chatId) return false;
+   693→  const st = await channelWinRateStats();
+   694→
+   695→  // v10.0 — گزارش وین‌ریت با تصویر اختصاصی (گیج وین‌ریت + مبنای واحد برای حساب شخصی)
+   696→  const caption = buildWinRateReportMessage(st) +
+   697→    (st.shadow.settled > 0
+   698→      ? `\n\n🛡️ <b>دفتر سایه (شفافیت وتوها):</b> ${st.shadow.settled} کارت وتوشده تسویه کاغذی شد — وین‌ریت ${st.shadow.winRatePct ?? 0}٪ · سود کاغذی ${st.shadow.netProfit >= 0 ? "+" : ""}${st.shadow.netProfit.toFixed(1)} واحد (هرگز پول واقعی نبوده)`
+   699→      : "") +
+   700→    (st.retro.settled > 0
+   701→      ? `\n📚 <b>دفتر بازخوانی (کارت‌های چندروزه):</b> ${st.retro.settled} بازی FT که هرگز پیش‌بازی کارت صادر نشده بود — فقط تحلیل کاغذی با همان موتور؛ وین‌ریت ${st.retro.winRatePct ?? 0}٪. این دسته <b>هرگز</b> در وین‌ریت واقعی کانال شمرده نمی‌شود.`
+   702→      : "") +
+   703→    `\n\n🧮 <b>مبنای واحد برای حساب شخصی شما:</b> هر کارت با مجموع استیک ۱۰۰ واحد ثبت می‌شود؛ ۱ واحد = ۱٪ بانک‌رول خودتان.` +
+   704→    `\nمثال با موجودی ۱۰ دلار: ۱ واحد = ۰٫۱ دلار → سود ${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)} واحد = ${st.netProfit >= 0 ? "+" : "−"}${Math.abs(st.netProfit * 0.1).toFixed(2)} دلار (مقیاس‌پذیر با هر موجودی).`;
+   705→
+   706→  let res: { ok: boolean; detail: string };
+   707→  try {
+   708→    const photo = await renderWinRateReportPNG({
+   709→      winRatePct: st.winRatePct,
+   710→      settled: st.settled,
+   711→      wonA: st.wonA,
+   712→      wonB: st.wonB,
+   713→      doubleWin: st.doubleWin,
+   714→      middleTrap: st.middleTrap,
+   715→      netProfit: st.netProfit,
+   716→      netPct: st.netPct,
+   717→      generatedAtIso: new Date().toISOString(),
+   718→    });
+   719→    res = await tgSendPhotoTo(chatId, photo, caption, `winrate-report-${Date.now()}.png`);
+   720→  } catch (err) {
+   721→    console.warn("winrate image render failed:", err);
+   722→    res = await tgCall("sendMessage", {
+   723→      chat_id: chatId,
+   724→      text: caption,
+   725→      parse_mode: "HTML",
+   726→      disable_web_page_preview: true,
+   727→    });
+   728→  }
+   729→  if (res.ok) {
+   730→    lastWinRateAt = Date.now();
+   731→    await logOutbox(null, "WINRATE", true, "sent");
+   732→  }
+   733→  return res.ok;
+   734→}
+   735→
+   736→// ═══════════════════════════════════════════════════════════════
+   737→// v12.0 — گزارش برآیند روزانه روی قالب استادیومی DAILY_REPORT
+   738→// (۱۰۸۰×۱۴۴۰ — ۴ KPI + ۴ ردیف بازی تسویه‌شده — فقط نتیجه واقعی ESPN)
+   739→// ═══════════════════════════════════════════════════════════════
+   740→
+   741→/** کلید روز تهران برای Dedupe گزارش روزانه */
+   742→function tehranDayKey(d = new Date()): string {
+   743→  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(d);
+   744→}
+   745→
+   746→/** v13.5 — ساعت فعلی تهران (برای پنجره بنر بازاریابی ساعتی) */
+   747→function tehranHour(d = new Date()): number {
+   748→  return Number(new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d));
+   749→}
+   750→
+   751→const KEY_LAST_DIGEST_DAY = "last_daily_digest_day";
+   752→
+   753→/**
+   754→ * پوستر برآیند روزانه @aineobet — یک‌بار در هر روز تهران (از زمان‌بند سرور).
+   755→ * v13.5 — «کارت نتیجه برایند روزانه» به هر دو کانال می‌رود: عمومی @aineobet + کانال VIP
+   756→ * (دستور کارفرما: VIP فقط فلش‌کارت بازی + برآیند روزانه؛ عمومی فقط نتایج + برآیند).
+   757→ * KPIها: تعداد تسویه · وین‌ریت · جکپات · سود خالص واحدِ همان روز.
+   758→ */
+   759→export async function sendDailyDigest(force = false): Promise<boolean> {
+   760→  const status = await telegramStatus();
+   761→  if (!status.configured || !status.channelSet) return false;
+   762→
+   763→  const today = tehranDayKey();
+   764→  if (!force) {
+   765→    const last = await getSetting(KEY_LAST_DIGEST_DAY);
+   766→    if (last === today) return false;
+   767→  }
+   768→
+   769→  // بازی‌های تسویه‌شده «امروز تهران» — فقط کارت‌های واقعی تاییدشده (بدون بازخوانی)
+   770→  const rows = await db.issuedSlip.findMany({
+   771→    where: {
+   772→      supervisorApproved: true,
+   773→      retroIssued: false,
+   774→      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+   775→      settledAt: { not: null },
+   776→    },
+   777→    orderBy: { settledAt: "desc" },
+   778→    take: 60,
+   779→  });
+   780→  const todayRows = rows.filter((r) => tehranDayKey(r.settledAt as Date) === today);
+   781→
+   782→  const settled = todayRows.length;
+   783→  const wins = todayRows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+   784→  const jackpots = todayRows.filter((r) => r.status === "DOUBLE_WIN").length;
+   785→  const net = todayRows.reduce((a, r) => a + (r.netProfit ?? 0), 0);
+   786→  const staked = todayRows.reduce((a, r) => a + r.stakeA + r.stakeB, 0);
+   787→  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+   788→
+   789→  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+   790→  const timeEn = (d: Date) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d);
+   791→
+   792→  let res: { ok: boolean; detail: string } = { ok: false, detail: "NO_CHANNEL" };
+   793→  try {
+   794→    const photo = await renderDailyReportPNG({
+   795→      dateLabelEn,
+   796→      kpis: [
+   797→        { label: "TICKETS SETTLED", value: String(settled), color: C_cyan },
+   798→        { label: "CHANNEL WIN-RATE", value: `${winRate.toFixed(0)}%`, color: C_emerald },
+   799→        { label: "GOLDEN JACKPOTS", value: String(jackpots), color: C_gold },
+   800→        { label: "NET UNITS TODAY", value: `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}`, color: net >= 0 ? C_emerald : C_rose },
+   801→      ],
+   802→      matches: todayRows.slice(0, 4).map((r) => ({
+   803→        teams: `${r.homeTeam} vs ${r.awayTeam}`,
+   804→        score: `${r.homeGoals ?? 0}-${r.awayGoals ?? 0}`,
+   805→        verdict: `${r.status.replace("_", " ")} · settled ${r.settledAt ? timeEn(r.settledAt) : ""} Tehran`,
+   806→        profit: r.netProfit ?? 0,
+   807→      })),
+   808→      dayNetProfit: Math.round(net * 100) / 100,
+   809→      daySettled: settled,
+   810→      dayStaked: Math.round(staked),
+   811→    });
+   812→
+   813→    const caption =
+   814→      `📊 <b>NEOBET QUANT PRO • @AINEOBET — Daily Settlement Digest</b>\n` +
+   815→      `${settled} کارت امروز روی اسکوربورد رسمی ESPN تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد\n` +
+   816→      `🔒 هیچ شبیه‌سازی و هیچ کارت کاغذی در این گزارش نیست.`;
+   817→
+   818→    // v13.5 — ارسال به هر دو کانال (عمومی + VIP) با همان بافر تصویر
+   819→    const [pub, vip] = await Promise.all([publicChannelId(), channelId()]);
+   820→    const targets = [...new Set([pub, vip].filter((x): x is string => Boolean(x)))];
+   821→    for (const chatId of targets) {
+   822→      let ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-digest-${today}.png`)).ok;
+   823→      if (!ok) {
+   824→        ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+   825→      }
+   826→      if (ok) res = { ok: true, detail: `sent:${chatId}` };
+   827→    }
+   828→  } catch (err) {
+   829→    console.warn("daily digest render failed:", err);
+   830→    res = await tgCall("sendMessage", { chat_id: await channelId(), text: captionFallback(settled, winRate, net), parse_mode: "HTML", disable_web_page_preview: true });
+   831→  }
+   832→  if (res.ok) {
+   833→    await setSetting(KEY_LAST_DIGEST_DAY, today);
+   834→    await logOutbox(null, "DAILY_DIGEST", true, res.detail);
+   835→  }
+   836→  return res.ok;
+   837→}
+   838→
+   839→/** فالبک متنی برآیند روزانه (وقتی رندر تصویر شکست خورد) */
+   840→function captionFallback(settled: number, winRate: number, net: number): string {
+   841→  return (
+   842→    `📊 <b>NEOBET QUANT PRO • @AINEOBET — Daily Settlement Digest</b>\n` +
+   843→    `${settled} کارت امروز تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد`
+   844→  );
+   845→}
+   846→
+   847→// پالت hex برای KPIهای گزارش روزانه (مستقل از ثابت‌های card-render)
+   848→const C_cyan = "#38d6f5";
+   849→const C_emerald = "#3ddc97";
+   850→const C_gold = "#f5c542";
+   851→const C_rose = "#ff6b7a";
+   852→
+   853→// ═══════════════════════════════════════════════════════════════
+   854→// v13.0 — ایجنت مدیر کانال عمومی و VIP (@aineobet Channel Director Agent)
+   855→// قیف تبدیل مخاطب عمومی به VIP — کاملاً سمت سرور:
+   856→//   پست ۱ (۱۱:۰۰ تهران): رادار شفافیت روزانه → کانال عمومی
+   857→//   پست ۲ (T-60m): ۱ کارت رایگان کامل + تیزرهای قفل‌شده → کانال عمومی
+   858→//   پست ۳ (FT+5m): بازگشایی قفل همان کارت + پوستر WIN CONFIRMED → کانال عمومی
+   859→//   پست ۴ (۲۳:۳۰ تهران): برآیند واقعی روز با افراز مجزا → کانال عمومی
+   860→// Dedupe کامل با TelegramOutbox (kind = FUNNEL_*) و Setting روزانه.
+   861→// ═══════════════════════════════════════════════════════════════
+   862→
+   863→const KEY_FUNNEL_RADAR_DAY = "funnel_last_radar_day";
+   864→const KEY_FUNNEL_PNL_DAY = "funnel_last_pnl_day";
+   865→const KEY_FUNNEL_GIFT_DAY = "funnel_last_gift_day";
+   866→/** v13.5 — کلید dedupe بنر بازاریابی ساعتی: مقدار = «dayKey:hour» */
+   867→const KEY_MARKETING_LAST_AD = "marketing_last_ad_hour";
+   868→
+   869→// ═══════════════════════════════════════════════════════════════
+   870→// v13.5 — خط لوله جدید کانال‌ها (دستور صریح کارفرما):
+   871→//   · کانال عمومی @aineobet: فقط نتایج (کارت نتیجه FT + وین‌ریت + برآیند)
+   872→//     + روزانه ۱ کارت VIP رایگان تاییدشده سوپروایزر (یا کارت دژ نفوذناپذیر)
+   873→//     + پیام‌های بازاریابی ساعتی با بنر تصویری
+   874→//   · کانال VIP اعضا: فقط فلش‌کارت‌های بازی + کارت نتیجه برایند روزانه
+   875→// ═══════════════════════════════════════════════════════════════
+   876→
+   877→/**
+   878→ * v13.5 — پست روزانه «۱ کارت VIP رایگان» به کانال عمومی (۱۲:۰۰ تهران):
+   879→ * از کارت‌های تاییدشده بازی‌های امروز، اولویت با کارت‌های «دژ نفوذناپذیر»
+   880→ * (ریسک باخت همزمان زیر ۷٪) است؛ در نبود دژ، بالاترین امتیاز سوپروایزر انتخاب می‌شود.
+   881→ * Dedupe روزانه با KEY_FUNNEL_GIFT_DAY.
+   882→ */
+   883→export async function sendDailyGiftCard(force = false): Promise<{ ok: boolean; detail: string }> {
+   884→  const token = await botToken();
+   885→  if (!token) return { ok: false, detail: "NO_TOKEN" };
+   886→  const chatId = await publicChannelId();
+   887→  if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
+   888→
+   889→  const today = tehranDayKey();
+   890→  if (!force) {
+   891→    const last = await getSetting(KEY_FUNNEL_GIFT_DAY);
+   892→    if (last === today) return { ok: false, detail: "ALREADY_SENT_TODAY" };
+   893→  }
+   894→
+   895→  const day = tehranDayRange();
+   896→  const candidates = await db.issuedSlip.findMany({
+   897→    where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: day.start, lt: day.end } },
+   898→    orderBy: { kickoff: "asc" },
+   899→    take: 24,
+   900→  });
+   901→  if (candidates.length === 0) return { ok: false, detail: "NO_TODAY_CARD" };
+   902→
+   903→  // اولویت ۱: دژ نفوذناپذیر (ریسک < ۷٪) با بالاترین امتیاز؛ اولویت ۲: بالاترین امتیاز سوپروایزر
+   904→  const scoreOf = (s: IssuedSlip) => s.supervisorScore ?? -999;
+   905→  const fortress = candidates.filter((s) => (s.jointLossRiskPct ?? 99) < 7);
+   906→  const pick = fortress.length > 0 ? fortress.sort((a, b) => scoreOf(b) - scoreOf(a))[0] : candidates.sort((a, b) => scoreOf(b) - scoreOf(a))[0];
+   907→  const isFortress = (pick.jointLossRiskPct ?? 99) < 7;
+   908→
+   909→  const photo = await renderSlipCardPNG(pick);
+   910→  const kickoffEn = new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(new Date(pick.kickoff));
+   911→  const caption =
+   912→    `${isFortress ? "🏰 <b>FREE VIP CARD OF THE DAY — FORTRESS MODE (joint-loss risk &lt; 7%)</b>" : "🎁 <b>FREE VIP CARD OF THE DAY — Supervisor-Approved</b>"}\n` +
+   913→    `🏆 <b>${esc(pick.homeTeam)}</b> × <b>${esc(pick.awayTeam)}</b> · ${esc(pick.league)} · ⏰ ${kickoffEn} Tehran\n` +
+   914→    `🔹 Tip A @${pick.oddsA.toFixed(2)}: ${esc(pick.labelA)} · stake ${pick.stakeA.toFixed(1)}u\n` +
+   915→    `🟢 Tip B @${pick.oddsB.toFixed(2)}: ${esc(pick.labelB)} · stake ${pick.stakeB.toFixed(1)}u\n` +
+   916→    `💰 Guaranteed dutch cover: <b>+${pick.marginPct.toFixed(1)}%</b> on a 100-unit ticket\n` +
+   917→    `🔐 Pre-match SHA-256: <code>${pick.hash.slice(0, 24)}</code>\n` +
+   918→    `———————\n` +
+   919→    `🎁 <b>کارت رایگان امروز — تایید سوپروایزر${isFortress ? " · دژ نفوذناپذیر (ریسک زیر ۷٪)" : ""}</b>\n` +
+   920→    `هر روز فقط ۱ کارت کامل و باز در کانال عمومی منتشر می‌شود؛ بقیه کارت‌ها مخصوص اعضای VIP است.\n` +
+   921→    `👑 عضویت VIP: @aineobet_vip_bot`;
+   922→
+   923→  let ok = false;
+   924→  if (photo) {
+   925→    ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-gift-${pick.hash.slice(0, 10)}.png`)).ok;
+   926→    if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+   927→  } else {
+   928→    ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+   929→  }
+   930→  if (ok) {
+   931→    await setSetting(KEY_FUNNEL_GIFT_DAY, today);
+   932→    await logOutbox(pick.id, "FUNNEL_GIFT", true, `public:${chatId}${isFortress ? ":fortress" : ""}`);
+   933→  }
+   934→  return { ok, detail: ok ? (isFortress ? "fortress-gift-sent" : "gift-sent") : "send-failed" };
+   935→}
+   936→
+   937→// ─── v13.5 — موضوعات بنر بازاریابی ساعتی (چرخشی، با کپشن فارسی — تصویر کاملاً انگلیسی) ───
+   938→
+   939→interface MarketingAd {
+   940→  key: string;
+   941→  headline: string;
+   942→  sub: string;
+   943→  hashtag: string;
+   944→  bullets: { icon: "shield" | "crown" | "target" | "vault" | "clock" | "bolt"; title: string; line: string }[];
+   945→  faCaption: string;
+   946→}
+   947→
+   948→export const MARKETING_ADS: MarketingAd[] = [
+   949→  {
+   950→    key: "DUTCH_COVER",
+   951→    headline: "GUARANTEED DUTCH COVER",
+   952→    sub: "Two complementary tips split one 100-unit ticket — either winning outcome pays the same fixed profit.",
+   953→    hashtag: "#GUARANTEED_COVER",
+   954→    bullets: [
+   955→      { icon: "shield", title: "FULL SCOREBOARD COVER", line: "Both tips own disjoint score corridors — no double exposure." },
+   956→      { icon: "target", title: "FIXED PROFIT PER TICKET", line: "The margin is locked at issue time and printed on the card." },
+   957→      { icon: "vault", title: "100-UNIT STANDARD", line: "1 unit = 1% of your own bankroll — fully scalable." },
+   958→      { icon: "clock", title: "AUTO ESPN GRADING", line: "Every ticket settles itself on the official final score." },
+   959→    ],
+   960→    faCaption: "💰 <b>پوشش داچینگ تضمینی — امضای NeoBet</b>\nدو تیپ مکمل یک بلیت ۱۰۰ واحدی را پوشش می‌دهند؛ هر نتیجه‌ای دربیاید سود ثابت همان است.\n👑 عضویت VIP: @aineobet_vip_bot",
+   961→  },
+   962→  {
+   963→    key: "SUPERVISOR_GATE",
+   964→    headline: "AI SUPERVISOR VETO GATE",
+   965→    sub: "Every match is scanned and scored — high-risk patterns are vetoed before a card is ever issued.",
+   966→    hashtag: "#AI_SUPERVISOR",
+   967→    bullets: [
+   968→      { icon: "shield", title: "9.8% JOINT-LOSS RISK GATE", line: "Cards above the loss-corridor threshold never reach the channel." },
+   969→      { icon: "target", title: "SIX-FACTOR SCORING", line: "Odds movement, λ model, form, variance and market value." },
+   970→      { icon: "vault", title: "SHADOW LEDGER", line: "Vetoed cards are paper-settled publicly for full transparency." },
+   971→      { icon: "crown", title: "HUMAN-GRADE DISCIPLINE", line: "No chasing, no tilt, no revenge tickets — pure process." },
+   972→    ],
+   973→    faCaption: "🛡️ <b>دروازه وتوی سوپروایزر هوشمند</b>\nبازی‌های پرریسک قبل از صدور کارت حذف می‌شوند؛ ریسک باخت همزمان بالای ۹.۸٪ هرگز منتشر نمی‌شود.\n👑 عضویت VIP: @aineobet_vip_bot",
+   974→  },
+   975→  {
+   976→    key: "ESPN_SETTLEMENT",
+   977→    headline: "100% AUTO ESPN SETTLEMENT",
+   978→    sub: "Zero manual grading. Every card is auto-settled on the official ESPN scoreboard within minutes of FT.",
+   979→    hashtag: "#ESPN_AUTO_SETTLED",
+   980→    bullets: [
+   981→      { icon: "bolt", title: "MINUTES AFTER FT", line: "Server loop scans ESPN day+night — no human in the loop." },
+   982→      { icon: "shield", title: "OFFICIAL SCOREBOARD ONLY", line: "If ESPN has no result, the ticket is voided honestly." },
+   983→      { icon: "vault", title: "SHA-256 ON EVERY CARD", line: "Pre-match hash proves the tip was never edited." },
+   984→      { icon: "target", title: "WIN / LOSS POSTED ALIKE", line: "Losses are published too — full transparency policy." },
+   985→    ],
+   986→    faCaption: "⚡ <b>تسویه ۱۰۰٪ خودکار با اسکوربورد رسمی ESPN</b>\nچند دقیقه پس از سوت پایان، نتیجه هر کارت خودکار اعلام می‌شود — بدون هیچ دخالت انسانی.\n👑 عضویت VIP: @aineobet_vip_bot",
+   987→  },
+   988→  {
+   989→    key: "FORTRESS_MODE",
+   990→    headline: "FORTRESS MODE CARDS",
+   991→    sub: "The safest product line: joint-loss risk under 7% — slower, calmer, built for stress-free tickets.",
+   992→    hashtag: "#FORTRESS_MODE",
+   993→    bullets: [
+   994→      { icon: "vault", title: "RISK < 7% ONLY", line: "Only ultra-low joint-loss patterns earn the fortress badge." },
+   995→      { icon: "shield", title: "SUPERVISOR APPROVED", line: "Every fortress card passes the full AI veto gate." },
+   996→      { icon: "clock", title: "BANK-FRIENDLY PACE", line: "Designed for steady compounding, not adrenaline." },
+   997→      { icon: "crown", title: "DAILY FORTRESS PICK", line: "The daily free card prefers fortress patterns first." },
+   998→    ],
+   999→    faCaption: "🏰 <b>دژ نفوذناپذیر — امن‌ترین خط تولید NeoBet</b>\nفقط کارت‌هایی با ریسک باخت همزمان زیر ۷٪ نشان دژ می‌گیرند؛ کارت رایگان روزانه اولویت با دژهاست.\n👑 عضویت VIP: @aineobet_vip_bot",
+  1000→  },
+  1001→  {
+  1002→    key: "SHA_PROOF",
+  1003→    headline: "SHA-256 PRE-MATCH PROOF",
+  1004→    sub: "Every tip is hashed before kickoff — the hash is published first, the result can never rewrite history.",
+  1005→    hashtag: "#SHA256_PROOF",
+  1006→    bullets: [
+  1007→      { icon: "vault", title: "HASHED BEFORE KICKOFF", line: "The card content is committed before the match starts." },
+  1008→      { icon: "target", title: "VERIFY AFTER FT", line: "Same hash, same tip — zero edits, zero deletions." },
+  1009→      { icon: "shield", title: "ESPN VERIFICATION LINK", line: "Each card carries its official ESPN match link." },
+  1010→      { icon: "crown", title: "AUDIT-FRIENDLY", line: "Anyone can re-verify the full track record." },
+  1011→    ],
+  1012→    faCaption: "🔐 <b>اثبات SHA-256 پیش از بازی</b>\nهش هر کارت قبل از شروع مسابقه منتشر می‌شود؛ بعد از بازی هم همان است — صفر ادیت، صفر حذف.\n👑 عضویت VIP: @aineobet_vip_bot",
+  1013→  },
+  1014→  {
+  1015→    key: "BANK_STRATEGY",
+  1016→    headline: "1000-UNIT BANK BLUEPRINT",
+  1017→    sub: "A flat 100-unit dutch ticket per card on a 1000-unit bank — simple, honest, measurable growth.",
+  1018→    hashtag: "#BANK_BLUEPRINT",
+  1019→    bullets: [
+  1020→      { icon: "crown", title: "FLAT STAKING DISCIPLINE", line: "No martingale, no doubling — pure flat 100u tickets." },
+  1021→      { icon: "target", title: "+X% PER TICKET LOCKED", line: "The cover margin is fixed at issue time." },
+  1022→      { icon: "shield", title: "DRAWDOWN CONTROLLED", line: "Veto gate keeps the loss-corridor rare and small." },
+  1023→      { icon: "vault", title: "TRACKED IN PUBLIC", line: "The bank growth curve is computed from real settled cards." },
+  1024→    ],
+  1025→    faCaption: "📈 <b>نقشه رشد بانک ۱۰۰۰ واحدی</b>\nهر کارت ۱۰۰ واحد ثابت روی بانک ۱۰۰۰ واحدی — رشد قابل اندازه‌گیری و شفاف، بدون مارتینگل.\n👑 عضویت VIP: @aineobet_vip_bot",
+  1026→  },
+  1027→  {
+  1028→    key: "TIMING_WINDOWS",
+  1029→    headline: "BEST EXECUTION WINDOWS",
+  1030→    sub: "Each card prints its own optimal odds-entry window — early favorite, lineup shock or late underdog peak.",
+  1031→    hashtag: "#TIMING_WINDOWS",
+  1032→    bullets: [
+  1033→      { icon: "clock", title: "T-60 LINEUP SHOCK", line: "Odds swing hardest when official XIs drop." },
+  1034→      { icon: "bolt", title: "EARLY FAVORITE WINDOW", line: "Sharp money moves the favorite line early — be there first." },
+  1035→      { icon: "target", title: "LATE UNDERDOG PEAK", line: "The best underdog price often lands in the last 30 minutes." },
+  1036→      { icon: "vault", title: "PRINTED ON THE CARD", line: "The exact Tehran-time window is on every poster." },
+  1037→    ],
+  1038→    faCaption: "⏱️ <b>بهترین ساعت ثبت ضریب — روی خود کارت</b>\nهر پوستر پنجره دقیق ثبت (به وقت تهران) را چاپ می‌کند؛ در پنجره درست وارد شوید.\n👑 عضویت VIP: @aineobet_vip_bot",
+  1039→  },
+  1040→  {
+  1041→    key: "COMBO_LINE",
+  1042→    headline: "SMART COMBO ENGINE",
+  1043→    sub: "Independent anchor legs joined into 2/3-leg combos with Monte-Carlo joint confidence printed on the poster.",
+  1044→    hashtag: "#SMART_COMBOS",
+  1045→    bullets: [
+  1046→      { icon: "bolt", title: "2-LEG SAFE DOUBLE", line: "Two uncorrelated anchors — the calm multiplier line." },
+  1047→      { icon: "crown", title: "3-LEG GOLDEN TREBLE", line: "Higher odds with joint-confidence disclosure." },
+  1048→      { icon: "target", title: "MONTE-CARLO 10K RUNS", line: "Joint probability is simulated, not guessed." },
+  1049→      { icon: "shield", title: "DISJOINT ACCOUNTING", line: "A combo ticket never counts in two product lines." },
+  1050→    ],
+  1051→    faCaption: "🧩 <b>موتور میکس هوشمند — اعتماد مونت‌کارلو</b>\nپایه‌های مستقل با احتمال مشترک شبیه‌سازی‌شده روی پوستر چاپ می‌شود؛ هیچ عدد ساختگی وجود ندارد.\n👑 عضویت VIP: @aineobet_vip_bot",
+  1052→  },
+  1053→  {
+  1054→    key: "SNIPER_LINE",
+  1055→    headline: "HIGH-ODDS SNIPER SHOTS",
+  1056→    sub: "Reverse-Poisson value hunts at big prices — small capped stakes, EV-protected single shots.",
+  1057→    hashtag: "#ODDS_SNIPER",
+  1058→    bullets: [
+  1059→      { icon: "target", title: "REVERSE-POISSON EDGE", line: "We price the longshot; the book prices the crowd." },
+  1060→      { icon: "vault", title: "0.5-1.0% BANKROLL CAP", line: "Snipers stay small — the bank is never hostage." },
+  1061→      { icon: "bolt", title: "FRACTIONAL KELLY 0.15x", line: "Quarter-Kelly discipline on every shot." },
+  1062→      { icon: "crown", title: "SINGLE SHOT ONLY", line: "One sniper per match — no parlays of longshots." },
+  1063→    ],
+  1064→    faCaption: "🎯 <b>تک‌تیرانداز ضریب بالا — ارزش پنهان بازار</b>\nشات‌های تک با استیک کپ‌شده و لبه ریورس‌پواسون؛ بانک شما هرگز گروگان شات بلند نیست.\n👑 عضویت VIP: @aineobet_vip_bot",
+  1065→  },
+  1066→  {
+  1067→    key: "LIFETIME_PLAN",
+  1068→    headline: "LIFETIME VIP — ONE PAYMENT",
+  1069→    sub: "Pay once, receive every VIP flashcard, the daily digest and the full quant pipeline forever.",
+  1070→    hashtag: "#LIFETIME_VIP",
+  1071→    bullets: [
+  1072→      { icon: "crown", title: "LIFETIME ACCESS 50 USDT", line: "The flagship plan — never expires." },
+  1073→      { icon: "vault", title: "ALL PRODUCT LINES", line: "Dual-hedge cards, combos, snipers, fortress picks." },
+  1074→      { icon: "bolt", title: "INSTANT USDT AUTO-VERIFY", line: "TRC-20 / SOL / BSC / Polygon — 10-second activation." },
+  1075→      { icon: "shield", title: "CARD-TO-CARD IN TOMAN", line: "Iranian bank transfer accepted inside the bot." },
+  1076→    ],
+  1077→    faCaption: "♾️ <b>اشتراک مادام‌العمر — فقط یک پرداخت</b>\nهمه فلش‌کارت‌ها، برآیند روزانه و کل خط تولید کوانتوم، برای همیشه.\nپرداخت: USDT (TRC20/SOL/BSC/Polygon) یا کارت‌به‌کارت تومانی داخل ربات.\n👑 عضویت: @aineobet_vip_bot",
+  1078→  },
+  1079→];
+  1080→
+  1081→/**
+  1082→ * v13.5 — پیام بازاریابی هوشمند ساعتی به کانال عمومی (۰۹ تا ۲۳ تهران):
+  1083→ * بنر تصویری کاملاً انگلیسی + کپشن فارسی حرفه‌ای + KPI واقعی کانال.
+  1084→ * موضوع‌ها چرخشی‌اند (hour % 10) و با KEY_MARKETING_LAST_AD در هر ساعت فقط یک‌بار ارسال می‌شوند.
+  1085→ */
+  1086→export async function sendHourlyVipAd(force = false): Promise<{ ok: boolean; detail: string; topic: string }> {
+  1087→  const token = await botToken();
+  1088→  if (!token) return { ok: false, detail: "NO_TOKEN", topic: "—" };
+  1089→  const chatId = await publicChannelId();
+  1090→  if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL", topic: "—" };
+  1091→
+  1092→  const th = tehranHour();
+  1093→  if (!force && (th < 9 || th > 23)) return { ok: false, detail: "OUT_OF_MARKETING_HOURS", topic: "—" };
+  1094→
+  1095→  const stamp = `${tehranDayKey()}:${th}`;
+  1096→  if (!force) {
+  1097→    const last = await getSetting(KEY_MARKETING_LAST_AD);
+  1098→    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_HOUR", topic: "—" };
+  1099→  }
+  1100→
+  1101→  const ad = MARKETING_ADS[th % MARKETING_ADS.length];
+  1102→  try {
+  1103→    const photo = await renderVipAdBannerPNG({
+  1104→      topicKey: ad.key,
+  1105→      headline: ad.headline,
+  1106→      sub: ad.sub,
+  1107→      hashtag: ad.hashtag,
+  1108→      bullets: ad.bullets,
+  1109→      generatedAtIso: new Date().toISOString(),
+  1110→    });
+  1111→    let ok = (await tgSendPhotoTo(chatId, photo, ad.faCaption, `vip-ad-${ad.key.toLowerCase()}.png`)).ok;
+  1112→    if (!ok) {
+  1113→      ok = (await tgCall("sendMessage", { chat_id: chatId, text: ad.faCaption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  1114→    }
+  1115→    if (ok) {
+  1116→      await setSetting(KEY_MARKETING_LAST_AD, stamp);
+  1117→      await logOutbox(null, "MARKETING_AD", true, `public:${chatId}:${ad.key}`);
+  1118→    }
+  1119→    return { ok, detail: ok ? "ad-sent" : "send-failed", topic: ad.key };
+  1120→  } catch (err) {
+  1121→    console.warn("hourly vip ad failed:", err instanceof Error ? err.message : err);
+  1122→    return { ok: false, detail: "RENDER_FAILED", topic: ad.key };
+  1123→  }
+  1124→}
+  1125→
+  1126→/** آمار رادار شفافیت — از دیتابیس کارنامه (بدون هیچ عدد جعلی) */
+  1127→export async function funnelRadarStats(): Promise<{ scanned: number; vetoed: number; golden: number }> {
+  1128→  const [all, vetoed] = await Promise.all([
+  1129→    db.issuedSlip.findMany({ select: { externalId: true, supervisorApproved: true } }),
+  1130→    db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false } }),
+  1131→  ]);
+  1132→  const scanned = new Set(all.map((s) => s.externalId ?? s.id)).size;
+  1133→  const golden = await db.issuedSlip.count({ where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } } });
+  1134→  return { scanned, vetoed, golden };
+  1135→}
+  1136→
+  1137→/** پست ۱ — رادار شفافیت روزانه به کانال عمومی (ساعت ۱۱:۰۰ تهران، یک‌بار در روز) */
+  1138→export async function sendPublicRadar(force = false): Promise<boolean> {
+  1139→  const token = await botToken();
+  1140→  if (!token) return false;
+  1141→  const chatId = await publicChannelId();
+  1142→  if (!chatId) return false;
+  1143→
+  1144→  const today = tehranDayKey();
+  1145→  if (!force) {
+  1146→    const last = await getSetting(KEY_FUNNEL_RADAR_DAY);
+  1147→    if (last === today) return false;
+  1148→  }
+  1149→
+  1150→  const st = await funnelRadarStats();
+  1151→  const next = await db.issuedSlip.findFirst({
+  1152→    where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } },
+  1153→    orderBy: { kickoff: "asc" },
+  1154→  });
+  1155→  const topLine = next
+  1156→    ? `${next.homeTeam} vs ${next.awayTeam} · guaranteed +${next.marginPct.toFixed(1)}% dutch cover`
+  1157→    : "Scanner is waiting for the next ESPN matchday window";
+  1158→
+  1159→  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", timeZone: "Asia/Tehran" }).format(new Date());
+  1160→  const photo = await renderDailyRadarPNG({
+  1161→    dateLabelEn,
+  1162→    scanned: st.scanned,
+  1163→    vetoed: st.vetoed,
+  1164→    goldenSignals: st.golden,
+  1165→    topPickLine: topLine,
+  1166→  });
+  1167→
+  1168→  const caption =
+  1169→    `📡 <b>NEOBET QUANT PRO • ${esc(DEFAULT_PUBLIC_CHANNEL.replace("@", "@"))} — Daily Matchday Radar</b>\n` +
+  1170→    `🔍 ${st.scanned} matches scanned · 🛡️ ${st.vetoed} high-risk vetoed by the Supervisor · 👑 ${st.golden} golden signals issued for VIP.\n` +
+  1171→    `Free gift card + locked VIP teasers drop at T-60 before kickoff. Same SHA-256, unblurred after FT.`;
+  1172→
+  1173→  let res = await tgSendPhotoTo(chatId, photo, caption, `daily-radar-${today}.png`);
+  1174→  if (!res.ok) {
+  1175→    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
+  1176→  }
+  1177→  if (res.ok) {
+  1178→    await setSetting(KEY_FUNNEL_RADAR_DAY, today);
+  1179→    await logOutbox(null, "FUNNEL_RADAR", true, `public:${chatId}`);
+  1180→  }
+  1181→  return res.ok;
+  1182→}
+  1183→
+  1184→/** پست ۲ — قیف T-60m: ۱ کارت رایگان کامل + تیزرهای قفل‌شده به کانال عمومی */
+  1185→export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean; teasers: number }> {
+  1186→  const token = await botToken();
+  1187→  if (!token) return { gift: false, teasers: 0 };
+  1188→  const chatId = await publicChannelId();
+  1189→  if (!chatId) return { gift: false, teasers: 0 };
+  1190→
+  1191→  const now = Date.now();
+  1192→  const window = await db.issuedSlip.findMany({
+  1193→    where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: new Date(now + 25 * 60_000), lte: new Date(now + 95 * 60_000) } },
+  1194→    orderBy: { kickoff: "asc" },
+  1195→    take: 6,
+  1196→  });
+  1197→
+  1198→  const alreadySent = new Set(
+  1199→    (await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null } }, select: { slipId: true } })).map((r) => r.slipId)
+  1200→  );
+  1201→  const candidates = window.filter((s) => !alreadySent.has(s.id));
+  1202→  if (candidates.length === 0 && !force) return { gift: false, teasers: 0 };
+  1203→
+  1204→  const today = tehranDayKey();
+  1205→  const giftDay = await getSetting(KEY_FUNNEL_GIFT_DAY);
+  1206→
+  1207→  let gift = false;
+  1208→  let teasers = 0;
+  1209→
+  1210→  for (const slip of candidates) {
+  1211→    const isGift = giftDay !== today; // هر روز فقط ۱ کارت کامل رایگان
+  1212→    try {
+  1213→      if (isGift) {
+  1214→        const photo = await renderSlipCardPNG(slip);
+  1215→        const caption =
+  1216→          `🎁 <b>FREE GIFT CARD — 100% OPEN, NO LOCK</b>\n` +
+  1217→          `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
+  1218→          `🔹 Tip A @${slip.oddsA.toFixed(2)}: ${esc(slip.labelA)} · stake ${slip.stakeA.toFixed(1)}u\n` +
+  1219→          `🟢 Tip B @${slip.oddsB.toFixed(2)}: ${esc(slip.labelB)} · stake ${slip.stakeB.toFixed(1)}u\n` +
+  1220→          `💰 Guaranteed dutch profit: <b>+${slip.marginPct.toFixed(1)}%</b>\n` +
+  1221→          `🔐 SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
+  1222→          `Every settlement is auto-graded on the official ESPN final score.`;
+  1223→        const ok = (await tgSendPhotoTo(chatId, photo, caption, `gift-${slip.hash.slice(0, 10)}.png`)).ok;
+  1224→        if (ok) {
+  1225→          gift = true;
+  1226→          await setSetting(KEY_FUNNEL_GIFT_DAY, today);
+  1227→          await logOutbox(slip.id, "FUNNEL_GIFT", true, `public:${chatId}`);
+  1228→        }
+  1229→      } else {
+  1230→        // v13.5 — رفع باگ ورودی: renderLockedTeaserPNG قبلاً با IssuedSlip خام صدا زده می‌شد
+  1231→        // (kickoffEn/labelAEn/hashShort وجود نداشت → پوستر «undefined» چاپ می‌کرد).
+  1232→        // اکنون از رندر تیزر رسمی (کارت کامل با تیپ B قفل) استفاده می‌شود.
+  1233→        const photo = await renderSlipTeaserPNG(slip);
+  1234→        const caption =
+  1235→          `🔒 <b>VIP TEASER — UNBLURRED AFTER FT</b>\n` +
+  1236→          `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
+  1237→          `💰 Guaranteed cover profit: <b>+${slip.marginPct.toFixed(1)}%</b> · Tip A @${slip.oddsA.toFixed(2)} revealed — Tip B locked.\n` +
+  1238→          `🔐 Pre-match SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
+  1239→          `Join VIP to unlock the complementary leg before kickoff.`;
+  1240→        const ok = (await tgSendPhotoTo(chatId, photo, caption, `teaser-${slip.hash.slice(0, 10)}.png`)).ok;
+  1241→        if (ok) {
+  1242→          teasers += 1;
+  1243→          await logOutbox(slip.id, "FUNNEL_TEASER", true, `public:${chatId}`);
+  1244→        }
+  1245→      }
+  1246→    } catch (err) {
+  1247→      console.warn("funnel teaser failed:", err instanceof Error ? err.message : err);
+  1248→    }
+  1249→  }
+  1250→  return { gift, teasers };
+  1251→}
+  1252→
+  1253→/** پست ۳ — FT+5m: بازگشایی قفل همان کارت + پوستر نتیجه در کانال عمومی (اثبات SHA-256) */
+  1254→export async function sendPublicUnblur(): Promise<number> {
+  1255→  const token = await botToken();
+  1256→  if (!token) return 0;
+  1257→  const chatId = await publicChannelId();
+  1258→  if (!chatId) return 0;
+  1259→
+  1260→  // کارت‌های تسویه‌شده که تیزر/گیفت عمومی دارند ولی اثبات عمومی نگرفته‌اند
+  1261→  const teased = (
+  1262→    await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null } }, select: { slipId: true } })
+  1263→  ).map((r) => r.slipId as string);
+  1264→  const proven = new Set(
+  1265→    (await db.telegramOutbox.findMany({ where: { kind: "FUNNEL_UNBLUR", slipId: { not: null } }, select: { slipId: true } })).map((r) => r.slipId)
+  1266→  );
+  1267→  const ids = teased.filter((id) => !proven.has(id));
+  1268→  if (ids.length === 0) return 0;
+  1269→
+  1270→  const slips = await db.issuedSlip.findMany({
+  1271→    where: { id: { in: ids }, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+  1272→    orderBy: { settledAt: "asc" },
+  1273→    take: 4,
+  1274→  });
+  1275→
+  1276→  let sent = 0;
+  1277→  for (const slip of slips) {
+  1278→    try {
+  1279→      const unblurred = await renderSlipCardPNG(slip);
+  1280→      const result = await renderSlipResultPNG(slip);
+  1281→      const r = slipResultLabel(slip.status);
+  1282→      const caption =
+  1283→        `🔓 <b>UNBLURRED — SAME SHA-256, NOW OPEN</b>\n` +
+  1284→        `🏆 <b>${esc(slip.homeTeam)} ${slip.homeGoals ?? 0}−${slip.awayGoals ?? 0} ${esc(slip.awayTeam)}</b> · FT (official ESPN)\n` +
+  1285→        `${r.emoji} Result: <b>${esc(r.label)}</b> · net ${((slip.netProfit ?? 0) >= 0 ? "+" : "")}${(slip.netProfit ?? 0).toFixed(1)}u\n` +
+  1286→        `🔐 Pre-match hash: <code>${slip.hash.slice(0, 24)}</code> — identical to the locked teaser posted before kickoff.\n` +
+  1287→        `The VIP leg that was blurred is now fully visible. Zero edits, zero deletions — full transparency.`;
+  1288→      const okPhoto = (await tgSendPhotoTo(chatId, unblurred, caption, `unblur-${slip.hash.slice(0, 10)}.png`)).ok;
+  1289→      if (okPhoto) {
+  1290→        await tgSendPhotoTo(chatId, result, caption, `proof-${slip.hash.slice(0, 10)}.png`);
+  1291→        sent += 1;
+  1292→        await logOutbox(slip.id, "FUNNEL_UNBLUR", true, `public:${chatId}`);
+  1293→      }
+  1294→    } catch (err) {
+  1295→      console.warn("funnel unblur failed:", err instanceof Error ? err.message : err);
+  1296→    }
+  1297→  }
+  1298→  return sent;
+  1299→}
+  1300→
+  1301→/**
+  1302→ * پست ۴ — برآیند واقعی شب (۲۳:۳۰ تهران) به کانال عمومی:
+  1303→ * سود خالص واقعی روز با «افراز مجزا» — دسته الف تک‌بازی / ب میکس / ج تیپ‌های ضریب بالا.
+  1304→ * صفر دوباره‌شماری: هر کارت فقط در خط تولید خودش شمرده می‌شود.
+  1305→ */
+  1306→export async function sendNightlyPnl(force = false): Promise<boolean> {
+  1307→  const token = await botToken();
+  1308→  if (!token) return false;
+  1309→  const chatId = await publicChannelId();
+  1310→  if (!chatId) return false;
+  1311→
+  1312→  const today = tehranDayKey();
+  1313→  if (!force) {
+  1314→    const last = await getSetting(KEY_FUNNEL_PNL_DAY);
+  1315→    if (last === today) return false;
+  1316→  }
+  1317→
+  1318→  const rows = await db.issuedSlip.findMany({
+  1319→    where: { supervisorApproved: true, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, settledAt: { not: null } },
+  1320→    orderBy: { settledAt: "desc" },
+  1321→    take: 80,
+  1322→  });
+  1323→  const todayRows = rows.filter((r) => tehranDayKey(r.settledAt as Date) === today);
+  1324→
+  1325→  const tierNet = (line: string) => todayRows.filter((r) => (r.productLine ?? "SINGLE") === line).reduce((a, r) => a + (r.netProfit ?? 0), 0);
+  1326→  const netA = tierNet("SINGLE");
+  1327→  const netB = tierNet("COMBO");
+  1328→  const netC = tierNet("SNIPER");
+  1329→  const total = netA + netB + netC;
+  1330→  const settled = todayRows.length;
+  1331→  const wins = todayRows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+  1332→  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+  1333→
+  1334→  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+  1335→  const timeEn = (d: Date) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d);
+  1336→
+  1337→  const photo = await renderDailyReportPNG({
+  1338→    dateLabelEn,
+  1339→    kpis: [
+  1340→      { label: "TIER 1 · DUAL-HEDGE NET", value: `${netA >= 0 ? "+" : "−"}${Math.abs(netA).toFixed(1)}`, color: netA >= 0 ? C_emerald : C_rose },
+  1341→      { label: "TIER 2 · COMBO NET", value: `${netB >= 0 ? "+" : "−"}${Math.abs(netB).toFixed(1)}`, color: netB >= 0 ? C_emerald : C_rose },
+  1342→      { label: "TIER 3 · SNIPER NET", value: `${netC >= 0 ? "+" : "−"}${Math.abs(netC).toFixed(1)}`, color: netC >= 0 ? C_emerald : C_rose },
+  1343→      { label: "CHANNEL WIN-RATE", value: `${winRate.toFixed(0)}%`, color: C_cyan },
+  1344→    ],
+  1345→    matches: todayRows.slice(0, 4).map((r) => ({
+  1346→      teams: `${r.homeTeam} vs ${r.awayTeam}`,
+  1347→      score: `${r.homeGoals ?? 0}-${r.awayGoals ?? 0}`,
+  1348→      verdict: `${r.status.replace("_", " ")} · settled ${r.settledAt ? timeEn(r.settledAt) : ""} Tehran`,
+  1349→      profit: r.netProfit ?? 0,
+  1350→    })),
+  1351→    dayNetProfit: Math.round(total * 100) / 100,
+  1352→    daySettled: settled,
+  1353→    dayStaked: Math.round(todayRows.reduce((a, r) => a + r.stakeA + r.stakeB, 0)),
+  1354→  });
+  1355→
+  1356→  const caption =
+  1357→    `🌙 <b>NEOBET QUANT PRO • Nightly Real PnL — Disjoint Product Lines</b>\n` +
+  1358→    `Tier 1 Dual-Hedge: <b>${netA >= 0 ? "+" : ""}${netA.toFixed(1)}u</b> · Tier 2 Combos: <b>${netB >= 0 ? "+" : ""}${netB.toFixed(1)}u</b> · Tier 3 Sniper: <b>${netC >= 0 ? "+" : ""}${netC.toFixed(1)}u</b>\n` +
+  1359→    `Day net: <b>${total >= 0 ? "+" : ""}${total.toFixed(1)} units</b> on ${settled} real ESPN-settled tickets · win-rate ${winRate.toFixed(1)}%.\n` +
+  1360→    `Strictly disjoint accounting — no ticket is ever counted in two lines. No simulation, no paper trades.`;
+  1361→
+  1362→  let res = await tgSendPhotoTo(chatId, photo, caption, `nightly-pnl-${today}.png`);
+  1363→  if (!res.ok) {
+  1364→    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
+  1365→  }
+  1366→  if (res.ok) {
+  1367→    await setSetting(KEY_FUNNEL_PNL_DAY, today);
+  1368→    await logOutbox(null, "FUNNEL_PNL", true, `public:${chatId}`);
+  1369→  }
+  1370→  return res.ok;
+  1371→}
+  1372→
+  1373→/** وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5) */
+  1374→export async function funnelStatus() {
+  1375→  const [pub, vip, radarDay, pnlDay, giftDay, lastAd, digestDay, stats] = await Promise.all([
+  1376→    publicChannelId(),
+  1377→    channelId(),
+  1378→    getSetting(KEY_FUNNEL_RADAR_DAY),
+  1379→    getSetting(KEY_FUNNEL_PNL_DAY),
+  1380→    getSetting(KEY_FUNNEL_GIFT_DAY),
+  1381→    getSetting(KEY_MARKETING_LAST_AD),
+  1382→    getSetting(KEY_LAST_DIGEST_DAY),
+  1383→    funnelRadarStats(),
+  1384→  ]);
+  1385→  const counts = await db.telegramOutbox.groupBy({ by: ["kind"], where: { kind: { startsWith: "FUNNEL" } }, _count: { kind: true } });
+  1386→  const adCounts = await db.telegramOutbox.groupBy({ by: ["kind"], where: { kind: "MARKETING_AD" }, _count: { kind: true } });
+  1387→  const recent = await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_RADAR", "FUNNEL_TEASER", "FUNNEL_GIFT", "FUNNEL_UNBLUR", "FUNNEL_PNL", "MARKETING_AD", "DAILY_DIGEST", "WINRATE"] } }, orderBy: { createdAt: "desc" }, take: 14, select: { kind: true, ok: true, detail: true, createdAt: true } });
+  1388→  return {
+  1389→    publicChannel: pub,
+  1390→    vipChannel: vip,
+  1391→    today: tehranDayKey(),
+  1392→    radarSentToday: radarDay === tehranDayKey(),
+  1393→    pnlSentToday: pnlDay === tehranDayKey(),
+  1394→    giftSentToday: giftDay === tehranDayKey(),
+  1395→    digestSentToday: digestDay === tehranDayKey(),
+  1396→    lastAdStamp: lastAd,
+  1397→    adSentThisHour: lastAd === `${tehranDayKey()}:${tehranHour()}`,
+  1398→    stats,
+  1399→    sentCounts: Object.fromEntries([...counts, ...adCounts].map((c) => [c.kind, c._count.kind])),
+  1400→    recent,
+  1401→  };
+  1402→}
+  1403→

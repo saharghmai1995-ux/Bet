@@ -28,6 +28,7 @@ import {
 import { fetchTeamLogoBuffer } from "./stadium-store";
 import { fetchEspnEvents, normTeam } from "./live-sources";
 import { computeMatchEngine } from "@/lib/engine/matchEngine";
+import { score100Of } from "@/lib/supervisor";
 import { TIMING_WINDOWS, type TimingWindowKey } from "@/lib/timing-window";
 import { db } from "@/lib/db";
 
@@ -171,10 +172,8 @@ async function cardStatsOf(slip: IssuedSlip) {
     jointLossRiskPct: slip.jointLossRiskPct ?? null,
     doubleWinProbPct: slip.doubleWinProbPct ?? null,
     supervisorScore: slip.supervisorScore ?? null,
-    score100:
-      slip.supervisorScore != null
-        ? Math.max(0, Math.min(100, Math.round(((slip.supervisorScore + 280) / 480) * 100)))
-        : (null as number | null),
+    // v15.0 — نرمال‌سازی واحد با supervisor.score100Of (بازه اتمیک [−۴۸۰..+۱۲۰])
+    score100: slip.supervisorScore != null ? score100Of(slip.supervisorScore) : (null as number | null),
     fortress: slip.supervisorApproved && (slip.jointLossRiskPct ?? 99) < 7,
     archetypeCode: slip.archetypeCode ?? null,
     archetype: slip.archetype ?? null,

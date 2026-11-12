@@ -35,7 +35,15 @@ import type { ActiveLeagueRule } from "./engine/calibration";
 export type ExecutionMode = "DUAL_BOOK" | "SINGLE_BOOK";
 
 /**
- * v11.0 — آستانه طلایی گیت سخت ایمنی سوپروایزر:
+ * v15.0 — گیت‌های بازکالیبره‌شده سوپروایزر برای بازارهای اتمیک رسمی:
+ * در ۴ الگوی رسمی تک‌دکمه‌ای، دو دکمه «کل فضای نتیجه» را نمی‌پوشانند — ریسک باخت
+ * همزمان ۱۰..۳۰٪ ذاتِ این بازارهاست (قیمت واقعی پوشش استاندارد بوک‌میکر).
+ * وتو فقط برای ریسک افسرنده (>۴۵٪) و حاشیه بدون ارزش (<۱.۵٪) اعمال می‌شود؛
+ * نشان «دژ نفوذناپذیر» همچنان ریسک زیر ۷٪ است.
+ */
+export const VETO_JOINT_LOSS_PCT_ATOMIC = 45;
+/**
+ * v11.0 — آستانه طلایی گیت سخت ایمنی سوپروایزر (دوره پیش‌از v15 — جفت‌های متعامد گسسته):
  * ریسک باخت همزمان بالاتر از ۹.۸٪ = وتو خودکار و بی‌قیدوشرط.
  */
 export const VETO_JOINT_LOSS_PCT = 9.8;
@@ -74,9 +82,17 @@ function riskPenalty(jointLossRiskPct: number): number {
  * لیگ قهرمانان زنان → +۱۸ به الگوی «فتح فاوریت با بالای ۲.۵» (A2)
  */
 export interface CategoryBoost {
-  code: "A1" | "A2" | "A3" | "A4" | "A5";
+  code: "A1" | "A2" | "A3" | "A4";
   points: number;
   label: string;
+}
+
+/**
+ * v15.0 — نرمال‌سازی نمایش امتیاز روی بازه واقعی الگوهای اتمیک [−۴۸۰..+۱۲۰].
+ * مرجع واحد score100 — مشترک بین supervisor و بلوک داده پوستر (slip-images).
+ */
+export function score100Of(raw: number): number {
+  return Math.max(0, Math.min(100, Math.round(((raw + 480) / 600) * 100)));
 }
 
 /** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — دقیقاً طبق فرمول v11.0 + پاداش دسته v14.0 */
@@ -98,18 +114,20 @@ export function scorePair(
   const categoryBoostPts = code && categoryBoost && categoryBoost.code === code ? categoryBoost.points : 0;
   boost += categoryBoostPts;
 
-  // ═══ فرمول v11.0 — حذف کامل پاداش فریبنده Double-Win ═══
-  const raw = coveragePct * 1.5 + guaranteedProfitPct * 1.3 - riskPenalty(jointLossRiskPct) + boost;
+  // ═══ فرمول v15.0 — بهینه‌ساز نامتقارن ریسک برای بازارهای اتمیک رسمی ═══
+  // پهنای پوشش (کمینه‌سازی ریسک باخت همزمان) عامل غالب انتخاب است — وزن ۳.۰؛
+  // حاشیه تضمینی به‌عنوان تسویه‌کننده تساوی (وزن ۱.۰)؛ جریمه توانی ریسک حفظ شده.
+  const raw = coveragePct * 3.0 + guaranteedProfitPct * 1.0 - riskPenalty(jointLossRiskPct) + boost;
 
-  // نرمال‌سازی نمایش: بازه خام واقعی [−۲۸۰ .. +۲۰۰] → [۰ .. ۱۰۰]
-  const score100 = Math.max(0, Math.min(100, Math.round(((raw + 280) / 480) * 100)));
+  // نرمال‌سازی نمایش v15.0 — بازه خام واقعی الگوهای اتمیک [−۴۸۰..+۱۲۰] → [۰..۱۰۰]
+  const score100 = score100Of(raw);
 
-  // ═══ گیت سخت ایمنی v11.0 — ریسک > ۹.۸٪ = وتو خودکار ═══
+  // ═══ گیت سخت ایمنی v15.0 — بازکالیبره برای بازارهای اتمیک رسمی ═══
   let veto = false;
   let vetoReason: string | null = null;
-  if (jointLossRiskPct > VETO_JOINT_LOSS_PCT) {
+  if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_ATOMIC) {
     veto = true;
-    vetoReason = `🛡️ گیت سخت v11.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه طلایی ۹.۸٪ — وتو خودکار`;
+    vetoReason = `🛡️ گیت سخت v15.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه افسرنده ۴۵٪ — وتو خودکار (دو دکمه بیش از نیمی از فضای نتیجه را از دست می‌دهند)`;
   } else if (guaranteedProfitPct < VETO_WEAK_PROFIT_PCT) {
     veto = true;
     vetoReason =
