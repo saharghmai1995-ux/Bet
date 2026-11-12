@@ -233,7 +233,7 @@ export function buildCardMessage(slip: IssuedSlip): string {
   const marketAEn = marketEnLabel(legKeys(slip.legsA)[0] ?? "");
   const marketBEn = marketEnLabel(legKeys(slip.legsB)[0] ?? "");
   const lines: string[] = [];
-  lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت بازار اتمیک رسمی v15.0</b>`);
+  lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت الگوی طلایی اتمیک v16.0</b>`);
   lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
   lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
   if (slip.archetype) lines.push(`📐 الگو: ${esc(slip.archetype)}`);
@@ -640,7 +640,7 @@ async function repairPrematureCardFlags(): Promise<number> {
         repaired += 1;
       }
     }
-    if (repaired > 0) console.log(`[telegram] v15 premature-card repair: ${repaired} flags reset for match-day re-broadcast`);
+    if (repaired > 0) console.log(`[telegram] v16 premature-card repair: ${repaired} flags reset for match-day re-broadcast`);
     return repaired;
   } catch (err) {
     console.warn("premature card repair failed:", err instanceof Error ? err.message : err);
@@ -1042,7 +1042,7 @@ export const MARKETING_ADS: MarketingAd[] = [
       { icon: "vault", title: "SHADOW LEDGER", line: "Vetoed cards are paper-settled publicly for full transparency." },
       { icon: "crown", title: "HUMAN-GRADE DISCIPLINE", line: "No chasing, no tilt, no revenge tickets — pure process." },
     ],
-    faCaption: "🛡️ <b>دروازه وتوی سوپروایزر هوشمند v15</b>\nبازی‌های پرریسک قبل از صدور کارت حذف می‌شوند؛ زوج‌های افسرنده با ریسک باخت همزمان بالای ۴۵٪ هرگز منتشر نمی‌شوند و ریسک هر کارت روی خودش شفاف چاپ می‌شود.\n👑 عضویت VIP: @Aineobet_bot",
+    faCaption: "🛡️ <b>دروازه وتوی سوپروایزر هوشمند v16.0</b>\nفقط بازی‌های تراز اول تایید می‌شوند: ریسک باخت همزمان بالای ۱۰.۵٪ وتو و به دفتر سایه منتقل می‌شود؛ فاوریت بدون برتری واضح (λ &lt; ۱.۵۰) وتو می‌شود؛ لیگ‌های سمّی (لالیگا ۲ و MLS و دوستانه) بلک‌لیست رسمی‌اند. ریسک هر کارت روی خودش شفاف چاپ می‌شود.\n👑 عضویت VIP: @Aineobet_bot",
   },
   {
     key: "ESPN_SETTLEMENT",

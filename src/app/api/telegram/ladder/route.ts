@@ -83,7 +83,7 @@ export async function POST(req: Request) {
     const caption =
       `🪜 <b>NEOBET QUANT PRO • @AINEOBET — Daily Compound Rollover Plan</b>\n` +
       `${steps.length} پله روی کارت‌های تاییدشده ریسک زیر ۱۰٪ · ورود ${startBank} واحد → خروج هدف ${finalBank.toFixed(1)} واحد (+${totalGrowthPct.toFixed(1)}٪)\n` +
-      `🔒 هر پله پیش از شروع پله بعد تسویه و برداشت می‌شود — گیت سخت ریسک اتمیک v15.`;
+      `🔒 هر پله پیش از شروع پله بعد تسویه و برداشت می‌شود — گیت سخت ریسک اتمیک v16.0 (۱۰.۵٪).`;
     const stadium = (await getStadiumBackground("DAILY_REPORT")) !== null;
     const res = await sendBroadcastPhoto(photo, caption, `rollover-ladder-${Date.now()}.png`, stadium);
     return NextResponse.json({ success: res.ok, detail: res.detail, finalBank: Math.round(finalBank * 10) / 10, totalGrowthPct: Math.round(totalGrowthPct * 10) / 10 });

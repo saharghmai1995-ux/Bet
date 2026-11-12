@@ -60,25 +60,27 @@ const TRUST_ICONS: Record<FlashcardView["trust"]["kind"], typeof Award> = {
   SILVER: BadgeCheck,
 };
 
-/** متن آماده کپی تیپ — v8.0 (تک‌تیپ طلایی سوپروایزر + فرمول صحیح سود) */
+/** متن آماده کپی تیپ — v16.0 (تک‌تیپ طلایی سوپروایزر + پشتیبانی شتاب‌دهنده نامتقارن) */
 export function cardCopyText(v: FlashcardView): string {
   const p = v.pair;
   const sup = v.supervisor;
-  const head = `⚽ فوتبال‌کوانت v8.0 Supervisor Quant — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
+  const head = `⚽ فوتبال‌کوانت v16.0 Supervisor Quant — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
   const crownLine = sup
     ? `👑 تک‌تیپ تاییدشده سوپروایزر — امتیاز مونت‌کارلو: ${sup.score100}/۱۰۰${p.archetype ? ` (${p.archetype.short})` : ""}`
     : p.archetype
       ? `📐 الگو: ${p.archetype.short}`
       : "";
-  const profitLine =
-    p.guaranteedMarginPct > 0
+  const acc = p.accelerator?.active ? p.accelerator : null;
+  const profitLine = acc
+    ? `⚡ شتاب‌دهنده نامتقارن فعال — قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B · برد A: ${acc.profitOnA >= 0 ? "+" : ""}${faNum(acc.profitOnA, 1)} واحد · برد همزمان (جک‌پات): +${faNum(acc.profitOnDoubleWin, 1)} واحد`
+    : p.guaranteedMarginPct > 0
       ? `💰 سود تضمینی: +${p.guaranteedMarginPct.toFixed(1)}٪ (+${faNum(p.equalProfit.profit, 1)} واحد سود خالص)`
       : `🛡️ پوشش بیمه سرمایه — بازگشت وجه در سناریوی پایه`;
   return [
     head,
     crownLine,
-    `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeA, 1)} واحد`,
-    `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(p.equalProfit.stakeB, 1)} واحد`,
+    `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(acc ? acc.stakeA : p.equalProfit.stakeA, 1)} واحد`,
+    `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(acc ? acc.stakeB : p.equalProfit.stakeB, 1)} واحد`,
     profitLine,
     `✅ پوشش سناریوها: ${(p.archetype ? p.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100).toFixed(0)}٪ | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
     `⚖️ ${p.verdict}`,
@@ -187,6 +189,10 @@ export function FlashCard({
   const sup = view.supervisor;
   const vetoed = sup?.veto ?? false;
   const dualBook = (sup?.executionMode ?? "DUAL_BOOK") === "DUAL_BOOK";
+  // v16.0 — شتاب‌دهنده نامتقارن موتور: قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B + تجمیس کل سود روی تیپ A
+  const acc = pair.accelerator?.active ? pair.accelerator : null;
+  const stakeAShown = acc ? acc.stakeA : pair.equalProfit.stakeA;
+  const stakeBShown = acc ? acc.stakeB : pair.equalProfit.stakeB;
   const insuranceMode = marginPct <= 0; // S ≥ 1 → بدون عدد سود متناقض
 
   // ═══ v11.0 — سوییچ دوحالته تخصیص بودجه (سود برابر ↔ شتاب‌دهنده نامتقارن) ═══
@@ -312,9 +318,14 @@ export function FlashCard({
                 </div>
                 <div className="text-left">
                   <p className="text-[9px] text-muted-foreground">استیک خودکار</p>
-                  <p className="font-num text-base font-bold text-foreground" dir="ltr">{faNum(pair.equalProfit.stakeA, 1)}</p>
+                  <p className="font-num text-base font-bold text-foreground" dir="ltr">{faNum(stakeAShown, 1)}</p>
                 </div>
               </div>
+              {acc && (
+                <p className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[8.5px] font-semibold leading-3 text-amber-300">
+                  ⚡ شتاب‌دهنده نامتقارن — تجمیس کل سود روی تیپ A
+                </p>
+              )}
               {/* v8.0 — برچسب انطباق ضد گوبینگ */}
               <p className="mt-1.5 flex items-center gap-1 border-t border-white/10 pt-1 text-[8.5px] font-medium text-sky-200/80">
                 <MapPin className="size-2.5 shrink-0" />
@@ -356,10 +367,15 @@ export function FlashCard({
                 <div className="text-left">
                   <p className="text-[9px] text-muted-foreground">استیک خودکار</p>
                   <p className={`font-num text-base font-bold text-foreground ${isFree ? "blur-[3px]" : ""}`} dir="ltr" aria-hidden={isFree}>
-                    {faNum(pair.equalProfit.stakeB, 1)}
+                    {faNum(stakeBShown, 1)}
                   </p>
                 </div>
               </div>
+              {acc && (
+                <p className="mt-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[8.5px] font-semibold leading-3 text-emerald-300">
+                  🔒 قفل اصل سرمایه ۱۰۰ واحدی — برد B = برگشت کامل اصل سرمایه
+                </p>
+              )}
               {/* v8.0 — برچسب انطباق ضد گوبینگ */}
               <p className="mt-1.5 flex items-center gap-1 border-t border-white/10 pt-1 text-[8.5px] font-medium text-emerald-200/80">
                 <MapPin className="size-2.5 shrink-0" />
@@ -548,13 +564,13 @@ export function FlashCard({
                 <b className="font-num text-foreground" dir="ltr">۱۰,۰۰۰</b> شبیه‌سازی مونت‌کارلو، این الگو بالاترین امتیاز کیفیت را گرفت:
               </p>
               <p className="mt-1 rounded-lg bg-black/30 p-1.5 text-[10px] leading-4">
-                <b className="text-foreground">SupervisorScore v11.0</b> = (پوشش متعامد {faNum(sup.coveragePct, 0)}٪ × ۱.۵) + (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۳) − (ریسک {faNum(sup.jointLossRiskPct, 1)}٪^۱.۷۵) ={" "}
+                <b className="text-foreground">SupervisorScore v16.0</b> = (پوشش ماتریس {faNum(sup.coveragePct, 0)}٪ × ۳.۰) + (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۰) − (ریسک {faNum(sup.jointLossRiskPct, 1)}٪^۱.۷۵) ={" "}
                 <b className={vetoed ? "text-rose-300" : "text-emerald-300"} dir="ltr">
                   {sup.raw}
                 </b>{" "}
                 → امتیاز نهایی <b className="text-amber-300" dir="ltr">{sup.score100}/100</b>
                 <span className="mt-0.5 block text-[9px] text-muted-foreground">
-                  فرمول v15.0: پاداش فریبنده Double-Win حذف شد — ۱۰۰٪ بر پایه پهنای پوشش و کمینه‌سازی ریسک باخت همزمان (گیت سخت اتمیک: ریسک &gt; ۴۵٪ = وتو خودکار · دژ نفوذناپذیر: ریسک &lt; ۷٪)
+                  فرمول v16.0: پاداش فریبنده Double-Win حذف شد — ۱۰۰٪ بر پایه پهنای پوشش ماتریس ۶×۶ و کمینه‌سازی ریسک باخت همزمان (گیت سخت طلایی: ریسک &gt; ۱۰.۵٪ = وتو و انتقال به دفتر سایه · دژ نفوذناپذیر: ریسک &lt; ۷٪)
                 </span>
               </p>
               {sup.vetoReason && (

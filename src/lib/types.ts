@@ -394,6 +394,15 @@ export interface PortfolioPairDTO {
   impliedSum: number;
   guaranteedMarginPct: number;
   equalProfit: { stakeA: number; stakeB: number; profit: number };
+  /** v16.0 — شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ → قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B + تجمیس کل سود روی تیپ A */
+  accelerator?: {
+    active: boolean;
+    stakeA: number;
+    stakeB: number;
+    profitOnA: number;
+    profitOnDoubleWin: number;
+    note: string;
+  };
   kelly: { fA: number; fB: number; growth: number };
   /** لبه CLV تقریبی نسبت به خط شارپ پیناکل (null = خط سینتتیک/در دسترس نیست) */
   sharpEdgePct: number | null;

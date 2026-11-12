@@ -69,9 +69,11 @@ async function runTick(): Promise<void> {
     }
 
     // ─── ۲) صف انتشار تلگرام (کارت‌های تایید سوپروایزر + نتایج FT) ───
+    // v16.0 — سقف هر پاس افزایش یافت (۴ کارت / ۳ نتیجه) تا فلش‌کارت‌های «بازی‌های روز»
+    // در کانال VIP همیشه قبل از کیک‌آف کامل مخابره شوند (ریشه باگ تأخیر کانال VIP)
     try {
       const { autoDispatchApprovedSlips } = await import("./telegram-service");
-      await autoDispatchApprovedSlips({ maxCards: 2, maxResults: 2 });
+      await autoDispatchApprovedSlips({ maxCards: 4, maxResults: 3 });
     } catch (err) {
       console.warn("[scheduler] auto-dispatch failed:", err instanceof Error ? err.message : err);
     }

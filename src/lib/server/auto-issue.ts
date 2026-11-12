@@ -1,12 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // ثبت و تسویه‌حساب ۱۰۰٪ خودکار بازی‌های پایان‌یافته اخیر (Zero-Click Multi-Day
-// ESPN Auto-Settlement) — v9.0
+// ESPN Auto-Settlement) — v16.0
 //
 // مشکل نسخه ۸.۰: اسکوربورد بدون تاریخ فقط بازی‌های آینده را می‌آورد و کارنامه
 // کم‌حجم می‌ماند. راه‌حل v9.0:
 //   ۱) واکشی خودکار بازی‌های ۳ روز گذشته + امروز از ESPN Scoreboard تاریخ‌دار
-//   ۲) ساخت زوج‌های ۵ الگوی متعامد روی λ ترکیبی (Reverse-Poisson) و انتخاب
+//   ۲) ساخت زوج‌های الگوهای طلایی روی λ ترکیبی (Reverse-Poisson) و انتخاب
 //      «تک‌تیپ طلایی» توسط ایجنت سوپروایزر — بازی‌های وتوشده صدور نمی‌شوند
+//      (v16.0: فقط ۳ الگوی طلایی ۹۲٪+ با گیت سخت ریسک ۱۰.۵٪ و لیگ گیت)
 //   ۳) بازی‌های FT → کارت صدور و بلافاصله با نتیجه واقعی تسویه می‌شود
 //      بازی‌های امروز تاییدشده → کارت PENDING «🔒 قفل‌شده پیش از بازی»
 //   ۴) همه Idempotent (hash SHA-256 + externalId+autoIssued) — صفر کارت تکراری
@@ -24,12 +25,20 @@ import {
   type OrthoContext,
 } from "@/lib/engine/orthogonal";
 import { pickCrownPair } from "@/lib/supervisor";
+import { leagueGate } from "@/lib/leagues-catalog";
 import { issueSlip, settleFinishedSlips } from "./liveDataService";
 import { getActiveRules, invalidateRulesCache } from "./calibration-rules";
 import type { IssueSlipItemDTO, SettlementLegDTO } from "@/lib/types";
 
 /** فاصله حداقلی بین اجراهای خودکار — ۱۰ دقیقه (دکمه دستی با force می‌شکند) */
 const AUTO_TTL_MS = 10 * 60_000;
+
+/**
+ * v16.0 — سقف سند: «فقط ۲۵ تا ۳۵ بازی تراز اول تایید شوند».
+ * در بازمحاسبه Clean-Slate، بازی‌های ۳۵ گانه با بالاترین امتیاز سوپروایزر تایید
+ * می‌مانند و مازاد به دفتر سایه (supervisorApproved=false) منتقل می‌شود.
+ */
+const V16_MAX_APPROVED_CARDS = 35;
 
 let lastRunAt = 0;
 let inFlight: Promise<AutoSyncResult> | null = null;
@@ -135,7 +144,7 @@ async function ensureMatchRow(ev: LiveMatchEvent, st: LeagueStandings | null): P
 export async function autoSyncPastAndPresentMatches(options?: {
   force?: boolean;
   notify?: boolean;
-  /** v15.0 — بازمحاسبه Clean-Slate: بازی‌های FT با ۴ الگوی اتمیک به‌عنوان کارنامه رسمی بازمحاسبه می‌شوند */
+  /** v16.0 — بازمحاسبه Clean-Slate: بازی‌های FT با ۳ الگوی طلایی به‌عنوان کارنامه رسمی بازمحاسبه می‌شوند */
   cleanSlate?: boolean;
 }): Promise<AutoSyncResult> {
   const t0 = Date.now();
@@ -151,7 +160,7 @@ export async function autoSyncPastAndPresentMatches(options?: {
   const run = async (): Promise<AutoSyncResult> => {
     // v10.0.2 — پنجره اسکن: ۳ روز گذشته (تسویه) + امروز و ۲ روز آینده (صدور پیش از بازی)
     // بدون هیچ وابستگی به مرورگر؛ رادار اسکنر همیشه بازی‌های پیش‌رو دارد
-    // v15.0 — حالت Clean-Slate: پنجره ۶ روز گذشته برای بازسازی کامل کارنامه
+    // v16.0 — حالت Clean-Slate: پنجره ۶ روز گذشته برای بازسازی کامل کارنامه
     const events: LiveMatchEvent[] = await fetchEspnEvents(cleanSlate ? -6 : -3, 2);
     const activeSlugs = [...new Set(events.map((e) => e.leagueSlug))];
     const standingsMap = new Map<string, LeagueStandings | null>();
@@ -170,6 +179,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
     let registeredToday = 0;
     let vetoed = 0;
     let skippedExisting = 0;
+    /** v16.0 — ثبت کارت‌های تاییدشده با امتیاز، برای سقف ۳۵ گانه سند */
+    const approvedLedger: { slipId: string; score: number }[] = [];
 
     for (const ev of events) {
       try {
@@ -237,15 +248,22 @@ export async function autoSyncPastAndPresentMatches(options?: {
         const pairs = ortho.archetypes.map((a) => buildOrthoPortfolioPair(a, match, 100));
         if (pairs.length === 0) continue;
 
-        // ─── انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر (با درس کالیبراسیون) ───
-        const decision = pickCrownPair(pairs, "DUAL_BOOK", rule);
+        // ─── v16.0 — گیت لیگ‌های سوپروایزر (بلک‌لیست لیگ‌های سمّی + وایت‌لیست ساختاریافته) ───
+        const gate = leagueGate(ev.leagueSlug, ev.leagueName);
+
+        // ─── انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر (با درس کالیبراسیون + گیت λ فاوریت قاطع v16.0) ───
+        const decision = pickCrownPair(pairs, "DUAL_BOOK", rule, null, {
+          lambdaHome: engine.dc.lambdaHome,
+          lambdaAway: engine.dc.lambdaAway,
+        });
         if (!decision) continue;
 
         // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
         // وتو دیگر «دورانداختن» نیست: کارت سایه با supervisorApproved=false ثبت می‌شود
         // تا با همان موتور ESPN تسویه کاغذی شود و سوگیری بازماندگی حذف گردد.
         // تلگرام به‌صورت ساختاری هرگز کارت سایه را منتشر نمی‌کند (سپر سه‌لایه).
-        const shadow = decision.veto;
+        // v16.0 — لیگ سمّی/خارج وایت‌لیست هم کارت را مستقیماً به دفتر سایه می‌فرستد.
+        const shadow = decision.veto || gate.veto;
 
         const crown = decision.crown;
 
@@ -272,7 +290,10 @@ export async function autoSyncPastAndPresentMatches(options?: {
           legsB: legsOf(crown.structure.legsB),
           oddsA: crown.totalOddsA,
           oddsB: crown.totalOddsB,
-          guaranteedProfit: crown.equalProfit.profit,
+          // v16.0 — شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ → قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A
+          stakeA: crown.accelerator?.stakeA,
+          stakeB: crown.accelerator?.stakeB,
+          guaranteedProfit: crown.accelerator?.active ? (crown.accelerator.profitOnA > 0 ? crown.accelerator.profitOnA : 0) : crown.equalProfit.profit,
           marginPct: crown.guaranteedMarginPct,
           archetype: crown.archetype?.short ?? null,
           archetypeCode: crown.archetype?.code ?? null,
@@ -281,8 +302,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
           pinnaclePrices: sharpPrices,
           /** v13.2 — کارت بازخوانی: بازی هنگام صدور از قبل FT بود (هرگز پیش‌بازی صادر/تایید/منتشر نشده)
-           *  v15.0 — در بازمحاسبه Clean-Slate، تسویه بازی‌های FT کارنامه «رسمی بازمحاسبه‌شده» است
-           *  (دستور صریح سند: «تمامی مسابقات پایان‌یافته را دوباره تسویه کن») — retroIssued=false */
+           *  v16.0 — در بازمحاسبه Clean-Slate، تسویه بازی‌های FT کارنامه «رسمی بازمحاسبه‌شده» است
+           *  (دستور صریح سند: «کل کارنامه را با کلید neobet_v16_verified_ledger بازمحاسبه کن») — retroIssued=false */
           retroIssued: isFinished && !cleanSlate,
           /** v11.0 — دفتر سایه: کارت واقعی یا سایه + سنجه‌های لحظه تصمیم */
           // v13.5.1 — ریشه‌ای باگ «تله میانی بدون صدور قبلی»: کارت بازخوانی هرگز «تاییدشده»
@@ -290,19 +311,23 @@ export async function autoSyncPastAndPresentMatches(options?: {
           // بازخوانی است و با پرچم retroIssued شناسایی می‌شود، نه با تایید سوپروایزر.
           supervisorApproved: !shadow && (!isFinished || cleanSlate),
           supervisorScore: decision.score.raw,
-          vetoReason: shadow ? decision.vetoReason : null,
+          vetoReason: shadow ? (gate.veto ? gate.reason : decision.vetoReason) : null,
           jointLossRiskPct: decision.score.jointLossRiskPct,
           doubleWinProbPct: decision.score.doubleWinProbPct,
         };
 
         const issued = await issueSlip(item, { autoIssued: true });
-        // v15.0 — کارت‌های تاریخی بازمحاسبه هرگز به کانال اعلام نمی‌شوند (تاریخ‌اند، نه خبر تازه):
+        // v16.0 — کارت‌های تاریخی بازمحاسبه هرگز به کانال اعلام نمی‌شوند (تاریخ‌اند، نه خبر تازه):
         // پرچم‌های تلگرام از قبل true می‌شوند تا صف انتشار از آن‌ها عبور کند.
         if (cleanSlate && isFinished && issued.created) {
           await db.issuedSlip.update({
             where: { id: issued.slip.id },
-            data: { telegramCard: true, telegramResult: true, settleNote: "v15.0 clean-slate recalculation — atomic single-button pattern settled on official ESPN FT" },
+            data: { telegramCard: true, telegramResult: true, settleNote: "v16.0 verified-ledger recalculation — golden atomic pair settled on official ESPN FT" },
           });
+        }
+        // v16.0 — ثبت کارت تاییدشده برای سقف ۳۵ گانه سند (کارت‌های FT بازمحاسبه)
+        if (cleanSlate && isFinished && !shadow && issued.created) {
+          approvedLedger.push({ slipId: issued.slip.id, score: decision.score.raw });
         }
         if (shadow) {
           vetoed += 1;
@@ -316,11 +341,34 @@ export async function autoSyncPastAndPresentMatches(options?: {
       }
     }
 
+    // ─── v16.0 — سقف ۳۵ گانه سند: فقط تراز اول‌ترین کارت‌ها تایید می‌مانند ───
+    // مازاد بر ۳۵ (کم‌امتیازترین‌ها) به دفتر سایه منتقل می‌شوند — قبل از تسویه تا آمار رسمی
+    // فقط بازی‌های تراز اول را بشمارند.
+    if (cleanSlate && approvedLedger.length > V16_MAX_APPROVED_CARDS) {
+      const sorted = [...approvedLedger].sort((a, b) => b.score - a.score);
+      const demote = sorted.slice(V16_MAX_APPROVED_CARDS);
+      for (const row of demote) {
+        try {
+          await db.issuedSlip.update({
+            where: { id: row.slipId },
+            data: {
+              supervisorApproved: false,
+              vetoReason: `🛡️ سقف ۳۵ گانه v16.0: امتیاز ${row.score.toFixed(1)} زیر خط تراز اول — فقط ۲۵ تا ۳۵ بازی با ریسک زیر ۱۰.۵٪ تایید می‌شوند؛ انتقال به دفتر سایه`,
+            },
+          });
+          vetoed += 1;
+        } catch (err) {
+          console.warn("v16 top-35 demotion failed:", err);
+        }
+      }
+      console.log(`[auto-issue] v16 top-${V16_MAX_APPROVED_CARDS} cap: ${demote.length} low-tier cards demoted to shadow office`);
+    }
+
     // ─── تسویه خودکار همه کارت‌های FT (شامل کارت‌های تازه صادرشده) + اعلام تلگرام ───
     let settled = 0;
     let notified = 0;
     try {
-      // v15.0 — پنجره تسویه در حالت Clean-Slate ۷ روزه است تا بازی‌های ۶ روز اخیر کامل تسویه شوند
+      // v16.0 — پنجره تسویه در حالت Clean-Slate ۷ روزه است تا بازی‌های ۶ روز اخیر کامل تسویه شوند
       const result = await settleFinishedSlips({ notify, windowDays: cleanSlate ? 7 : undefined });
       settled = result.settled.length;
       notified = result.notified;

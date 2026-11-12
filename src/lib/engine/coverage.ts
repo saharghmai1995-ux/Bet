@@ -58,6 +58,9 @@ export function selectionCoversCell(key: string, h: number, a: number): boolean 
     case "EXACT2": return tot === 2; // دقیقاً ۲ گل کل مسابقه
     case "AH_HOME_15": return h - a >= 2; // هندیکپ آسیایی میزبان −۱.۵
     case "HOME_BY_1": return h - a === 1; // برد میزبان دقیقاً با اختلاف ۱ گل
+    // ═══ v16.0 — بازارهای طلایی تیمی (Golden Team-Total Markets) ═══
+    case "HOME_O15": return h >= 2; // مجموع گل تیم میزبان بالای ۱.۵
+    case "AWAY_O15": return a >= 2; // مجموع گل تیم میهمان بالای ۱.۵
     default: return false; // کرنر/کارت/نیمه اول خارج از ماتریس نمره است
   }
 }

@@ -1,27 +1,26 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v11.0
-// «بهینه‌ساز نامتقارن ریسک زیر ۱۰٪ — Sub-10% Risk Asymmetric Optimizer»
+// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v16.0
+// «Hard 10.5% True-Union Risk Gate — 93% Matrix-Partition Atomic Pairs»
 //
-// بازنویسی کامل فرمول بر اساس کالیبراسیون تجربی ۴۸ مسابقه تسویه‌شده:
-//   · دسته «تاییدشده سوپروایزر» ۳۰/۳۰ برد (+۳۵۱.۸ واحد)
-//   · دسته «ریسک باخت همزمان زیر ۱۰٪» ۳۹/۳۹ برد (+۳۱۶.۱ واحد)
-//   · دسته «فرصت‌های Double-Win» صفر برد طلایی و −۴۹.۰ واحد ضرر!
+// بازطراحی کامل بر اساس کالبدشکافی ۱۰۵ کارت تسویه‌شده نسخه ۱۵.۰ (سند ارتقا v16.0):
+//   · وین‌ریت نسخه ۱۵ به ۷۷.۱٪ افت کرد و بانک به −۴۷۸.۳ واحد رسید
+//   · ۴ باگ ریاضی شناسایی شد: شکاف ۰-۰/۰-۱ الگوهای A1/A2، سمّ لیگ‌های esp.2 و usa.1،
+//     شل شدن گیت سوپروایزر به میانگین ریسک ۲۴.۸٪ و سقف مصنوعی ضرایب min(2.35)
 //
-// یافته: پاداش DoubleWinProbPct × ۱.۸ در فرمول قدیمی، سوپروایزر را به طمع
-// برد همزمان فریب می‌داد و پهنای پوشش را فدا می‌کرد (تله Double-Win).
+// فرمول v16.0 (حفظ ساختار + سخت‌گیری گیت):
 //
-// فرمول جدید v11.0 — ۱۰۰٪ بر پایه پهنای پوشش متعامد و کمینه‌سازی ریسک:
-//
-//   SupervisorScore = (CoveragePct × 1.5)
-//                   + (GuaranteedProfitPct × 1.3)
+//   SupervisorScore = (CoveragePct × 3.0)
+//                   + (GuaranteedProfitPct × 1.0)
 //                   − Math.pow(JointLossRiskPct, 1.75)
 //
-// قانون طلایی تایید (Hard Safety Gate):
-//   هر الگویی با JointLossRiskPct > 9.8% به‌صورت خودکار وتو می‌شود.
+// قانون طلایی تایید (Hard Safety Gate v16.0):
+//   · trueJointLossRiskPct > 10.5٪ (اجتماع دقیق خانه‌های ماتریس ۶×۶) → وتو خودکار
+//   · فاوریت برتری واضح ندارد (λ_Fav < 1.50 یا λ_Dog > 1.05) → وتو خودکار
+//   · لیگ سمّی (esp.2 / usa.1 / fifa.friendly) یا خارج لیگ‌های ساختاریافته → وتو خودکار
+//   · سود تضمینی < ۱.۵٪ → وتو
 //
-// وتو (Supervisor Veto / No-Bet Filter):
-//   · ریسک باخت همزمان > ۹.۸٪  → وتو خودکار (گیت سخت ایمنی)
-//   · سود تضمینی < ۱.۵٪        → وتو (بازار فاقد ارزش)
+// هدف سند: فقط ۲۵ تا ۳۵ بازی تراز اول که واقعاً ریسک زیر ۱۰.۵٪ دارند تایید شوند؛
+// بقیه به «دفتر سایه» (Shadow Office) منتقل می‌شوند — 🛡️ وتوشده.
 //
 // انطباق ضد گوبینگ (Anti-Gubbing):
 //   DUAL_BOOK   → استخر کاندید = زوج‌های تک‌بازی (هر تیپ در یک سایت مجزا)
@@ -35,13 +34,18 @@ import type { ActiveLeagueRule } from "./engine/calibration";
 export type ExecutionMode = "DUAL_BOOK" | "SINGLE_BOOK";
 
 /**
- * v15.0 — گیت‌های بازکالیبره‌شده سوپروایزر برای بازارهای اتمیک رسمی:
- * در ۴ الگوی رسمی تک‌دکمه‌ای، دو دکمه «کل فضای نتیجه» را نمی‌پوشانند — ریسک باخت
- * همزمان ۱۰..۳۰٪ ذاتِ این بازارهاست (قیمت واقعی پوشش استاندارد بوک‌میکر).
- * وتو فقط برای ریسک افسرنده (>۴۵٪) و حاشیه بدون ارزش (<۱.۵٪) اعمال می‌شود؛
- * نشان «دژ نفوذناپذیر» همچنان ریسک زیر ۷٪ است.
+ * v16.0 — گیت سخت وتوی سوپروایزر (Hard Risk Ceiling):
+ * ریسک باخت همزمان دقیق از اجتماع خانه‌های ماتریس ۶×۶ بالاتر از ۱۰.۵٪ = وتو خودکار.
+ * (نسخه ۱۵ با آستانه افسرنده ۴۵٪، ۱۰۵ بازی پرریسک با میانگین ریسک ۲۴.۸٪ را تایید فله‌ای کرد
+ * و بانک را به −۴۷۸.۳ واحد رساند — سند v16.0 گیت را به ۱۰.۵٪ بازگرداند.)
  */
-export const VETO_JOINT_LOSS_PCT_ATOMIC = 45;
+export const VETO_JOINT_LOSS_PCT_ATOMIC = 10.5;
+/**
+ * v16.0 — گیت برتری واضح فاوریت (Clear Favorite Advantage):
+ * λ_Fav < 1.50 یا λ_Dog > 1.05 → بازی فاقد فاوریت قاطع = وتو خودکار.
+ */
+export const VETO_FAV_LAMBDA_MIN = 1.5;
+export const VETO_DOG_LAMBDA_MAX = 1.05;
 /**
  * v11.0 — آستانه طلایی گیت سخت ایمنی سوپروایزر (دوره پیش‌از v15 — جفت‌های متعامد گسسته):
  * ریسک باخت همزمان بالاتر از ۹.۸٪ = وتو خودکار و بی‌قیدوشرط.
@@ -77,29 +81,36 @@ function riskPenalty(jointLossRiskPct: number): number {
 }
 
 /**
- * v14.0 — پاداش الگوی اختصاصی دسته رقابت (اسکنر چهارفصل):
- * بازی‌های ملی → +۱۵ به الگوی «قفل تدافعی / زیر ۲.۵ گل» (A1)
- * لیگ قهرمانان زنان → +۱۸ به الگوی «فتح فاوریت با بالای ۲.۵» (A2)
+ * v14.0 → v16.0 — پاداش الگوی اختصاصی دسته رقابت (اسکنر چهارفصل):
+ * بازی‌های ملی → +۱۵ به الگوی طلایی ۲ (برد میزبان + زیر ۲.۵ گل)
+ * لیگ قهرمانان زنان → +۱۸ به الگوی طلایی ۱ (فاوریت بالای ۱.۵ تیمی)
  */
 export interface CategoryBoost {
-  code: "A1" | "A2" | "A3" | "A4";
+  code: "G1" | "G2" | "G3";
   points: number;
   label: string;
 }
 
 /**
- * v15.0 — نرمال‌سازی نمایش امتیاز روی بازه واقعی الگوهای اتمیک [−۴۸۰..+۱۲۰].
+ * v16.0 — نرمال‌سازی نمایش امتیاز روی بازه واقعی الگوهای طلایی [−۴۸۰..+۱۲۰].
  * مرجع واحد score100 — مشترک بین supervisor و بلوک داده پوستر (slip-images).
  */
 export function score100Of(raw: number): number {
   return Math.max(0, Math.min(100, Math.round(((raw + 480) / 600) * 100)));
 }
 
-/** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — دقیقاً طبق فرمول v11.0 + پاداش دسته v14.0 */
+/** زمینه λ بازی برای گیت برتری واضح فاوریت (v16.0) */
+export interface SupervisorLambdaContext {
+  lambdaHome: number;
+  lambdaAway: number;
+}
+
+/** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — فرمول v16.0 + گیت‌های سند + پاداش دسته */
 export function scorePair(
   p: PortfolioPairDTO,
   rule?: ActiveLeagueRule | null,
-  categoryBoost?: CategoryBoost | null
+  categoryBoost?: CategoryBoost | null,
+  lambdaCtx?: SupervisorLambdaContext | null
 ): SupervisorScore {
   const guaranteedProfitPct = p.guaranteedMarginPct; // ٪ سود تضمینی داچینگ
   const doubleWinProbPct = p.jointStates.bothWin * 100; // ٪ برد طلایی همزمان (فقط نمایش — بدون پاداش)
@@ -107,28 +118,40 @@ export function scorePair(
   // v11.0 — پهنای پوشش متعامد (۰..۱ → ۰..۱۰۰). اگر الگو متادیتا نداشت، از مکمل ریسک تخمین زده می‌شود
   const coveragePct = p.archetype?.coveragePct != null ? p.archetype.coveragePct * 100 : Math.min(100, (1 - p.jointStates.bothLose) * 100);
 
-  // v9.0 — بردار قانون فعال کالیبراسیون: پاداش/جریمه عددی الگو (A1..A5)
+  // v9.0 — بردار قانون فعال کالیبراسیون: پاداش/جریمه عددی الگو (G1..G3 + کدهای قدیمی A1..A5)
   const code = p.archetype?.code ?? null;
   let boost = code && rule ? (rule.archetypeBoosts[code] ?? 0) : 0;
   // v14.0 — پاداش قاعده دسته رقابت (NATIONAL/WOMEN_ELITE) روی الگوی هدف
   const categoryBoostPts = code && categoryBoost && categoryBoost.code === code ? categoryBoost.points : 0;
   boost += categoryBoostPts;
 
-  // ═══ فرمول v15.0 — بهینه‌ساز نامتقارن ریسک برای بازارهای اتمیک رسمی ═══
-  // پهنای پوشش (کمینه‌سازی ریسک باخت همزمان) عامل غالب انتخاب است — وزن ۳.۰؛
-  // حاشیه تضمینی به‌عنوان تسویه‌کننده تساوی (وزن ۱.۰)؛ جریمه توانی ریسک حفظ شده.
+  // ═══ فرمول v16.0 — پهنای پوشش عامل غالب (وزن ۳.۰) + حاشیه تضمینی (وزن ۱.۰) + جریمه توانی ریسک ═══
   const raw = coveragePct * 3.0 + guaranteedProfitPct * 1.0 - riskPenalty(jointLossRiskPct) + boost;
 
-  // نرمال‌سازی نمایش v15.0 — بازه خام واقعی الگوهای اتمیک [−۴۸۰..+۱۲۰] → [۰..۱۰۰]
+  // نرمال‌سازی نمایش v16.0 — بازه خام واقعی الگوهای طلایی [−۴۸۰..+۱۲۰] → [۰..۱۰۰]
   const score100 = score100Of(raw);
 
-  // ═══ گیت سخت ایمنی v15.0 — بازکالیبره برای بازارهای اتمیک رسمی ═══
+  // ═══ گیت سخت ایمنی v16.0 — قفل آهنین سوپروایزر (سه گیت مستقل سند) ═══
+  //  ۱) ریسک باخت همزمان دقیق ≤ ۱۰.۵٪  ۲) برتری واضح فاوریت  ۳) حاشیه داچینگ (فقط حالت سود-برابر)
   let veto = false;
   let vetoReason: string | null = null;
   if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_ATOMIC) {
     veto = true;
-    vetoReason = `🛡️ گیت سخت v15.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه افسرنده ۴۵٪ — وتو خودکار (دو دکمه بیش از نیمی از فضای نتیجه را از دست می‌دهند)`;
-  } else if (guaranteedProfitPct < VETO_WEAK_PROFIT_PCT) {
+    vetoReason = `🛡️ گیت سخت v16.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه ۱۰.۵٪ — وتو خودکار و انتقال به دفتر سایه (فقط بازی‌های تراز اول با پوشش ماتریس بالای ۹۲٪ تایید می‌شوند)`;
+  }
+  if (!veto && lambdaCtx) {
+    // v16.0 — گیت برتری واضح فاوریت: λ_Fav < 1.50 یا λ_Dog > 1.05 → وتو
+    const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
+    const dog = Math.min(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
+    if (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX) {
+      veto = true;
+      vetoReason = `🛡️ گیت فاوریت قاطع v16.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۵۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۰۵) — الگوهای طلایی فقط روی فاوریت‌های قاطع صادر می‌شوند — وتو و انتقال به دفتر سایه`;
+    }
+  }
+  if (!veto && guaranteedProfitPct < VETO_WEAK_PROFIT_PCT && !p.accelerator?.active) {
+    // حاشیه داچینگ ضعیف — فقط در حالت سود-برابر کلاسیک وتو می‌شود؛
+    // v16.0 — زوج‌های شتاب‌دهنده نامتقارن از این گیت معاف‌اند (سود از تجمیس تیپ A +
+    // پاداش Double-Win می‌آید و اصل سرمایه با قفل تیپ B محافظت می‌شود — بخش ۲ سند v16.0)
     veto = true;
     vetoReason =
       guaranteedProfitPct <= 0
@@ -192,12 +215,14 @@ function shortOf(p: PortfolioPairDTO): string {
  * v9.0 — بردار قانون فعال کالیبراسیون (درس‌های سیستمی لیگ) مستقیماً روی
  * امتیاز الگوها اعمال می‌شود: rule.archetypeBoosts[code].
  * v11.0 — تساوئی‌ها با ریسک کمتر حل می‌شوند (اولویت کمینه‌سازی ریسک).
+ * v16.0 — زمینه λ بازی برای گیت برتری واضح فاوریت (پارامتر lambdaCtx).
  */
 export function pickCrownPair(
   pairs: PortfolioPairDTO[],
   executionMode: ExecutionMode,
   rule?: ActiveLeagueRule | null,
-  categoryBoost?: CategoryBoost | null
+  categoryBoost?: CategoryBoost | null,
+  lambdaCtx?: SupervisorLambdaContext | null
 ): SupervisorDecision | null {
   if (!pairs || pairs.length === 0) return null;
 
@@ -206,7 +231,7 @@ export function pickCrownPair(
   );
   const pool = modePool.length > 0 ? modePool : pairs;
 
-  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair, rule, categoryBoost) }));
+  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair, rule, categoryBoost, lambdaCtx) }));
 
   // برنده = بالاترین امتیاز خام میان «غیر وتو شده»؛ تساوئی → ریسک کمتر.
   // اگر همه وتو شدند → کم‌ریسک‌ترین (بالاترین امتیاز) به‌عنوان کارت وتو شده نمایش داده می‌شود

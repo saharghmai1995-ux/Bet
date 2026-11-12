@@ -303,12 +303,12 @@ export function AutopilotConfigModal({ open, onOpenChange }: { open: boolean; on
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="tg-channel-modal" className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <KeyRound className="size-3" /> شناسه کانال VIP (مثال: @aineobet_vip یا -1001234567890)
+                <KeyRound className="size-3" /> شناسه کانال VIP (مثال: @Aineobet_bot یا -1001234567890)
               </Label>
               <Input
                 id="tg-channel-modal"
                 dir="ltr"
-                placeholder="@aineobet_vip یا -1001234567890"
+                placeholder="@Aineobet_bot یا -1001234567890"
                 value={config.telegramChannelId}
                 onChange={(e) => patchConfig({ telegramChannelId: e.target.value })}
                 className="h-9 border-white/10 bg-black/30 text-xs"

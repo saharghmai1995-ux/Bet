@@ -257,9 +257,10 @@ export const useQuantStore = create<AppState>()(
       setActiveRules: (rules) => set({ activeRules: rules }),
     }),
     {
-      // v15.0 — کلید کش جدید «Clean-Slate Ledger»: کارنامه قدیمی با ضرب درون‌بازی
-      // کاملاً از حافظه مرورگر پاک می‌شود و دفتر v15 با ۴ الگوی اتمیک بازمحاسبه می‌گردد
-      name: "neobet_v15_clean_ledger",
+      // v16.0 — کلید کش جدید «Verified Ledger» (دستور سند ارتقا v16.0): کارنامه قدیمی
+      // با الگوهای زیان‌ده A1/A2 و گیت شل ۴۵٪ از حافظه مرورگر پاک می‌شود و دفتر v16
+      // با ۳ الگوی طلایی اتمیک + گیت سخت ۱۰.۵٪ بازمحاسبه می‌گردد
+      name: "neobet_v16_verified_ledger",
       storage: createJSONStorage(() => localStorage),
       // فقط کانفیگ و سبد پایدار می‌مانند — داده‌های زنده سرورمحورند
       partialize: (st) => ({ config: st.config, cart: st.cart, bankroll: st.bankroll }),

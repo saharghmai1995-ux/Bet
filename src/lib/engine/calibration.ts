@@ -158,19 +158,22 @@ function faDigit(s: string): string {
   return s.replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)));
 }
 
-/** استخراج کد الگو از متن کوتاه فارسی (مثل «الگوی ۲ — ...») */
+/** استخراج کد الگو از متن کوتاه فارسی — v16.0: الگوی طلایی ۱..۳ → G1..G3 + کدهای قدیمی A1..A5 */
 export function archetypeCodeOf(archetype: string | null | undefined): string | null {
   if (!archetype) return null;
-  const m = faDigit(archetype).match(/الگوی\s*([1-5])/);
-  return m ? `A${m[1]}` : null;
+  const fa = faDigit(archetype);
+  const golden = fa.includes("طلایی") || /golden/i.test(archetype);
+  const m = fa.match(/الگوی\s*(?:طلایی\s*)?([1-5])/);
+  if (!m) return null;
+  return golden ? `G${m[1]}` : `A${m[1]}`;
 }
 
 /**
- * deriveActiveLeagueRule — منطق عددی تبدیل «درس سیستمی» به قانون فعال:
- *   · انحراف گلزنی ≤ −۸٪  →  λ × ۰.۹۴ (کاهش ۶٪) + پاداش ۱۵ امتیازی به الگوی
- *     قفل تدافعی/کلین‌شیت (A1) — مثال سند: سری آ / لالیگا
- *   · انحراف گلزنی ≥ +۸٪  →  λ × ۱.۰۴ + پاداش ۱۸ امتیازی به الگوی فتح فاوریت/
- *     محاصره کرنر (A2) + ۸ امتیاز به الگوی بازی باز (A1) — مثال سند: بوندسلیگا / لیگ برتر
+ * deriveActiveLeagueRule — منطق عددی تبدیل «درس سیستمی» به قانون فعال (v16.0):
+ *   · انحراف گلزنی ≤ −۸٪  →  λ × ۰.۹۴ (کاهش ۶٪) + پاداش ۱۵ امتیازی به الگوی طلایی ۲
+ *     (برد میزبان + زیر ۲.۵ گل — قفل تدافعی) + ۸ امتیاز به الگوی طلایی ۱
+ *   · انحراف گلزنی ≥ +۸٪  →  λ × ۱.۰۴ + پاداش ۱۸ امتیازی به الگوی طلایی ۱
+ *     (فاوریت بالای ۱.۵ تیمی) + ۸ امتیاز به الگوی طلایی ۳ (BTTS)
  *   · نرخ موفقیت الگوها: سود خالص مثبت هر الگو → پاداش تا +۱۲ | زیان سنگین → جریمه −۸
  */
 export function deriveActiveLeagueRule(league: string, slips: RuleSettledSlip[]): ActiveLeagueRule | null {
@@ -196,16 +199,17 @@ export function deriveActiveLeagueRule(league: string, slips: RuleSettledSlip[])
 
   if (goalBiasPct !== null && goalBiasPct <= -8) {
     lambdaMultiplier = 0.94;
-    boosts.A1 = (boosts.A1 ?? 0) + 15;
+    boosts.G2 = (boosts.G2 ?? 0) + 15;
+    boosts.G1 = (boosts.G1 ?? 0) + 8;
     rules.push(
-      `میانگین گل واقعی ${Math.abs(goalBiasPct).toFixed(1)}٪ کمتر از λ مدل بود — کاهش ۶٪ امید گل پایه + افزایش +۱۵ امتیاز به الگوی قفل تدافعی/کلین‌شیت در سوپروایزر`
+      `میانگین گل واقعی ${Math.abs(goalBiasPct).toFixed(1)}٪ کمتر از λ مدل بود — کاهش ۶٪ امید گل پایه + افزایش +۱۵ امتیاز به الگوی طلایی ۲ (برد میزبان + زیر ۲.۵) و +۸ امتیاز به الگوی طلایی ۱ (U25) در سوپروایزر`
     );
   } else if (goalBiasPct !== null && goalBiasPct >= 8) {
     lambdaMultiplier = 1.04;
-    boosts.A2 = (boosts.A2 ?? 0) + 18;
-    boosts.A1 = (boosts.A1 ?? 0) + 8;
+    boosts.G1 = (boosts.G1 ?? 0) + 18;
+    boosts.G3 = (boosts.G3 ?? 0) + 8;
     rules.push(
-      `میانگین گل واقعی ${goalBiasPct.toFixed(1)}٪ بیشتر از λ مدل بود — بازی‌های فاوریت این لیگ فشار کرنر بالایی دارند: +۱۸ امتیاز به الگوی فتح فاوریت/محاصره کرنر و +۸ امتیاز به الگوی بازی باز`
+      `میانگین گل واقعی ${goalBiasPct.toFixed(1)}٪ بیشتر از λ مدل بود — بازی‌های فاوریت این لیگ فشار هجومی دارند: +۱۸ امتیاز به الگوی طلایی ۱ (فاوریت بالای ۱.۵ تیمی) و +۸ امتیاز به الگوی طلایی ۳ (BTTS بله)`
     );
   } else if (goalBiasPct !== null) {
     rules.push(`انحراف گلزنی لیگ ${goalBiasPct.toFixed(1)}٪ در باند قابل‌قبول ±۸٪ — λ بدون تعدیل گلزنی`);

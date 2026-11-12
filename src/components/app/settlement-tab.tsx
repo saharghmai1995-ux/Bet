@@ -103,7 +103,7 @@ export function SettlementTab() {
   // ═══ v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر + شبیه‌ساز فید کانال ═══
   const [autoDispatch, setAutoDispatch] = useState(true);
   const [dispatching, setDispatching] = useState(false);
-  // v15.0 — بازمحاسبه Clean-Slate دفتر (۴ الگوی اتمیک رسمی)
+  // v16.0 — بازمحاسبه Verified-Ledger دفتر (۳ الگوی طلایی اتمیک)
   const [recalcing, setRecalcing] = useState(false);
   const [feed, setFeed] = useState<{ kind: string; matchLabel: string; message: string; status?: string }[]>([]);
   const [feedOpen, setFeedOpen] = useState(false);
@@ -233,32 +233,32 @@ export function SettlementTab() {
     }
   }, [loadFeed, loadLedger]);
 
-  // ─── v15.0 — بازمحاسبه Clean-Slate دفتر با ۴ الگوی اتمیک رسمی ───
+  // ─── v16.0 — بازمحاسبه Verified-Ledger دفتر با ۳ الگوی طلایی اتمیک ───
   const recalcV15 = useCallback(async () => {
     setRecalcing(true);
     try {
-      const res = await fetch("/api/settlement/v15-recalculate", { method: "POST" });
+      const res = await fetch("/api/settlement/v16-recalculate", { method: "POST" });
       const data = (await res.json()) as {
         success: boolean;
         error?: string;
         rescanned?: { recalculated: number; todayPending: number; vetoed: number; settled: number };
-        ledgerV15?: { settled: number; winRatePct: number; netProfitUnits: number; wonA: number; wonB: number; doubleWin: number; middleTrap: number };
+        ledgerV16?: { settled: number; winRatePct: number; netProfitUnits: number; wonA: number; wonB: number; doubleWin: number; middleTrap: number; avgApprovedRiskPct: number };
       };
       if (!data.success) {
-        toast.error(data.error ?? "بازمحاسبه Clean-Slate ناموفق بود");
+        toast.error(data.error ?? "بازمحاسبه Verified-Ledger ناموفق بود");
         return;
       }
-      const lv = data.ledgerV15;
-      toast.success("🧹 دفتر Clean-Slate v15.0 ساخته شد — همه کارت‌ها با ۴ الگوی اتمیک رسمی بازمحاسبه شدند", {
+      const lv = data.ledgerV16;
+      toast.success("🧹 دفتر Verified-Ledger v16.0 با کلید neobet_v16_verified_ledger ساخته شد — همه کارت‌ها با ۳ الگوی طلایی اتمیک بازمحاسبه شدند", {
         description: lv
-          ? `${faNum(lv.settled, 0)} کارت تسویه‌شده · وین‌ریت ${faNum(lv.winRatePct, 1)}٪ · سود خالص ${lv.netProfitUnits >= 0 ? "+" : "−"}${faNum(Math.abs(lv.netProfitUnits), 1)} واحد (${faNum(lv.wonA, 0)}A/${faNum(lv.wonB, 0)}B/${faNum(lv.doubleWin, 0)}جکپات/${faNum(lv.middleTrap, 0)}تله)`
+          ? `${faNum(lv.settled, 0)} کارت تسویه‌شده · وین‌ریت ${faNum(lv.winRatePct, 1)}٪ · سود خالص ${lv.netProfitUnits >= 0 ? "+" : "−"}${faNum(Math.abs(lv.netProfitUnits), 1)} واحد (${faNum(lv.wonA, 0)}A/${faNum(lv.wonB, 0)}B/${faNum(lv.doubleWin, 0)}جکپات/${faNum(lv.middleTrap, 0)}تله) · میانگین ریسک تاییدشده‌ها ${faNum(lv.avgApprovedRiskPct ?? 0, 1)}٪`
           : undefined,
       });
       await loadLedger();
       await loadCategories();
       await loadFeed();
     } catch {
-      toast.error("خطای شبکه در بازمحاسبه Clean-Slate");
+      toast.error("خطای شبکه در بازمحاسبه Verified-Ledger");
     } finally {
       setRecalcing(false);
     }
@@ -284,7 +284,11 @@ export function SettlementTab() {
         });
         return legsOut;
       };
-      const stakes = equalProfitStakes(pair.totalOddsA, pair.totalOddsB);
+      // v16.0 — شتاب‌دهنده نامتقارن موتور: سود برابر زیر ۱۲٪ → قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A
+      const acc = pair.accelerator?.active ? pair.accelerator : null;
+      const stakes = acc
+        ? { stakeA: acc.stakeA, stakeB: acc.stakeB }
+        : equalProfitStakes(pair.totalOddsA, pair.totalOddsB);
       const espnId = m.externalId?.split("-").pop() ?? null;
       return {
         match: {
@@ -304,7 +308,7 @@ export function SettlementTab() {
         oddsB: pair.totalOddsB,
         stakeA: stakes.stakeA,
         stakeB: stakes.stakeB,
-        guaranteedProfit: pair.equalProfit.profit,
+        guaranteedProfit: acc ? Math.max(0, acc.profitOnA) : pair.equalProfit.profit,
         marginPct: pair.guaranteedMarginPct,
         archetype: pair.archetype?.short ?? null,
         lambdaHome: view.lambdaHome,
@@ -888,12 +892,12 @@ export function SettlementTab() {
           <div className="space-y-1.5">
             <Label htmlFor="tg-channel" className="text-[10px] text-muted-foreground">
               {/* v13.0-⑫ — لیبل کامل و بدون بریدگی */}
-              شناسه کانال VIP (مثال: @aineobet_vip یا -1001234567890)
+              شناسه کانال VIP (مثال: @Aineobet_bot یا -1001234567890)
             </Label>
             <Input
               id="tg-channel"
               dir="ltr"
-              placeholder="@aineobet_vip"
+              placeholder="@Aineobet_bot"
               value={tgChannel}
               onChange={(e) => setTgChannel(e.target.value)}
               className="h-9 border-white/10 bg-black/30 text-xs"
@@ -966,7 +970,7 @@ export function SettlementTab() {
               <MonitorSmartphone className="size-3" />
               {feedOpen ? "بستن شبیه‌ساز فید کانال" : "پیش‌نمایش زنده فید کانال (شبیه‌ساز)"}
             </Button>
-            {/* ═══ v15.0 — بازمحاسبه Clean-Slate با ۴ الگوی اتمیک رسمی ═══ */}
+            {/* ═══ v16.0 — بازمحاسبه Verified-Ledger با ۳ الگوی طلایی اتمیک ═══ */}
             <Button
               size="sm"
               variant="outline"
@@ -975,7 +979,7 @@ export function SettlementTab() {
               disabled={recalcing}
             >
               {recalcing ? <Loader2 className="size-3 animate-spin" /> : <History className="size-3" />}
-              🧹 بازمحاسبه Clean-Slate دفتر با ۴ الگوی اتمیک v15.0
+              🧹 بازمحاسبه Verified-Ledger دفتر با ۳ الگوی طلایی v16.0
             </Button>
           </div>
 

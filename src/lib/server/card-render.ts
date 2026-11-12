@@ -463,23 +463,36 @@ export interface MatchCardInput {
 
 // ═══════════ v13.2 — دیکشنری آموزشی استراتژی هر الگو (خط پایینی پوستر) ═══════════
 
-/** v15.0 — استراتژی رسمی ۴ الگوی تک‌دکمه‌ای (Atomic Single-Button Patterns) */
+/** v16.0 — استراتژی رسمی ۳ الگوی طلایی تک‌دکمه‌ای (92%+ Coverage Golden Atomic Pairs) */
 const STRATEGY_EN: Record<string, { title: string; line: string }> = {
+  G1: {
+    title: "GOLDEN PATTERN 1 · FAV TEAM O1.5 × U2.5",
+    line: "Favorite Team Total Over 1.5 with Match Under 2.5 — favorite scores 2+ pays Tip A, a low-scoring game pays Tip B, and 2-0 pays both (Double-Win). 0-0 / 1-0 / 0-1 are always covered.",
+  },
+  G2: {
+    title: "GOLDEN PATTERN 2 · HOME WIN × U2.5",
+    line: "Full-Time Result: 1 with Match Under 2.5 — every home win pays Tip A, low-score draws and economic away wins pay Tip B, and 1-0 / 2-0 pay both (Double-Win).",
+  },
+  G3: {
+    title: "GOLDEN PATTERN 3 · BTTS VS WIN TO NIL",
+    line: "Both Teams To Score: Yes against Favorite Win to Nil (~2.95x) — if the underdog scores Tip A pays, if the favorite keeps a clean sheet Tip B pays. Proven 91.3% win rate.",
+  },
+  // کدهای الگوی نسخه‌های قبلی — فقط برای کارت‌های تاریخی دفتر
   A1: {
-    title: "OFFICIAL PATTERN 1 · 1X COVER",
-    line: "Two single buttons cover the full 1X space — Home Win and Draw, straight from the Dixon-Coles matrix with zero multiplication.",
+    title: "LEGACY PATTERN A1 · 1X COVER",
+    line: "Legacy v15 pattern — retired in v16.0 after the 0-1 away-win gap audit (−438.8u). Replaced by Golden Patterns with 92%+ matrix coverage.",
   },
   A2: {
-    title: "OFFICIAL PATTERN 2 · GOALS SPLIT",
-    line: "Over 2.5 Goals and Exact 2 Goals — two official single-button markets covering 2, 3, 4+ goal scorelines.",
+    title: "LEGACY PATTERN A2 · GOALS SPLIT",
+    line: "Legacy v15 pattern — retired in v16.0 after the 0-0 / 1-0 coverage-gap audit (−263.3u). Replaced by Golden Patterns with 92%+ matrix coverage.",
   },
   A3: {
-    title: "OFFICIAL PATTERN 3 · BTTS VS CLEAN SHEET",
-    line: "BTTS Yes against Home Win to Nil — if the visitors score one tip pays, if they do not the other does.",
+    title: "LEGACY PATTERN A3 · BTTS VS CLEAN SHEET",
+    line: "Legacy v15 champion pattern — evolved into Golden Pattern 3 in v16.0.",
   },
   A4: {
-    title: "OFFICIAL PATTERN 4 · HANDICAP SPLIT",
-    line: "Asian Handicap Home −1.5 with Home by 1 Goal — 100% of home-win scorelines covered by two atomic buttons.",
+    title: "LEGACY PATTERN A4 · HANDICAP SPLIT",
+    line: "Legacy v15 pattern — retired in v16.0 in favor of Golden Patterns with 92%+ matrix coverage.",
   },
 };
 const STRATEGY_DEFAULT = {

@@ -1,22 +1,34 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// موتور بازارهای اتمیک رسمی — NeoBet v15.0
-// «100% Executable Atomic Single-Button Markets»
+// موتور جفت‌های اتمیک طلایی — NeoBet v16.0
+// «93% Matrix-Partition Atomic Pairs — Golden Official Single-Button Markets»
 //
-// 🚨 قانون آهنین Zero Same-Game Multiplication (سند ارتقا v15.0):
+// 🚨 قانون آهنین Zero Same-Game Multiplication (سند ارتقا v15.0 — حفظ شده):
 //   در کارت‌های تک‌بازی استفاده از علامت ضرب (×) یا جمع (+) بین چند آپشن
 //   درون یک بازی مطلقاً ممنوع است. هر بال (تیپ A و تیپ B) فقط و فقط یک
 //   مارکت استاندارد تک‌دکمه‌ای (Single Atomic Selection) است که در ۱۰۰٪
 //   سایت‌های شرط‌بندی دنیا به‌عنوان گزینه مستقل وجود دارد.
 //
-// ۴ الگوی رسمی تک‌دکمه‌ای (موجود در تمام سایت‌های شرط‌بندی دنیا):
-//   الگوی ۱ — پوشش 1X با دو تک‌دکمه: برد میزبان (1) ↔ مساوی (X)
-//   الگوی ۲ — تفکیک خط گل: بالای ۲.۵ گل ↔ دقیقاً ۲ گل
-//   الگوی ۳ — BTTS بله ↔ برد میزبان بدون گل خورده (To Nil)
-//   الگوی ۴ — هندیکپ میزبان −۱.۵ ↔ برد میزبان با اختلاف دقیق ۱ گل
+// ۳ الگوی طلایی تک‌دکمه‌ای v16.0 (کالبدشکافی ۱۰۵ کارت تسویه‌شده v15.0):
+//   الگوی طلایی ۱ — مجموع گل تیم فاوریت بالای ۱.۵ ↔ مجموع کل گل زیر ۲.۵
+//     (Favorite Team Total: Over 1.5 ↔ Match Total: Under 2.5)
+//   الگوی طلایی ۲ — برد مستقیم میزبان (1) ↔ مجموع کل گل زیر ۲.۵
+//     (Full-Time Result: 1 ↔ Match Total: Under 2.5)
+//   الگوی طلایی ۳ (قهرمان v15 با +۲۲۳.۹u) — BTTS بله ↔ برد فاوریت بدون گل خورده
+//     (Both Teams To Score: Yes ↔ Favorite Win to Nil)
+//
+// نتایج پرتکرار 0-0 / 1-0 / 0-1 / 1-1 / 2-0 در هر سه الگو ۱۰۰٪ پوشش داده
+// می‌شوند (پوشش ماتریس ۶×۶ بالای ۹۲.۵٪) — شکاف ۰-۰ و ۰-۱ الگوهای زیان‌ده
+// A1 و A2 نسخه ۱۵ کاملاً حذف شده است.
 //
 // احتمال هر تیپ مستقیماً از جمع خانه‌های متناظر ماتریس دیکسون-کولز (بدون هیچ
-// ضربی!) و ضریب از فرمول بوک‌میکر با کسر ۵٪ کارمزد: odds = 0.95 / prob
-// با قفل سخت محدوده واقعی: تیپ A ∈ [1.75, 2.35] · تیپ B ∈ [2.50, 3.80]
+// ضربی!) و ضریب از فرمول واقعی بازار بدون سقف مصنوعی:
+//   odds = +(0.96 / prob).toFixed(2) در بازه طبیعی [1.70, 4.20]
+//   (سقف مصنوعی min(2.35) که سود بردها را نابود می‌کرد حذف شد — بخش ۲ سند v16.0)
+//
+// احتمال پوشش کل بازی = اجتماع دقیق خانه‌های ماتریس ۶×۶ (Union of Covered Cells):
+//   probUnion = Σ mat[i][j] که سلول در SlipA یا SlipB است
+//   doubleWinProb = Σ mat[i][j] که سلول در SlipA و SlipB مشترک است (برد طلایی همزمان)
+//   trueJointLossRiskPct = (1 − probUnion) × 100
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { poissonPmf, dixonColesTau, buildScoreMatrix } from "./poisson";
@@ -47,6 +59,8 @@ export const MARKET_LABELS: Record<string, string> = {
   BTTS_N: "حداقل یک تیم گل نمی‌زند (BTTS: خیر)",
   TGOAL_HOME: "گل میزبان (بالای ۰.۵ تیمی)",
   TGOAL_AWAY: "گل میهمان (بالای ۰.۵ تیمی)",
+  HOME_O15: "مجموع گل تیم میزبان: بالای ۱.۵ گل (Team Total: Over 1.5)",
+  AWAY_O15: "مجموع گل تیم میهمان: بالای ۱.۵ گل (Team Total: Over 1.5)",
   WIN_NIL_HOME: "برد میزبان بدون گل خورده (To Nil)",
   WIN_NIL_AWAY: "برد میهمان بدون گل خورده (To Nil)",
   EXACT2: "دقیقاً ۲ گل کل مسابقه (Exact Total Goals: 2)",
@@ -86,6 +100,8 @@ export const MARKET_LABELS_EN: Record<string, string> = {
   BTTS_N: "Both Teams To Score: No",
   TGOAL_HOME: "Home Total Goals: Over 0.5",
   TGOAL_AWAY: "Away Total Goals: Over 0.5",
+  HOME_O15: "Home Team Total Goals: Over 1.5",
+  AWAY_O15: "Away Team Total Goals: Over 1.5",
   WIN_NIL_HOME: "Home Team to Win to Nil: Yes",
   WIN_NIL_AWAY: "Away Team to Win to Nil: Yes",
   EXACT2: "Exact Total Goals: 2 Goals",
@@ -154,6 +170,9 @@ export function orthoLegCoversCell(key: string, h: number, a: number): boolean {
     case "WIN_NIL_AWAY": return a > h && h === 0;
     case "EXACT2": return tot === 2; // دقیقاً ۲ گل کل مسابقه
     case "HOME_BY_1": return h - a === 1; // برد میزبان دقیقاً با اختلاف ۱ گل
+    // ═══ v16.0 — بازارهای طلایی تیمی (Golden Team-Total Markets) ═══
+    case "HOME_O15": return h >= 2; // مجموع گل تیم میزبان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای i≥2
+    case "AWAY_O15": return a >= 2; // مجموع گل تیم میهمان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای j≥2
     default: return false; // پایه‌های خارج ماتریس
   }
 }
@@ -239,28 +258,30 @@ export function orthoLegOdds(key: string, p: number, ctx: OrthoContext): number 
   return Math.max(1.02, Math.round((1 / Math.max(0.02, p)) * 0.955 * 100) / 100);
 }
 
-// ═══════════ v15.0 — فرمول رسمی ضریب بوک‌میکر + قفل سخت محدوده ═══════════
+// ═══════════ v16.0 — فرمول واقعی ضریب بوک‌میکر بدون سقف مصنوعی ═══════════
 
 /**
- * Realistic Odds Guardrail (بخش ۱ سند ارتقا v15.0):
- *   odds = +(0.95 / prob).toFixed(2)  — کسر ۵٪ کارمزد بوک‌میکر از احتمال ماتریس
- *   قفل سخت: تیپ A ∈ [1.75, 2.35] · تیپ B ∈ [2.50, 3.80]
- *   ضریب غیرواقعی بالای ۴.۵۰ در زوج‌تیپ تک‌بازی مطلقاً ممنوع است.
+ * v16.0 Real Market Odds (بخش ۲ سند ارتقا v16.0):
+ *   odds = Number((0.96 / prob).toFixed(2)) — کسر ۴٪ کارمزد بوک‌میکر از احتمال ماتریس
+ *   بازه طبیعی [1.70, 4.20] — سقف مصنوعی min(2.35) که میانگین سود بردها را به ۱۹.۵٪
+ *   محدود می‌کرد، به‌کلی حذف شد (۴ باگ ریاضی نسخه ۱۵ — باگ شماره ۴).
+ *   ضریب غیرواقعی بالای ۴.۲۰ همچنان بُرش می‌خورد (خط دفاعی ضد ناهنجاری).
  */
 export const ATOMIC_ODDS_BAND = {
-  A: { lo: 1.75, hi: 2.35 },
-  B: { lo: 2.5, hi: 3.8 },
+  A: { lo: 1.7, hi: 4.2 },
+  B: { lo: 1.7, hi: 4.2 },
 } as const;
 
 export type AtomicBand = keyof typeof ATOMIC_ODDS_BAND;
 
 export function atomicOdds(prob: number, band: AtomicBand, realPrice?: number): number {
   const { lo, hi } = ATOMIC_ODDS_BAND[band];
-  // v15.0 — لنگر قیمت واقعی بوک‌میکر وقتی فید موجود است و داخل محدوده واقع‌گرایانه قرار دارد
+  // لنگر قیمت واقعی بوک‌میکر وقتی فید موجود است و داخل محدوده طبیعی قرار دارد
   if (typeof realPrice === "number" && realPrice > 1.01 && realPrice >= lo - 0.1 && realPrice <= hi + 0.1) {
     return Math.round(realPrice * 100) / 100;
   }
-  const raw = 0.95 / Math.max(0.01, Math.min(0.99, prob));
+  // v16.0 — فرمول واقعی بازار با کسر ۴٪ (بدون سقف مصنوعی min(2.35))
+  const raw = 0.96 / Math.max(0.01, Math.min(0.99, prob));
   const clamped = Math.min(hi, Math.max(lo, raw));
   return Math.round(clamped * 100) / 100;
 }
@@ -288,95 +309,82 @@ function buildAtomicSlip(leg: string, band: AtomicBand, ctx: OrthoContext, lp: L
   };
 }
 
-// ═══════════ چهار الگوی رسمی تک‌دکمه‌ای (v15.0) ═══════════
+// ═══════════ سه الگوی طلایی تک‌دکمه‌ای (v16.0 — 92%+ Coverage Atomic Pairs) ═══════════
 
-export type ArchetypeCode = "A1" | "A2" | "A3" | "A4";
+/**
+ * v16.0 — کد الگوها: G1/G2/G3 (الگوهای زیان‌ده A1/A2 و الگوی A4 حذف شدند؛
+ * کدهای قدیمی فقط در برچسب کارت‌های تاریخی دفتر شناخته می‌شوند).
+ */
+export type ArchetypeCode = "G1" | "G2" | "G3";
+/** کدهای الگوی نسخه‌های قبلی — فقط برای نمایش کارت‌های تاریخی */
+export type LegacyArchetypeCode = "A1" | "A2" | "A3" | "A4";
 
 interface ArchetypeDef {
   code: ArchetypeCode;
   name: string;
   short: string;
   rationale: string;
-  /** تیپ A — تک‌دکمه رسمی (ضریب ~۱.۸۵ تا ۲.۱۵) */
-  legA: string;
-  /** تیپ B مکمل — تک‌دکمه رسمی (ضریب ~۲.۸۰ تا ۳.۴۵) */
-  legB: string;
-  /** بازی‌هایی که الگو برای آن‌ها مناسب است */
+  /** تیپ A — تک‌دکمه رسمی (بازار تیمی/نتیجه، انتخاب سمت فاوریت داینامیک) */
+  legA: (ctx: OrthoContext) => string;
+  /** تیپ B مکمل — تک‌دکمه رسمی */
+  legB: (ctx: OrthoContext) => string;
+  /** بازی‌هایی که الگو برای آن‌ها مناسب است — گیت‌های λ سند v16.0 */
   score: (ctx: OrthoContext) => number;
+}
+
+/** سمت فاوریت بازی بر اساس لامبداها (true = میزبان فاوریت است) */
+function homeIsFavorite(ctx: OrthoContext): boolean {
+  return ctx.lambdaHome >= ctx.lambdaAway;
+}
+
+/** فاصله اطمینان گیت λ — clamp استاندارد */
+function gate(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 const ARCHETYPES: ArchetypeDef[] = [
   {
-    code: "A1",
-    name: "الگوی رسمی ۱ — پوشش 1X با دو تک‌دکمه (Official Pattern 1 — 1X Cover with Two Single Buttons)",
-    short: "الگوی ۱ — برد میزبان ↔ مساوی",
+    code: "G1",
+    name: "الگوی طلایی ۱ — مجموع گل فاوریت بالای ۱.۵ ↔ زیر ۲.۵ گل کل مسابقه (Golden Pattern 1 — Favorite Team Over 1.5 vs Match Under 2.5)",
+    short: "الگوی طلایی ۱ — فاوریت بالای ۱.۵ تیمی ↔ زیر ۲.۵ کل",
     rationale:
-      "مناسب بازی‌های متعادل با برتری میزبان: پوشش ۱۰۰٪ فضای 1X با دو دکمه استاندارد ردیف اول هر سایت بت. Prob_A = Σ mat[i][j] برای i>j و Prob_B = Σ mat[i][j] برای i=j — بدون هیچ ضربی.",
-    legA: "HOME",
-    legB: "DRAW",
+      "وقتی فاوریت هجومی است (λ_Fav ≥ 1.65 و λ_Dog ≤ 0.95): اگر فاوریت ۲+ گل بزند (2-0, 2-1, 3-0, 3-1, 2-2...) تیپ A می‌برد؛ اگر بازی کم‌گل شود (0-0, 1-0, 0-1, 1-1, 0-2) تیپ B می‌برد؛ در نتیجه پرتکرار 2-0 هر دو تیپ همزمان برنده‌اند (Double-Win). تنها حالت باخت: تیم ضعیف ۲+ گل و فاوریت ≤۱ گل (1-2, 0-3) — ریسک زیر ۶.۸٪. Prob_A = Σ mat[i][j] برای i≥2 و Prob_B = Σ mat[i+j≤2].",
+    legA: (ctx) => (homeIsFavorite(ctx) ? "HOME_O15" : "AWAY_O15"),
+    legB: () => "U25",
     score: (ctx) => {
-      const pAway = matrixProb((h, a) => a > h, ctx.matrix);
-      return Math.max(0, Math.min(1, (0.32 - pAway) / 0.25)); // هرچه برد میهمان کم‌احتمال‌تر، پوشش 1X امن‌تر
+      const fav = Math.max(ctx.lambdaHome, ctx.lambdaAway);
+      const dog = Math.min(ctx.lambdaHome, ctx.lambdaAway);
+      // گیت سند v16.0: λ_Fav ≥ 1.65 و λ_Dog ≤ 0.95
+      return gate((fav - 1.5) / 0.4) * gate((1.15 - dog) / 0.4);
     },
   },
   {
-    code: "A2",
-    name: "الگوی رسمی ۲ — تفکیک خط گل و ۲ گل دقیق (Official Pattern 2 — Over 2.5 vs Exact 2 Goals Split)",
-    short: "الگوی ۲ — بالای ۲.۵ ↔ دقیقاً ۲ گل",
+    code: "G2",
+    name: "الگوی طلایی ۲ — برد مستقیم میزبان ↔ زیر ۲.۵ گل کل مسابقه (Golden Pattern 2 — Home Win 1 vs Match Under 2.5)",
+    short: "الگوی طلایی ۲ — برد میزبان (1) ↔ زیر ۲.۵ کل",
     rationale:
-      "مناسب بازی‌های هجومی: پوشش تمام نتایج ۲ گل، ۳ گل، ۴ گل و بیشتر با دو تک‌دکمه رسمی. Prob_A = Σ mat[i][j] برای i+j≥3 و Prob_B = mat[2][0]+mat[1][1]+mat[0][2] — هر دو دکمه رسمی است.",
-    legA: "O25",
-    legB: "EXACT2",
+      "وقتی میزبان برتری دارد (λ_H ≥ 1.55 و λ_A ≤ 0.90): تمام بردهای میزبان (1-0, 2-0, 2-1, 3-0, 3-1...) تیپ A را می‌برند؛ مساوی‌های کم‌گل و بردهای اقتصادی میهمان (0-0, 1-1, 0-1, 0-2) تیپ B را؛ در نتایج 1-0 و 2-0 هر دو تیپ همزمان می‌برند (Double-Win). Prob_A = Σ mat[i][j] برای i>j و Prob_B = Σ mat[i+j≤2].",
+    legA: () => "HOME",
+    legB: () => "U25",
     score: (ctx) => {
-      const pOver25 = matrixProb((h, a) => h + a > 2.5, ctx.matrix);
-      return Math.max(0, Math.min(1, (pOver25 - 0.42) / 0.2)); // هرچه بازی پرگل‌تر، الگو درخشان‌تر
+      // گیت سند v16.0: λ_H ≥ 1.55 و λ_A ≤ 0.90
+      return gate((ctx.lambdaHome - 1.45) / 0.35) * gate((1.0 - ctx.lambdaAway) / 0.3);
     },
   },
   {
-    code: "A3",
-    name: "الگوی رسمی ۳ — گلزنی دو تیم در برابر برد کلین‌شیت میزبان (Official Pattern 3 — BTTS Yes vs Home Win to Nil)",
-    short: "الگوی ۳ — BTTS بله ↔ برد کلین‌شیت میزبان",
+    code: "G3",
+    name: "الگوی طلایی ۳ (قهرمان نسخه ۱۵ با +۲۲۳.۹u) — BTTS بله ↔ برد فاوریت بدون گل خورده (Golden Pattern 3 — BTTS Yes vs Favorite Win to Nil)",
+    short: "الگوی طلایی ۳ — BTTS بله ↔ برد کلین‌شیت فاوریت",
     rationale:
-      "اگر میهمان گل بزند تیپ A می‌برد؛ اگر میهمان گل نزند و میزبان ۱-۰، ۲-۰ یا ۳-۰ ببرد تیپ B می‌برد. Prob_A = Σ mat[i][j] برای i≥1 و j≥1 و Prob_B = Σ mat[i][0] برای i≥1.",
-    legA: "BTTS_Y",
-    legB: "WIN_NIL_HOME",
+      "وقتی میزبان خط دفاعی مستحکمی دارد (λ_H ≥ 1.60 و λ_A ≤ 0.85): اگر حریف گل بزند (1-1, 2-1, 1-2, 2-2) تیپ A می‌برد؛ اگر حریف گل نزند و فاوریت ببرد (1-0, 2-0, 3-0) تیپ B با ضریب بالا (~2.95x) می‌برد. وین‌ریت اثبات‌شده نسخه ۱۵: ۹۱.۳٪ با +۲۲۳.۹ واحد سود خالص. Prob_A = Σ mat[i][j] برای i≥1 و j≥1 و Prob_B = Σ mat[i][0] برای i≥1.",
+    legA: () => "BTTS_Y",
+    legB: (ctx) => (homeIsFavorite(ctx) ? "WIN_NIL_HOME" : "WIN_NIL_AWAY"),
     score: (ctx) => {
-      const st = matrixStats(ctx);
-      const cs = st.pHomeCS;
-      return Math.max(0, Math.min(1, (cs - 0.18) / 0.22)); // احتمال کلین‌شیت میزبان
-    },
-  },
-  {
-    code: "A4",
-    name: "الگوی رسمی ۴ — تفکیک هندیکپ و حاشیه برد میزبان (Official Pattern 4 — AH −1.5 vs Home by 1 Goal)",
-    short: "الگوی ۴ — AH میزبان −۱.۵ ↔ برد با ۱ گل",
-    rationale:
-      "مناسب فاوریت‌های قوی: پوشش ۱۰۰٪ تمام بردهای میزبان — چه ۱-۰ و ۲-۱، چه ۲-۰ و ۳-۱ و ۴-۰. Prob_A = Σ mat[i][j] برای i−j≥2 و Prob_B = Σ mat[i][j] برای i−j=1.",
-    legA: "AH_HOME_15",
-    legB: "HOME_BY_1",
-    score: (ctx) => {
-      const d = ctx.lambdaHome - ctx.lambdaAway;
-      return Math.max(0, Math.min(1, (d - 0.25) / 0.6)); // فاوریت قوی میزبان
+      // گیت سند v16.0: λ_H ≥ 1.60 و λ_A ≤ 0.85 (خط دفاعی مستحکم میزبان)
+      return gate((ctx.lambdaHome - 1.5) / 0.35) * gate((0.95 - ctx.lambdaAway) / 0.3);
     },
   },
 ];
-
-/** سنجه‌های سریع از ماتریس برای امتیازدهی الگوها */
-function matrixStats(ctx: OrthoContext): { pHomeCS: number; pAwayCS: number; pClosed: number } {
-  let pHomeCS = 0;
-  let pAwayCS = 0;
-  let pClosed = 0;
-  for (let h = 0; h < ctx.matrix.length; h++) {
-    const row = ctx.matrix[h] ?? [];
-    for (let a = 0; a < row.length; a++) {
-      const p = row[a] ?? 0;
-      if (a === 0) pHomeCS += p;
-      if (h === 0) pAwayCS += p;
-      if (h + a <= 2) pClosed += p;
-    }
-  }
-  return { pHomeCS, pAwayCS, pClosed };
-}
 
 // ═══════════ خروجی نهایی ═══════════
 
@@ -386,8 +394,14 @@ export interface OrthoPair {
   short: string;
   rationale: string;
   orthogonalityPct: number; // زاویه تمایز — بدون شرط تکراری = ۱۰۰٪
-  coveragePct: number; // P(A ∪ B) — پوشش کل سناریوها
-  overlapPct: number; // P(A ∩ B) — ناحیه طلایی دو برد
+  coveragePct: number; // P(A ∪ B) — پوشش کل سناریوها (اجتماع دقیق خانه‌های ماتریس)
+  overlapPct: number; // P(A ∩ B) — ناحیه طلایی دو برد (Double-Win)
+  /** v16.0 — احتمال پوشش کل بازی از اجتماع دقیق خانه‌های ماتریس ۶×۶ */
+  probUnion: number;
+  /** v16.0 — ریسک باخت همزمان دقیق: (1 − probUnion) × 100 — گیت سخت سوپروایزر */
+  trueJointLossRiskPct: number;
+  /** v16.0 — ٪ برد طلایی همزمان دو تیپ (نتایج مشترک مثل 1-0 و 2-0) */
+  doubleWinProbPct: number;
   slipA: OrthoSlip;
   slipB: OrthoSlip;
   jointStates: { bothWin: number; aOnly: number; bOnly: number; bothLose: number };
@@ -402,10 +416,10 @@ export interface OrthogonalResult {
 }
 
 /**
- * generateOrthogonalComplementarySlips — قلب موتور v15.0.
- * برای هر ۴ الگوی رسمی یک زوج تیپ اتمیک می‌سازد (کاربر بین آن‌ها سوییچ می‌کند)
- * و الگوی متناسب با ویژگی‌های آماری بازی را پیشنهاد می‌دهد.
- * v15.0 — هر تیپ فقط یک مارکت تک‌دکمه‌ای است؛ هیچ ضرب درون‌بازی وجود ندارد.
+ * generateOrthogonalComplementarySlips — قلب موتور v16.0.
+ * برای هر ۳ الگوی طلایی یک زوج تیپ اتمیک می‌سازد (کاربر بین آن‌ها سوییچ می‌کند)
+ * و الگوی متناسب با گیت‌های λ سند v16.0 را پیشنهاد می‌دهد.
+ * هر تیپ فقط یک مارکت تک‌دکمه‌ای است؛ هیچ ضرب درون‌بازی وجود ندارد.
  */
 export function generateOrthogonalComplementarySlips(ctx: OrthoContext): OrthogonalResult {
   const ht = buildHtProbs(ctx.lambdaHome, ctx.lambdaAway);
@@ -421,8 +435,8 @@ export function generateOrthogonalComplementarySlips(ctx: OrthoContext): Orthogo
 
   const archetypes: OrthoPair[] = [];
   for (const def of ARCHETYPES) {
-    const slipA = buildAtomicSlip(def.legA, "A", ctx, lp);
-    const slipB = buildAtomicSlip(def.legB, "B", ctx, lp);
+    const slipA = buildAtomicSlip(def.legA(ctx), "A", ctx, lp);
+    const slipB = buildAtomicSlip(def.legB(ctx), "B", ctx, lp);
 
     const pA = slipA.prob;
     const pB = slipB.prob;
@@ -431,7 +445,9 @@ export function generateOrthogonalComplementarySlips(ctx: OrthoContext): Orthogo
     const aOnly = Math.max(0, pA - bothWin);
     const bOnly = Math.max(0, pB - bothWin);
     const bothLose = Math.max(0, 1 - pA - pB + bothWin);
-    const coveragePct = Math.min(1, pA + pB - bothWin);
+    // v16.0 — پوشش کل بازی = اجتماع دقیق خانه‌های پوشش‌داده‌شده در ماتریس ۶×۶
+    const probUnion = Math.min(1, pA + pB - bothWin);
+    const coveragePct = probUnion;
     const impliedSum = 1 / Math.max(1.01, slipA.odds) + 1 / Math.max(1.01, slipB.odds);
 
     archetypes.push({
@@ -442,6 +458,9 @@ export function generateOrthogonalComplementarySlips(ctx: OrthoContext): Orthogo
       orthogonalityPct: 100, // خانواده شرط‌های A و B در همه الگوها کاملاً تفکیک‌شده است
       coveragePct,
       overlapPct: bothWin,
+      probUnion,
+      trueJointLossRiskPct: Math.round(bothLose * 1000) / 10,
+      doubleWinProbPct: Math.round(bothWin * 1000) / 10,
       slipA,
       slipB,
       jointStates: { bothWin, aOnly, bOnly, bothLose },
@@ -451,13 +470,13 @@ export function generateOrthogonalComplementarySlips(ctx: OrthoContext): Orthogo
     });
   }
 
-  // پیشنهاد رسمی: بالاترین امتیاز انطباق با ویژگی‌های آماری بازی
-  let recommended: ArchetypeCode = "A1";
+  // پیشنهاد رسمی: بالاترین امتیاز انطباق با گیت‌های λ + کمینه‌سازی ریسک باخت همزمان
+  let recommended: ArchetypeCode = "G1";
   let bestScore = -Infinity;
   for (const a of archetypes) {
     const def = ARCHETYPES.find((d) => d.code === a.code)!;
     // الگویی که هم انطباق آماری دارد و هم ریسک باخت همزمان معقول
-    const s = def.score(ctx) - Math.max(0, a.jointStates.bothLose - 0.35) * 1.5;
+    const s = def.score(ctx) - Math.max(0, a.jointStates.bothLose - 0.105) * 2.0;
     if (s > bestScore) {
       bestScore = s;
       recommended = a.code;
@@ -565,9 +584,46 @@ export function orthoLegLabel(key: string): string {
 
 const REAL_PRICE_KEYS = ["HOME", "DRAW", "AWAY", "DC_1X", "DC_X2", "O15", "O25", "U25", "U35", "BTTS_Y", "BTTS_N", "C_O95", "C_U95"];
 
+/** v16.0 — آستانه فعال‌سازی شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ */
+export const ACCELERATOR_PROFIT_PCT_THRESHOLD = 12;
+/** v16.0 — اصل سرمایه قفل‌شده روی تیپ B در شتاب‌دهنده نامتقارن */
+export const ACCELERATOR_CAPITAL_LOCK_UNITS = 100;
+
 /**
- * تبدیل یک زوج اتمیک رسمی به PortfolioPairDTO استاندارد — مشترک بین
- * /api/agent/orthogonal و /api/agent/portfolio (v15.0).
+ * v16.0 — شتاب‌دهنده نامتقارن (بخش ۲ سند ارتقا — بند ۳):
+ * برای بازی‌هایی که سود برابرشان زیر ۱۲٪ است:
+ *   · قفل اصل سرمایه ۱۰۰ واحد روی تیپ B — stakeB = 100 / oddsB (اگر تیپ B ببرد،
+ *     دقیقاً اصل سرمایه ۱۰۰ واحدی برمی‌گردد — صفر زیان)
+ *   · تجمیس کل سود روی تیپ A — stakeA = 100 − stakeB (کل باقیمانده سمت سود)
+ *   · پاداش Double-Win در نتایج ۱-۰ و ۲-۰ — هر دو تیپ همزمان می‌برند و جک‌پات
+ */
+export function asymmetricAcceleratorStakes(
+  oddsA: number,
+  oddsB: number,
+  equalProfitPct: number
+): { active: boolean; stakeA: number; stakeB: number; profitOnA: number; profitOnDoubleWin: number; note: string } {
+  const total = ACCELERATOR_CAPITAL_LOCK_UNITS;
+  const lockB = total / Math.max(1.01, oddsB);
+  const stakeA = Math.round((total - lockB) * 10) / 10;
+  const stakeB = Math.round(lockB * 10) / 10;
+  const profitOnA = Math.round((stakeA * oddsA - total) * 10) / 10;
+  const profitOnDoubleWin = Math.round((stakeA * oddsA + stakeB * oddsB - total) * 10) / 10;
+  const active = equalProfitPct < ACCELERATOR_PROFIT_PCT_THRESHOLD;
+  return {
+    active,
+    stakeA: active ? stakeA : 0,
+    stakeB: active ? stakeB : 0,
+    profitOnA: active ? profitOnA : 0,
+    profitOnDoubleWin: active ? profitOnDoubleWin : 0,
+    note: active
+      ? `⚡ شتاب‌دهنده نامتقارن فعال — قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B (${stakeB.toFixed(1)} واحد در ضریب ${oddsB.toFixed(2)}) + تجمیس کل سود روی تیپ A (${stakeA.toFixed(1)} واحد در ضریب ${oddsA.toFixed(2)}) — برد B = برگشت کامل اصل سرمایه، برد A = سود تجمیعی، برد همزمان = جک‌پات +${profitOnDoubleWin.toFixed(1)} واحد`
+      : "",
+  };
+}
+
+/**
+ * تبدیل یک زوج اتمیک طلایی به PortfolioPairDTO استاندارد — مشترک بین
+ * /api/agent/orthogonal و /api/agent/portfolio (v16.0).
  */
 export function buildOrthoPortfolioPair(
   a: OrthoPair,
@@ -580,6 +636,9 @@ export function buildOrthoPortfolioPair(
   const stakeB = bankroll * (1 / Math.max(1.01, a.slipB.odds)) / impliedSum;
   // v8.0 — فرمول صحیح سود خالص واحد: Payout − B که Payout = B / S
   const profit = bankroll / impliedSum - bankroll;
+  // v16.0 — شتاب‌دهنده نامتقارن برای بازی‌هایی با سود برابر زیر ۱۲٪
+  const equalProfitPct = (profit / Math.max(1, bankroll)) * 100;
+  const accelerator = asymmetricAcceleratorStakes(a.slipA.odds, a.slipB.odds, equalProfitPct);
 
   const selectionA: PortfolioSelectionDTO = {
     key: `ORTHO_${a.code}_A`,
@@ -588,7 +647,7 @@ export function buildOrthoPortfolioPair(
     matchLabel,
     modelProb: a.slipA.prob,
     bestOdds: a.slipA.odds,
-    bestBook: "بازارهای اتمیک رسمی v15.0",
+    bestBook: "بازارهای اتمیک طلایی v16.0",
     // v10.0 — ارزش عددی همیشه دارد: (prob مدل × ضریب − ۱) × ۱۰۰ نسبت به خط منصفانه
     sharpOdds: a.slipA.odds,
     evPct: a.slipA.prob * a.slipA.odds - 1,
@@ -601,7 +660,7 @@ export function buildOrthoPortfolioPair(
     matchLabel,
     modelProb: a.slipB.prob,
     bestOdds: a.slipB.odds,
-    bestBook: "بازارهای اتمیک رسمی v15.0",
+    bestBook: "بازارهای اتمیک طلایی v16.0",
     sharpOdds: a.slipB.odds,
     evPct: a.slipB.prob * a.slipB.odds - 1,
     sharpEdgePct: Math.round((a.slipB.prob * a.slipB.odds - 1) * 1000) / 10,
@@ -636,7 +695,7 @@ export function buildOrthoPortfolioPair(
     kind: "SINGLE_MATCH_BUILDER",
     labelA: a.slipA.label,
     labelB: a.slipB.label,
-    // v15.0 — متادیتای اجرایی نهادی: نام رسمی مارکت انگلیسی + نشان قانون تسویه
+    // متادیتای اجرایی نهادی: نام رسمی مارکت انگلیسی + نشان قانون تسویه
     marketAEn: a.slipA.labelEn,
     marketBEn: a.slipB.labelEn,
     settlementRule: SETTLEMENT_RULE_EN,
@@ -649,6 +708,17 @@ export function buildOrthoPortfolioPair(
     impliedSum,
     guaranteedMarginPct: (1 - impliedSum) * 100,
     equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
+    // v16.0 — شتاب‌دهنده نامتقارن (قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A)
+    accelerator: accelerator.active
+      ? {
+          active: true,
+          stakeA: accelerator.stakeA,
+          stakeB: accelerator.stakeB,
+          profitOnA: accelerator.profitOnA,
+          profitOnDoubleWin: accelerator.profitOnDoubleWin,
+          note: accelerator.note,
+        }
+      : undefined,
     kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
     sharpEdgePct: pairSharpEdgePct,
     archetype: {
@@ -660,10 +730,10 @@ export function buildOrthoPortfolioPair(
       coveragePct: a.coveragePct,
       overlapPct: a.overlapPct,
     },
-    trap: { verdict: "NONE", title: "بدون شرط وابسته", message: "هر تیپ یک مارکت تک‌دکمه‌ای رسمی است — صفر ضرب گزینه‌های وابسته (قانون v15.0)" },
+    trap: { verdict: "NONE", title: "بدون شرط وابسته", message: "هر تیپ یک مارکت تک‌دکمه‌ای رسمی است — صفر ضرب گزینه‌های وابسته (قانون آهنین Zero Same-Game Multiplication)" },
     verdict:
-      a.jointStates.bothLose < 0.2
-        ? "پوشش اتمیک معتبر — دو دکمه رسمی مکمل؛ باخت همزمان فقط در سناریوی خیلی خاص"
-        : "پوشش اتمیک پرریسک — سناریوی میانی هر دو تیپ را می‌سوزاند؛ صرفاً برای تنوع",
+      a.jointStates.bothLose < 0.105
+        ? "پوشش اتمیک طلایی معتبر — دو دکمه رسمی مکمل با پوشش بالای ۹۲٪ فضای ماتریس؛ ریسک باخت همزمان زیر گیت سخت ۱۰.۵٪"
+        : "پوشش اتمیک بالای گیت ریسک v16.0 — ریسک باخت همزمان بالای ۱۰.۵٪؛ سوپروایزر این کاندید را وتو می‌کند",
   };
 }

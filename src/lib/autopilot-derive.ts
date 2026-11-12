@@ -26,7 +26,8 @@ function firstSentence(text: string | null | undefined, maxLen = 130): string {
 
 /**
  * تصمیم سوپروایزر از پرتفوی یک بازی (با در نظر گرفتن حالت اجرایی + قانون فعال لیگ
- * + v14.0: پاداش الگوی اختصاصی دسته رقابت — ملی/زنان)
+ * + v14.0: پاداش الگوی اختصاصی دسته رقابت — ملی/زنان
+ * + v16.0: گیت برتری واضح فاوریت با زمینه λ بازی)
  */
 export function supervisorFor(
   portfolio: PortfolioResultDTO | null,
@@ -36,7 +37,12 @@ export function supervisorFor(
 ): SupervisorDecision | null {
   if (!portfolio?.pairs?.length) return null;
   const categoryBoost = leagueName ? patternBoostForCategory(categoryForLeagueName(leagueName)) : null;
-  return pickCrownPair(portfolio.pairs, executionMode, rule, categoryBoost);
+  // v16.0 — زمینه λ از پرتفوی برای گیت «فاوریت قاطع» سوپروایزر
+  const lambdaCtx =
+    portfolio.primary?.lambdaHome && portfolio.primary?.lambdaAway
+      ? { lambdaHome: portfolio.primary.lambdaHome, lambdaAway: portfolio.primary.lambdaAway }
+      : null;
+  return pickCrownPair(portfolio.pairs, executionMode, rule, categoryBoost, lambdaCtx);
 }
 
 /** ساخت کارت از ورودی‌های خام — زوج = تک‌تیپ طلایی سوپروایزر */

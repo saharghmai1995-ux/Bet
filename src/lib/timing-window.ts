@@ -1,14 +1,22 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// یابنده بهترین ساعت ثبت ضریب (Optimal Odds Timing Window Finder) — v10.0
+// یابنده بهترین ساعت ثبت ضریب (Optimal Odds Timing Window Finder) — v16.0
+//
+// 🚨 v16.0 — بازنشستگی رسمی پنجره زیان‌ده «Early Favorite (T-24h)»:
+//   در دفتر دکترین نسخه ۱۵ ثبت شد که پنجره T-24h به دلیل عدم اطلاع از ترکیب اصلی
+//   −۴۳۸.۸ واحد ضرر داد، در حالی که پنجره «⚡ T-60m Lineup Shock (پس از اعلام
+//   ترکیب رسمی)» وین‌ریت بالای ۸۸٪ داشته است. طبق بخش ۳ سند ارتقا v16.0،
+//   تمام کارت‌های تاییدشده سوپروایزر روی پنجره طلایی «T-60m Lineup Verified»
+//   قفل می‌شوند — همه انواع تیپ → LINEUP_SHOCK.
 //
 // منطق علمی (ریزساختار حرکت خط بوک‌میکر از بازگشایی تا سوت شروع):
-//   ۱) ⏰ EARLY_FAVORITE — T-24h تا T-12h:
+//   ۱) ⏰ EARLY_FAVORITE — T-24h تا T-12h: [بازنشسته v16.0 — فقط برای تاریخچه]
 //      وقتی تیپ روی فاوریت است، پول عمومی در ساعات پایانی ضریب فاوریت را
 //      به‌شدت پایین می‌آورد → بهترین ضریب ۱۲ تا ۲۴ ساعت قبل ثبت می‌شود.
+//      اما بدون ترکیب اصلی، بردهای ۰-۱ و ۱-۲ میهمان نمی‌پوشند (−۴۳۸.۸ واحد).
 //   ۲) ⚡ LINEUP_SHOCK — T-60m تا T-45m:
 //      استراتژی‌های وابسته به مجموع گل / BTTS / غیبت ستاره‌ها → بهترین لحظه
 //      بلافاصله پس از انتشار ترکیب رسمی ESPN و پیش از اصلاح کامل بازار.
-//   ۳) 🎯 LATE_UNDERDOG — T-30m تا T-10m:
+//   ۳) 🎯 LATE_UNDERDOG — T-30m تا T-10m: [بازنشسته برای صدور — فقط تاریخچه]
 //      تیپ روی آندرداگ (X2 یا هندیکپ +۰.۵) → هجوم پول عمومی به فاوریت در
 //      ۳۰ دقیقه پایانی، ضریب آندرداگ را به بالاترین نقطه ارزش می‌رساند.
 //
@@ -19,11 +27,14 @@ export type TipKind = "FAVORITE" | "TOTALS" | "UNDERDOG";
 export type TimingWindowKey = "EARLY_FAVORITE" | "LINEUP_SHOCK" | "LATE_UNDERDOG";
 export type TimingStatus = "WAITING" | "OPEN" | "LATE" | "KICKED_OFF";
 
-/** پنجره پیش‌فرض هر نوع تیپ مطابق سند v10.0 */
+/**
+ * پنجره پیش‌فرض هر نوع تیپ — v16.0: پنجره واحد و طلایی «T-60m Lineup Verified».
+ * (بخش ۳ سند ارتقا v16.0 — پنجره زیان‌ده T-24h Early Favorite حذف شد)
+ */
 export const TIP_KIND_WINDOW: Record<TipKind, TimingWindowKey> = {
-  FAVORITE: "EARLY_FAVORITE",
+  FAVORITE: "LINEUP_SHOCK",
   TOTALS: "LINEUP_SHOCK",
-  UNDERDOG: "LATE_UNDERDOG",
+  UNDERDOG: "LINEUP_SHOCK",
 };
 
 export interface TimingWindowMeta {
@@ -33,32 +44,36 @@ export interface TimingWindowMeta {
   nameEn: string;
   /** توضیح علمی کوتاه — نمایش در tooltip فلش‌کارت */
   rationale: string;
+  /** v16.0 — پنجره بازنشسته است (فقط تاریخچه دفتر — دیگر به کارت‌های تازه تخصیص نمی‌یابد) */
+  deprecated?: boolean;
 }
 
 export const TIMING_WINDOWS: Record<TimingWindowKey, TimingWindowMeta> = {
   EARLY_FAVORITE: {
     key: "EARLY_FAVORITE",
     icon: "⏰",
-    nameFa: "پنجره شکار فاوریت (T-24h تا T-12h)",
-    nameEn: "Early Favorite Window",
+    nameFa: "پنجره شکار فاوریت (T-24h تا T-12h) — بازنشسته v16.0",
+    nameEn: "Early Favorite Window (RETIRED v16.0)",
     rationale:
-      "پول عمومی در ساعات پایانی ضریب فاوریت را پایین می‌آورد — بهترین ضریب ۱۲ تا ۲۴ ساعت قبل از بازی ثبت می‌شود",
+      "بازنشسته — بدون ترکیب اصلی، بردهای ۰-۱ و ۱-۲ میهمان نمی‌پوشند (−۴۳۸.۸ واحد ضرر ثبت‌شده در دفتر دکترین). تمام کارت‌های تاییدشده به پنجره طلایی T-60m Lineup Verified قفل شده‌اند",
+    deprecated: true,
   },
   LINEUP_SHOCK: {
     key: "LINEUP_SHOCK",
     icon: "⚡",
-    nameFa: "پنجره طلایی ترکیب رسمی (T-60m تا T-45m)",
-    nameEn: "Lineup Shock Window",
+    nameFa: "پنجره طلایی ترکیب رسمی — Lineup Verified (T-60m تا T-45m)",
+    nameEn: "T-60m Lineup Verified Window",
     rationale:
-      "بلافاصله پس از انتشار ترکیب رسمی ESPN و پیش از اصلاح کامل بازار — برای استراتژی‌های مجموع گل / BTTS",
+      "پنجره واحد و طلایی صدور v16.0 — بلافاصله پس از انتشار ترکیب رسمی ESPN و پیش از اصلاح کامل بازار؛ وین‌ریت اثبات‌شده بالای ۸۸٪",
   },
   LATE_UNDERDOG: {
     key: "LATE_UNDERDOG",
     icon: "🎯",
-    nameFa: "پنجره اوج آندرداگ (T-30m تا T-10m)",
-    nameEn: "Late Underdog Peak",
+    nameFa: "پنجره اوج آندرداگ (T-30m تا T-10m) — بازنشسته v16.0",
+    nameEn: "Late Underdog Peak (RETIRED v16.0)",
     rationale:
-      "هجوم پول عمومی روی فاوریت در ۳۰ دقیقه پایانی، ضریب آندرداگ را به بالاترین نقطه ارزش می‌رساند",
+      "بازنشسته برای صدور کارت — طبق سند v16.0 تمام کارت‌های تاییدشده سوپروایزر فقط روی پنجره T-60m قفل می‌شوند",
+    deprecated: true,
   },
 };
 

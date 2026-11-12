@@ -168,6 +168,78 @@ export function rhoForLeagueName(league: string | null | undefined): number {
   return meta ? meta.rho : -0.08;
 }
 
+// ═══════════ v16.0 — گیت لیگ‌های سوپروایزر (بخش ۳ سند ارتقا v16.0) ═══════════
+
+/**
+ * 🚫 لیگ‌های پرنوسان — وتوی خودکار سوپروایزر (Toxic Volatile Leagues):
+ * کالبدشکافی ۱۰۵ کارت v15.0 نشان داد فقط همین لیگ‌ها −۵۲۵.۶ واحد ضرر دادند:
+ *   · esp.2 (لالیگا ۲ اسپانیا) → −۳۱۶.۰ واحد
+ *   · usa.1 (MLS آمریکا) → −۲۰۹.۶ واحد
+ *   · fifa.friendly (دوستانه ملی) → نوسان ترکیب‌های آزمایشی
+ * کارت تاییدشده از این لیگ‌ها مطلقاً صادر نمی‌شود.
+ */
+export const TOXIC_LEAGUE_SLUGS = new Set(["esp.2", "usa.1", "fifa.friendly"]);
+
+/**
+ * ✅ لیگ‌های ساختاریافته مجاز صدور کارت تاییدشده (Structured Leagues Whitelist):
+ * طبق سند v16.0 فقط کارت‌های تاییدشده سوپروایزر از این رقابت‌ها صادر می‌شوند:
+ * ۵ لیگ اول اروپا + لیگ قهرمانان مردان و زنان + لیگ ملت‌های اروپا + مقدماتی جام جهانی.
+ * سایر رقابت‌ها (یوروپا لیگ، چمپیونشیپ، برزیل، آرژانتین و…) به دفتر سایه می‌روند.
+ */
+export const STRUCTURED_LEAGUE_SLUGS = new Set([
+  "eng.1",
+  "esp.1",
+  "ita.1",
+  "ger.1",
+  "fra.1",
+  "uefa.champions",
+  "uefa.wchampions",
+  "uefa.nations",
+  "fifa.worldq.uefa",
+  "fifa.worldq.conmebol",
+  "fifa.worldq.afc",
+  "fifa.worldq.caf",
+]);
+
+export type LeagueGateVerdict = "PASS" | "TOXIC_BLACKLIST" | "OUT_OF_WHITELIST";
+
+export interface LeagueGateDecision {
+  verdict: LeagueGateVerdict;
+  veto: boolean;
+  reason: string;
+}
+
+/**
+ * leagueGate — گیت ورودی صدور کارت v16.0 بر اساس اسلاگ/نام رقابت ESPN.
+ *  · TOXIC_BLACKLIST  → لیگ پرنوسان: وتو سخت با برچسب 🚫
+ *  · OUT_OF_WHITELIST → خارج لیگ‌های ساختاریافته: وتو و انتقال به دفتر سایه
+ *  · PASS             → مجاز صدور کارت تاییدشده
+ */
+export function leagueGate(slug: string | null | undefined, leagueName?: string | null): LeagueGateDecision {
+  const s = String(slug ?? "").trim();
+  if (s && TOXIC_LEAGUE_SLUGS.has(s)) {
+    const label = s === "esp.2" ? "لالیگا ۲ اسپانیا (−۳۱۶.۰ واحد ضرر v15)" : s === "usa.1" ? "MLS آمریکا (−۲۰۹.۶ واحد ضرر v15)" : "دوستانه ملی فیفا";
+    return {
+      verdict: "TOXIC_BLACKLIST",
+      veto: true,
+      reason: `🚫 لیگ‌های پرنوسان — وتوی خودکار سوپروایزر v16.0: ${label} در بلک‌لیست رسمی است؛ کارت تاییدشده از این رقابت صادر نمی‌شود`,
+    };
+  }
+  if (s && STRUCTURED_LEAGUE_SLUGS.has(s)) {
+    return { verdict: "PASS", veto: false, reason: "" };
+  }
+  // فالبک نامی (ردیف‌های قدیمی بدون اسلاگ ESPN)
+  if (!s && leagueName) {
+    const meta = leagueByName(leagueName.trim());
+    if (meta) return leagueGate(meta.slug, null);
+  }
+  return {
+    verdict: "OUT_OF_WHITELIST",
+    veto: true,
+    reason: `🛡️ خارج لیگ‌های ساختاریافته v16.0: کارت‌های تاییدشده فقط از ۵ لیگ اول اروپا، لیگ قهرمانان مردان و زنان، لیگ ملت‌های اروپا و مقدماتی جام جهانی صادر می‌شوند — انتقال به دفتر سایه`,
+  };
+}
+
 // ═══════════ قواعد کالیبراسیون سوپروایزر بر اساس دسته (بخش ۳ سند v14.0) ═══════════
 
 /** وزن بازار در فرمول ترکیبی — بازی‌های ملی: ۷۵٪ مهندسی معکوس بوک‌میکر / ۲۵٪ فرم ملی */
@@ -179,22 +251,22 @@ export function marketWeightForCategory(cat: LeagueCategory): number {
 }
 
 export interface CategoryPatternBoost {
-  code: "A1" | "A2" | "A3" | "A4";
+  code: "G1" | "G2" | "G3";
   points: number;
   label: string;
 }
 
 /**
- * پاداش الگوی اختصاصی هر دسته:
- *  · NATIONAL     → +۱۵ امتیاز به الگوی «قفل تدافعی / زیر ۲.۵ گل» (A1)
- *  · WOMEN_ELITE  → +۱۸ امتیاز به الگوی «فتح فاوریت با بالای ۲.۵ / هندیکپ منفی» (A2)
+ * پاداش الگوی اختصاصی هر دسته (v16.0 — کدهای طلایی):
+ *  · NATIONAL     → +۱۵ امتیاز به الگوی طلایی ۲ (برد میزبان + زیر ۲.۵ گل)
+ *  · WOMEN_ELITE  → +۱۸ امتیاز به الگوی طلایی ۱ (فاوریت بالای ۱.۵ تیمی)
  */
 export function patternBoostForCategory(cat: LeagueCategory): CategoryPatternBoost | null {
   if (cat === "NATIONAL") {
-    return { code: "A1", points: 15, label: "قفل تدافعی / زیر ۲.۵ گل (+۱۵)" };
+    return { code: "G2", points: 15, label: "الگوی طلایی ۲ — برد میزبان + زیر ۲.۵ گل (+۱۵)" };
   }
   if (cat === "WOMEN_ELITE") {
-    return { code: "A2", points: 18, label: "فتح فاوریت با بالای ۲.۵ / هندیکپ منفی (+۱۸)" };
+    return { code: "G1", points: 18, label: "الگوی طلایی ۱ — فاوریت بالای ۱.۵ تیمی (+۱۸)" };
   }
   return null;
 }
