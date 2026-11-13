@@ -14,9 +14,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useState } from "react";
-import { Activity, BadgeCheck, Copy, Crown, Database, Loader2, ScanLine, ShieldCheck, Sparkles, TrendingUp, Wallet } from "lucide-react";
+import { Activity, BadgeCheck, Copy, Crown, Database, Loader2, ScanLine, ShieldCheck, Sparkles, TrendingUp, Wallet, Medal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useQuantStore } from "@/lib/store";
 import { useSupervisorStats } from "@/lib/autopilot-derive";
@@ -415,6 +416,44 @@ function TierSwitch() {
 }
 
 /**
+ * v18.0 — 🥈 سوییچ تاج نقره‌ای (شکارچی آلفای دفتر سایه — Tier-2 Shadow Alpha Harvester):
+ * روشن = کارت‌های سطح ۲ (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ لیگ معتبر) با استیک نصف ۵۰ واحدی
+ * Half-Kelly در دک فلش‌کارت ظاهر می‌شوند و سود واقعی تسویه‌شده‌شان («تزریق از دفتر سایه»)
+ * روی منحنی/تیتر بانک اضافه می‌شود. خاموش = فقط تاج‌های طلایی سطح ۱ (استیک کامل ۱۰۰u).
+ */
+function SilverCrownSwitch() {
+  const shadowHarvestOn = useQuantStore((s) => s.config.shadowHarvestOn);
+  const patchConfig = useQuantStore((s) => s.patchConfig);
+
+  return (
+    <div className="space-y-2 rounded-xl border border-zinc-500/25 bg-zinc-500/[0.06] p-3" dir="rtl">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1 text-[10px] text-zinc-300">
+          <Medal className="size-3.5 text-zinc-400" />
+          تاج نقره‌ای سطح ۲ (استیک نصف)
+        </p>
+        <Switch
+          checked={shadowHarvestOn}
+          onCheckedChange={(v) => {
+            patchConfig({ shadowHarvestOn: v });
+            toast.info(
+              v
+                ? "🥈 تاج نقره‌ای فعال شد — کارت‌های شکارچی آلفای سایه (استیک ۵۰ واحدی) به دک و منحنی بانک اضافه شدند"
+                : "فقط تاج‌های طلایی سطح ۱ نمایش داده می‌شود — کتاب نقره‌ای مخفی شد",
+              { description: "سیستم دو‌سطحی تاج v18.0 — استیک نقره‌ای = نصف کلِی (Half-Kelly)" }
+            );
+          }}
+          aria-label="سوییچ فعال‌سازی تاج نقره‌ای سطح ۲"
+        />
+      </div>
+      <p className="text-[9px] leading-4 text-muted-foreground">
+        کارت‌های نزدیک-به-وتو با winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ به‌جای حبس در دفتر کاغذی، با نشان 🥈 و استیک نصف‌شده ۵۰ واحدی منتشر می‌شوند.
+      </p>
+    </div>
+  );
+}
+
+/**
  * v18.0 — نبض کارنامه (Ledger Pulse):
  * پاسخ صادقانه و مهندسی‌شده به «چرا عملکرد/وین‌ریت/منحنی تغییری نکرده؟»:
  *   ۱) آمار رسمی فقط از کارت‌های تاییدشده سوپروایزر ساخته می‌شود (پول واقعی).
@@ -426,6 +465,7 @@ function TierSwitch() {
 function LedgerPulse({ ledger, savedByVeto }: { ledger: LedgerDTO | null; savedByVeto: number }) {
   const pulse = ledger?.pulse;
   const shadow = ledger?.shadow;
+  const silver = ledger?.silverHarvest;
   if (!pulse) return null;
 
   const rel = (iso: string | null) => {
@@ -459,7 +499,8 @@ function LedgerPulse({ ledger, savedByVeto }: { ledger: LedgerDTO | null; savedB
         {chip("تسویه ۷ روز اخیر", faNum(pulse.settled7d, 0), pulse.settled7d > 0 ? "text-emerald-300" : "text-amber-300")}
         {chip("در انتظار FT", faNum(pulse.pendingApproved, 0), "text-cyan-300")}
         {chip("وتوی سوپروایزر", faNum(pulse.vetoedTotal, 0), "text-rose-300")}
-        {chip("دفتر سایه (کاغذی)", `${shadow ? faNum(shadow.settled, 0) : faNum(0, 0)} کارت · ${shadow?.winRatePct != null ? faNum(shadow.winRatePct, 1) + "٪" : "—"} · ${faNum(shadow?.netProfit ?? 0, 1)}u`, "text-muted-foreground")}
+        {chip("دفتر سایه (کاغذی)", `${shadow ? faNum(shadow.settled, 0) : faNum(0, 0)} کارت · ${shadow?.winRate != null ? faNum(shadow.winRate, 1) + "٪" : "—"} · ${faNum(shadow?.netProfit ?? 0, 1)}u`, "text-muted-foreground")}
+        {silver && silver.settled > 0 && chip("🥈 حصاد نقره‌ای", `${faNum(silver.settled, 0)} کارت · ${silver.winRate != null ? faNum(silver.winRate, 1) + "٪" : "—"} · +${faNum(silver.netProfit, 1)}u`, "text-zinc-200")}
         {savedByVeto > 0 && chip("سرمایه نجات‌یافته", `+${faNum(savedByVeto, 1)}u`, "text-amber-300")}
       </div>
       {frozen ? (
@@ -482,6 +523,8 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
   const { approved, vetoed, scanned } = useSupervisorStats();
   // v11.0-④ — سرمایه نجات‌یافته توسط وتو (زیان کاغذی سایه که واقعی نشد)
   const savedByVeto = Math.max(0, -(ledger?.shadow?.netProfit ?? 0));
+  // v18.0 — سوییچ تاج نقره‌ای: وقتی روشن است، سود واقعی کارت‌های سطح ۲ روی تیتر بانک اضافه می‌شود
+  const shadowHarvestOn = useQuantStore((s) => s.config.shadowHarvestOn);
 
   // v18.0 — بارگذاری تکرارشونده: هر ۹۰ ثانیه خودکار رفرش می‌شود تا به‌محض تسویه ESPN
   // جدید، وین‌ریت/منحنی/عملکرد بدون reload مرورگر به‌روز شوند (رفع «تغییری نکرده»).‌
@@ -506,7 +549,7 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
     };
   }, []);
 
-  const { winPct, breakdown, curve, roi, settledCount, finalBank, curveBasis, eqFrom, eqTo } = useMemo(() => {
+  const { winPct, breakdown, curve, roi, settledCount, finalBank, curveBasis, eqFrom, eqTo, silverAdded, silverSettled } = useMemo(() => {
     const stats = ledger?.stats;
     const settled = stats?.settled ?? 0;
     const wins = (stats?.wonA ?? 0) + (stats?.wonB ?? 0) + (stats?.doubleWin ?? 0);
@@ -521,6 +564,11 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           }
         : null;
 
+    // v18.0 — حصاد نقره‌ای: وقتی سوییچ تاج نقره‌ای روشن است، سود واقعی کارت‌های سطح ۲
+    // (تسویه‌شده با استیک ۵۰ واحدی) روی تیتر بانک اضافه می‌شود — همان تزریق +X واحد از دل دفتر سایه.
+    const silver = ledger?.silverHarvest;
+    const silverNetOn = shadowHarvestOn && silver ? silver.netProfit : 0;
+    const silverSettledOn = shadowHarvestOn && silver ? silver.settled : 0;
     // v13.5 — منحنی از سرور می‌آید: «تمام تاریخ» کارت‌های تاییدشده غیربازخوانی؛
     // دیگر به ۱۲۰ ردیف آخر محدود نیست و کارت‌های بازخوانی (retroIssued) هم در آن نیستند،
     // پس انتهای منحنی دقیقاً برابر «سود خالص مجموع» تیتر است.
@@ -530,12 +578,14 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
         winPct,
         breakdown,
         curve: downsampleEvenly(eq.points, 31),
-        roi: eq.roiPct,
-        settledCount: settled,
-        finalBank: eq.finalBank,
-        curveBasis: eq.basis,
+        roi: Math.round(((eq.finalBank + silverNetOn - START_BANK) / START_BANK) * 1000) / 10,
+        settledCount: settled + (shadowHarvestOn && silver ? silver.settled : 0),
+        finalBank: Math.round((eq.finalBank + silverNetOn) * 100) / 100,
+        curveBasis: eq.basis + silverSettledOn,
         eqFrom: eq.firstSettledAt ?? null,
         eqTo: eq.lastSettledAt ?? null,
+        silverAdded: silverNetOn,
+        silverSettled: silverSettledOn,
       };
     }
     // فالبک سمت کلاینت (نسخه قدیمی API) — با فیلتر کامل شامل حذف بازخوانی‌ها
@@ -549,20 +599,23 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
       fullCurve.push(acc);
     }
     const curve = downsampleEvenly(fullCurve, 31);
-    const roi = ((acc - START_BANK) / START_BANK) * 100;
+    const accWithSilver = acc + silverNetOn;
+    const roi = ((accWithSilver - START_BANK) / START_BANK) * 100;
     const times = settledSlips.map((s) => s.settledAt!).filter(Boolean);
     return {
       winPct,
       breakdown,
       curve,
       roi,
-      settledCount: settled,
-      finalBank: acc,
-      curveBasis: settledSlips.length,
+      settledCount: settled + (shadowHarvestOn && silver ? silver.settled : 0),
+      finalBank: Math.round(accWithSilver * 100) / 100,
+      curveBasis: settledSlips.length + silverSettledOn,
       eqFrom: times[0] ?? null,
       eqTo: times[times.length - 1] ?? null,
+      silverAdded: silverNetOn,
+      silverSettled: silverSettledOn,
     };
-  }, [ledger]);
+  }, [ledger, shadowHarvestOn]);
 
   return (
     <section
@@ -602,6 +655,13 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
         </div>
         <div className="flex flex-col justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
           <TierSwitch />
+          {/* v18.0 — سوییچ تاج نقره‌ای (شکارچی آلفای دفتر سایه) */}
+          <SilverCrownSwitch />
+          {shadowHarvestOn && silverAdded !== 0 && (
+            <p className="rounded-lg border border-zinc-500/30 bg-zinc-500/[0.08] px-2 py-1.5 text-[10px] text-zinc-200" role="status">
+              🥈 تزریق واقعی از دل دفتر سایه: <b className="font-num" dir="ltr">{silverAdded >= 0 ? "+" : "−"}{faNum(Math.abs(silverAdded), 1)}u</b> از {faNum(silverSettled, 0)} کارت نقره‌ای تسویه‌شده (استیک ۵۰ واحدی)
+            </p>
+          )}
           <Button
             size="sm"
             variant="outline"

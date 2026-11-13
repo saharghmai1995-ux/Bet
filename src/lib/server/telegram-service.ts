@@ -94,6 +94,37 @@ export async function setSetting(key: string, value: string): Promise<void> {
   await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
 }
 
+/**
+ * v18.4 — claim اتمی کلید Setting برای dedupe بین‌پردازه‌ای (Atomic Dedupe Claim).
+ * الگوی قدیمی «check → send → write» در دو اجرای هم‌زمان (زمان‌بند + مسیر دستی یا دو
+ * پردازه) هر دو استمپ کهنه می‌خواند و همان پست را دوبار می‌فرستد. حالا claim قبل از
+ * ارسال انجام می‌شود؛ فقط یک فراخوان برنده است (SQLite تک‌نویسنده).
+ * خروجی false = دیگری قبلاً مالک شده — بدون ارسال.
+ */
+export async function claimSetting(key: string, value: string): Promise<boolean> {
+  const existing = await db.setting.findUnique({ where: { key } }).catch(() => null);
+  if (!existing) {
+    try {
+      await db.setting.create({ data: { key, value } });
+      return true;
+    } catch {
+      return false; // مسیر موازی هم‌زمان ردیف را ساخت
+    }
+  }
+  if (existing.value === value) return false;
+  const res = await db.setting.updateMany({ where: { key, value: { not: value } }, data: { value } });
+  return res.count === 1;
+}
+
+/** v18.4 — آزادسازی claim در شکست ارسال تا اسلات از دست نرود */
+export async function unclaimSetting(key: string, value: string): Promise<void> {
+  try {
+    await db.setting.deleteMany({ where: { key, value } });
+  } catch {
+    // بهترین‌تلاش
+  }
+}
+
 async function botToken(): Promise<string | null> {
   const stored = await getSetting(KEY_TOKEN);
   return (stored && stored.trim()) || process.env.TELEGRAM_BOT_TOKEN || null;
@@ -237,20 +268,20 @@ const gBroadcast = globalThis as unknown as {
 };
 
 /** قفل رشته‌ای funnel — اجرای هم‌زمان دو پست فانل (دو مسیر ورود) را سریال می‌کند */
-function withFunnelLock<T>(fn: () => Promise<T>): () => Promise<T> {
-  return async () => {
+function withFunnelLock<F extends (...args: never[]) => Promise<unknown>>(fn: F): F {
+  return (async (...args: Parameters<F>) => {
     const prev = gBroadcast.__fqFunnelLock ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     gBroadcast.__fqFunnelLock = prev.then(() => gate);
     await prev.catch(() => undefined);
     try {
-      return await fn();
+      return await fn(...(args as Parameters<F>));
     } finally {
       release();
       if (gBroadcast.__fqFunnelLock === gate) gBroadcast.__fqFunnelLock = null;
     }
-  };
+  }) as F;
 }
 
 /**
@@ -435,8 +466,14 @@ export type PublishMode = "CARD" | "TEASER";
  * انتشار کارت/تیزر به کانال VIP:
  * تصویر فوتبالی دو تیم + پیام HTML. تیپ B در حالت TEASER سانسور می‌شود.
  * v9.0 — فیلتر سختگیرانه سوپروایزر: بازی وتوشده مطلقاً به تلگرام ارسال نمی‌شود.
+ * v18.4 — ضد تکرار: claim اتمی telegramCard قبل از ارسال؛ انتشار دستی با force:true
+ * می‌تواند پرچم را دور بزند (دکمه دستی پنل) — مسیر خودکار هرگز دو بار نمی‌فرستد.
  */
-export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode): Promise<{ ok: boolean; detail: string; preview: string }> {
+export async function publishSlipToTelegram(
+  slip: IssuedSlip,
+  mode: PublishMode,
+  opts?: { force?: boolean }
+): Promise<{ ok: boolean; detail: string; preview: string }> {
   const preview = mode === "CARD" ? buildCardMessage(slip) : buildTeaserMessage(slip);
   if (!slip.supervisorApproved) {
     await logOutbox(slip.id, mode, false, "VETOED_BY_SUPERVISOR");
@@ -454,29 +491,46 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
     return { ok: false, detail: "TELEGRAM_NOT_CONFIGURED", preview };
   }
 
-  const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
-
-  let result: { ok: boolean; detail: string };
-  if (photo) {
-    result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
-    // v13.2 — فالبک پیام متنی: اگر ارسال تصویر شکست، پیام HTML کامل همچنان به کانال می‌رود
-    if (!result.ok) {
-      const fb = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
-      if (fb.ok) result = fb;
+  // v18.4 — claim اتمی: اگر مسیر موازی همین کارت را در حال ارسال/ارسال‌شده است، skip
+  if (mode === "CARD" && !opts?.force) {
+    const claimed = await claimSlipFlag(slip.id, "telegramCard");
+    if (!claimed) {
+      return { ok: false, detail: "ALREADY_SENT_OR_CLAIMED", preview };
     }
-  } else {
-    // تصویر تولید نشد — پیام متنی HTML همچنان کامل ارسال می‌شود
-    result = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
   }
 
-  await logOutbox(slip.id, mode, result.ok, result.detail);
-  if (result.ok) {
-    await db.issuedSlip.update({
-      where: { id: slip.id },
-      data: mode === "CARD" ? { telegramCard: true } : { telegramTeaser: true },
-    });
+  try {
+    const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
+
+    let result: { ok: boolean; detail: string };
+    if (photo) {
+      result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
+      // v13.2 — فالبک پیام متنی: اگر ارسال تصویر شکست، پیام HTML کامل همچنان به کانال می‌رود
+      if (!result.ok) {
+        const fb = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
+        if (fb.ok) result = fb;
+      }
+    } else {
+      // تصویر تولید نشد — پیام متنی HTML همچنان کامل ارسال می‌شود
+      result = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
+    }
+
+    await logOutbox(slip.id, mode, result.ok, result.detail);
+    if (result.ok) {
+      if (mode === "TEASER") {
+        await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramTeaser: true } });
+      }
+      // telegramCard در claim ست شده — فقط تایید نهایی
+      return { ...result, preview };
+    }
+    // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی مسیر کار را از دست ندهد
+    if (mode === "CARD") await releaseSlipFlag(slip.id, "telegramCard");
+    return { ...result, preview };
+  } catch (err) {
+    // رندر/شبکه شکست خورد → آزادسازی claim
+    if (mode === "CARD") await releaseSlipFlag(slip.id, "telegramCard");
+    throw err;
   }
-  return { ...result, preview };
 }
 
 /**
@@ -484,8 +538,10 @@ export async function publishSlipToTelegram(slip: IssuedSlip, mode: PublishMode)
  * برنده → تصویر جام پیروزی | بازنده → تصویر رختکن بهم‌ریخته
  * v13.5 — نتایج فقط به «کانال عمومی @aineobet» می‌روند (دستور کارفرما: کانال عمومی فقط نتیجه؛
  * کانال VIP فقط فلش‌کارت بازی + برآیند روزانه).
+ * v18.4 — ضد تکرار: claim اتمی telegramResult قبل از ارسال (ریشه ارسال تکراری نتایج —
+ * سه مسیر موازی هم‌زمان این تابع را صدا می‌زدند)؛ شکست ارسال → آزادسازی claim برای ریتیپ.
  */
-export async function sendSettlementNotification(slip: IssuedSlip): Promise<boolean> {
+export async function sendSettlementNotification(slip: IssuedSlip, opts?: { force?: boolean }): Promise<boolean> {
   // v11.0 — سپر مطلق دفتر سایه: کارت وتوشده سوپروایزر هرگز نتیجه هم به کانال نمی‌رود
   if (!slip.supervisorApproved) return false;
   // v13.2 — کارت بازخوانی (بازی FT پیش از صدور) هرگز به کانال اعلام نمی‌شود —
@@ -497,10 +553,23 @@ export async function sendSettlementNotification(slip: IssuedSlip): Promise<bool
 
   const chatId = await publicChannelId();
   if (!chatId) return false;
+
+  // v18.4 — claim اتمی مالکیت ارسال نتیجه (بدون این، دو مسیر موازی دوبار می‌فرستند)
+  if (!opts?.force) {
+    const claimed = await claimSlipFlag(slip.id, "telegramResult");
+    if (!claimed) return false;
+  }
+
   const caption = buildResultMessage(slip);
 
   // v10.0 — تصویربرداری قطعی: برد طلایی همزمان (Double-Win) طراحی طلایی اختصاصی دارد
-  const photo = await renderSlipResultPNG(slip);
+  // v18.4 — رندر در try/catch: شکست sharp هرگز خط لوله را نمی‌کشد — فالبک متنی ارسال می‌شود
+  let photo: Buffer | null = null;
+  try {
+    photo = await renderSlipResultPNG(slip);
+  } catch (err) {
+    console.warn("[telegram] result poster render failed (text fallback):", err instanceof Error ? err.message : err);
+  }
 
   let ok = false;
   if (photo) {
@@ -516,6 +585,9 @@ export async function sendSettlementNotification(slip: IssuedSlip): Promise<bool
   await logOutbox(slip.id, "RESULT", ok, ok ? "sent" : "send-failed");
   if (ok) {
     await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } });
+  } else {
+    // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی از دست نرود
+    await releaseSlipFlag(slip.id, "telegramResult");
   }
   return ok;
 }
@@ -572,12 +644,24 @@ async function channelWinRateStats() {
     select: { status: true, netProfit: true },
   });
   const retroWins = retroRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
+  // ─── v18.0 — 🥈 حصاد آلفای سایه: کارت‌های تاج نقره‌ای سطح ۲ (استیک ۵۰u Half-Kelly) ───
+  const silverRows = await db.issuedSlip.findMany({
+    where: { crownTier: "SILVER_SHADOW", retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+    select: { status: true, netProfit: true },
+  });
+  const silverWins = silverRows.filter((s) => s.status !== "MIDDLE_TRAP").length;
   return {
     ...st,
     winRatePct,
     netPct,
     netProfit: Math.round(st.netProfit * 100) / 100,
     shadow: { settled: shadowRows.length, wins: shadowWins, winRatePct: shadowWinRate, netProfit: shadowNet },
+    silver: {
+      settled: silverRows.length,
+      wins: silverWins,
+      winRatePct: silverRows.length > 0 ? Math.round((silverWins / silverRows.length) * 1000) / 10 : null,
+      netProfit: Math.round(silverRows.reduce((a, b) => a + (b.netProfit ?? 0), 0) * 100) / 100,
+    },
     retro: {
       settled: retroRows.length,
       wins: retroWins,
@@ -734,6 +818,30 @@ export async function autoDispatchApprovedSlips(options?: {
   skippedVetoed: number;
   detail: string;
 }> {
+  // v18.4 — قفل in-flight سراسری: چهار مسیر ورود (زمان‌بند، runSync، autodispatch، dispatchNow)
+  // هم‌زمان اجرا نمی‌شوند — اجرای موازی = ریشه ارسال تکراری کارت/نتیجه
+  if (gBroadcast.__fqDispatchInFlight) {
+    return { ok: false, sentCards: 0, sentResults: 0, winRateSent: false, skippedVetoed: 0, detail: "DISPATCH_BUSY" };
+  }
+  gBroadcast.__fqDispatchInFlight = true;
+  try {
+    return await autoDispatchApprovedSlipsInner(options);
+  } finally {
+    gBroadcast.__fqDispatchInFlight = false;
+  }
+}
+
+async function autoDispatchApprovedSlipsInner(options?: {
+  maxCards?: number;
+  maxResults?: number;
+}): Promise<{
+  ok: boolean;
+  sentCards: number;
+  sentResults: number;
+  winRateSent: boolean;
+  skippedVetoed: number;
+  detail: string;
+}> {
   const maxCards = Math.max(1, Math.min(12, options?.maxCards ?? 3));
   const maxResults = Math.max(1, Math.min(12, options?.maxResults ?? 3));
   // v15.0 — تعمیر پرچم‌های پیش‌ماتره قبل از هر پاس انتشار (ریشه باگ کانال VIP)
@@ -804,8 +912,12 @@ export async function autoDispatchApprovedSlips(options?: {
   };
 }
 
-/** throttle گزارش وین‌ریت — حداکثر هر ۱۰ دقیقه یک‌بار */
-let lastWinRateAt = 0;
+/** throttle گزارش وین‌ریت — حداکثر هر ۱۰ دقیقه یک‌بار (v18.4: روی globalThis — پایدار در برابر hot-reload) */
+const gWinRate = globalThis as unknown as { __fqLastWinRateAt?: number };
+const lastWinRateAt = (): number => gWinRate.__fqLastWinRateAt ?? 0;
+const setLastWinRateAt = (v: number): void => {
+  gWinRate.__fqLastWinRateAt = v;
+};
 
 /**
  * v13.2 — بازه «امروز تهران» به UTC (تهران = UTC+۳:۳۰ ثابت، بدون DST).
@@ -825,7 +937,12 @@ export function tehranDayRange(d = new Date()): { start: Date; end: Date } {
  * throttle ۱۰ دقیقه.
  */
 export async function sendWinRateReport(force = false): Promise<boolean> {
-  if (!force && Date.now() - lastWinRateAt < 10 * 60_000) return false;
+  // v18.4 — قفل سراسری: دو مسیر موازی (تسویه + dispatch) هر دو throttle را رد می‌کردند
+  if (gBroadcast.__fqDispatchInFlight || gBroadcast.__fqFunnelLock) {
+    // اجرای موازی در جریان است — این فراخوان را نادیده بگیر (دفعه بعد throttle جلوی تکرار را می‌گیرد)
+    if (!force) return false;
+  }
+  if (!force && Date.now() - lastWinRateAt() < 10 * 60_000) return false;
   const status = await telegramStatus();
   if (!status.configured || !status.channelSet) return false;
   const chatId = await publicChannelId();
@@ -834,6 +951,9 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
 
   // v10.0 — گزارش وین‌ریت با تصویر اختصاصی (گیج وین‌ریت + مبنای واحد برای حساب شخصی)
   const caption = buildWinRateReportMessage(st) +
+    (st.silver.settled > 0
+      ? `\n\n🥈 <b>حصاد آلفای سایه (تاج نقره‌ای سطح ۲ — استیک نصف ۵۰ واحدی):</b> ${st.silver.settled} کارت تسویه‌شده · وین‌ریت ${st.silver.winRatePct ?? 0}٪ · سود واقعی تزریق‌شده از دل دفتر سایه: ${st.silver.netProfit >= 0 ? "+" : ""}${st.silver.netProfit.toFixed(1)} واحد`
+      : "") +
     (st.shadow.settled > 0
       ? `\n\n🛡️ <b>دفتر سایه (شفافیت وتوها):</b> ${st.shadow.settled} کارت وتوشده تسویه کاغذی شد — وین‌ریت ${st.shadow.winRatePct ?? 0}٪ · سود کاغذی ${st.shadow.netProfit >= 0 ? "+" : ""}${st.shadow.netProfit.toFixed(1)} واحد (هرگز پول واقعی نبوده)`
       : "") +
@@ -867,7 +987,7 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
     });
   }
   if (res.ok) {
-    lastWinRateAt = Date.now();
+    setLastWinRateAt(Date.now());
     await logOutbox(null, "WINRATE", true, "sent");
   }
   return res.ok;
@@ -895,8 +1015,9 @@ const KEY_LAST_DIGEST_DAY = "last_daily_digest_day";
  * v13.5 — «کارت نتیجه برایند روزانه» به هر دو کانال می‌رود: عمومی @aineobet + کانال VIP
  * (دستور کارفرما: VIP فقط فلش‌کارت بازی + برآیند روزانه؛ عمومی فقط نتایج + برآیند).
  * KPIها: تعداد تسویه · وین‌ریت · جکپات · سود خالص واحدِ همان روز.
+ * v18.4 — قفل funnel (اجرای موازی زمان‌بند + مسیر دستی = ریشه تکرار برآیند).
  */
-export async function sendDailyDigest(force = false): Promise<boolean> {
+async function sendDailyDigestInner(force = false): Promise<boolean> {
   const status = await telegramStatus();
   if (!status.configured || !status.channelSet) return false;
 
@@ -976,6 +1097,8 @@ export async function sendDailyDigest(force = false): Promise<boolean> {
   return res.ok;
 }
 
+export const sendDailyDigest = withFunnelLock(sendDailyDigestInner);
+
 /** فالبک متنی برآیند روزانه (وقتی رندر تصویر شکست خورد) */
 function captionFallback(settled: number, winRate: number, net: number): string {
   return (
@@ -1020,7 +1143,7 @@ const KEY_MARKETING_LAST_AD = "marketing_last_ad_hour";
  * (ریسک باخت همزمان زیر ۷٪) است؛ در نبود دژ، بالاترین امتیاز سوپروایزر انتخاب می‌شود.
  * Dedupe روزانه با KEY_FUNNEL_GIFT_DAY.
  */
-export async function sendDailyGiftCard(force = false): Promise<{ ok: boolean; detail: string }> {
+async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; detail: string }> {
   const token = await botToken();
   if (!token) return { ok: false, detail: "NO_TOKEN" };
   const chatId = await publicChannelId();
@@ -1073,6 +1196,8 @@ export async function sendDailyGiftCard(force = false): Promise<{ ok: boolean; d
   }
   return { ok, detail: ok ? (isFortress ? "fortress-gift-sent" : "gift-sent") : "send-failed" };
 }
+
+export const sendDailyGiftCard = withFunnelLock(sendDailyGiftCardInner);
 
 // ─── v13.5 — موضوعات بنر بازاریابی ساعتی (چرخشی، با کپشن فارسی — تصویر کاملاً انگلیسی) ───
 
@@ -1223,7 +1348,7 @@ export const MARKETING_ADS: MarketingAd[] = [
  * بنر تصویری کاملاً انگلیسی + کپشن فارسی حرفه‌ای + KPI واقعی کانال.
  * موضوع‌ها چرخشی‌اند (hour % 10) و با KEY_MARKETING_LAST_AD در هر ساعت فقط یک‌بار ارسال می‌شوند.
  */
-export async function sendHourlyVipAd(force = false): Promise<{ ok: boolean; detail: string; topic: string }> {
+async function sendHourlyVipAdInner(force = false): Promise<{ ok: boolean; detail: string; topic: string }> {
   const token = await botToken();
   if (!token) return { ok: false, detail: "NO_TOKEN", topic: "—" };
   const chatId = await publicChannelId();
@@ -1263,10 +1388,12 @@ export async function sendHourlyVipAd(force = false): Promise<{ ok: boolean; det
   }
 }
 
+export const sendHourlyVipAd = withFunnelLock(sendHourlyVipAdInner);
+
 /** آمار رادار شفافیت — از دیتابیس کارنامه (بدون هیچ عدد جعلی) */
 export async function funnelRadarStats(): Promise<{ scanned: number; vetoed: number; golden: number }> {
   const [all, vetoed] = await Promise.all([
-    db.issuedSlip.findMany({ select: { externalId: true, supervisorApproved: true } }),
+    db.issuedSlip.findMany({ select: { id: true, externalId: true, supervisorApproved: true } }),
     db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false } }),
   ]);
   const scanned = new Set(all.map((s) => s.externalId ?? s.id)).size;
@@ -1443,7 +1570,7 @@ export async function sendPublicUnblur(): Promise<number> {
  * سود خالص واقعی روز با «افراز مجزا» — دسته الف تک‌بازی / ب میکس / ج تیپ‌های ضریب بالا.
  * صفر دوباره‌شماری: هر کارت فقط در خط تولید خودش شمرده می‌شود.
  */
-export async function sendNightlyPnl(force = false): Promise<boolean> {
+async function sendNightlyPnlInner(force = false): Promise<boolean> {
   const token = await botToken();
   if (!token) return false;
   const chatId = await publicChannelId();
@@ -1509,6 +1636,8 @@ export async function sendNightlyPnl(force = false): Promise<boolean> {
   }
   return res.ok;
 }
+
+export const sendNightlyPnl = withFunnelLock(sendNightlyPnlInner);
 
 // ═══════════════════════════════════════════════════════════════
 // v18.0 — ایجنت سوپروایزر تلگرام (Telegram Supervisor Agent — نسخه مهندسی‌شده)
@@ -1664,7 +1793,7 @@ async function channelKpis(): Promise<{ winRatePct: number | null; settled: numb
  * اگر امروز کارتی تایید نشده باشد، پوستر «انضباط کامل» با شمار وتوها مخابره می‌شود
  * (شفافیت کامل — هیچ کارت ساختگی تولید نمی‌شود).
  */
-export async function sendVipMorningBrief(force = false): Promise<{ ok: boolean; detail: string }> {
+async function sendVipMorningBriefInner(force = false): Promise<{ ok: boolean; detail: string }> {
   const chatId = await channelId();
   if (!chatId) return { ok: false, detail: "NO_VIP_CHANNEL" };
 
@@ -1741,26 +1870,27 @@ export async function sendVipMorningBrief(force = false): Promise<{ ok: boolean;
   return { ok, detail: ok ? (cards.length > 0 ? `brief-sent:${cards.length} cards` : "brief-sent:discipline-mode") : "send-failed" };
 }
 
+export const sendVipMorningBrief = withFunnelLock(sendVipMorningBriefInner);
+
 /**
  * v18.0 — آکادمی اصطلاحات BET (۱۱:۳۰ و ۱۸:۳۰ تهران):
  * دو درس تصویری چرخشی در روز به کانال عمومی — آموزش زبان پول شارپ.
  * slot: ۰ یا ۱ (دو اسلات روزانه) — اصطلاح با (شماره روز + slot) چرخش می‌شود.
+ * v18.4 — claim اتمی استمپ قبل از ارسال + قفل funnel — ریشه ارسال تکراری درس‌ها.
  */
-export async function sendBetTermLesson(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
+async function sendBetTermLessonInner(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
   const token = await botToken();
   if (!token) return { ok: false, detail: "NO_TOKEN" };
   const chatId = await publicChannelId();
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
   // v18.3 — کلید استمپ per-slot: ریشه باگ «ارسال تکراری هر ۹۰ ثانیه در کانال عمومی»
-  // قبلاً هر دو اسلات روی یک کلید مشترک می‌نوشتند؛ اسلات ۱ استمپ اسلات ۰ را بازنویسی
-  // می‌کرد و برعکس → پینگ‌پنگ بی‌پایان هر تیک. حالا هر اسلات کلید اختصاصی دارد
-  // (با فالبک به کلید قدیمی برای مهاجرت نرم — اسلاتی که امروز ارسال شده دوباره نمی‌رود).
+  // v18.4 — claim اتمی: مسیر موازی (دو پردازه / مسیر دستی) هرگز دوبار نمی‌فرستد
   const stamp = `${tehranDayKey()}:${slot}`;
   const stampKey = `${KEY_EDU_LAST}:${slot}`;
   if (!force) {
-    const last = (await getSetting(stampKey)) ?? (await getSetting(KEY_EDU_LAST));
-    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
+    const claimed = await claimSetting(stampKey, stamp);
+    if (!claimed) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
   }
 
   const dayIndex = Math.floor(Date.now() / 86_400_000);
@@ -1786,33 +1916,42 @@ export async function sendBetTermLesson(force = false, slot = 0): Promise<{ ok: 
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `bet-lesson-${(dayIndex + slot) % BET_TERMS.length}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
-    await setSetting(stampKey, stamp);
     await logOutbox(null, "BET_TERM", true, `public:${chatId}:${term.term}`);
+  } else if (!force) {
+    await unclaimSetting(stampKey, stamp); // اسلات از دست نرود — ریتیپ تیک بعدی
   }
   return { ok, detail: ok ? `lesson-sent:${term.term}` : "send-failed" };
 }
+
+export const sendBetTermLesson = withFunnelLock(sendBetTermLessonInner);
 
 /**
  * v18.1 — خبرهای مهم فوتبال (۰۹:۳۰ و ۱۶:۳۰ تهران):
  * کانال دوزبانه است — پوستر آرکید انگلیسی خالص + کپشن فارسی کامل با ترجمه خبرهای مهم.
  * slot: ۰ یا ۱ — شکست وایر = skip بی‌صدا (بدون پیام خطا به کانال).
+ * v18.4 — claim اتمی استمپ قبل از ارسال + قفل funnel — ریشه ارسال تکراری خبرها.
  */
-export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
+async function sendFootballNewsInner(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
   const token = await botToken();
   if (!token) return { ok: false, detail: "NO_TOKEN" };
   const chatId = await publicChannelId();
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
   // v18.3 — کلید استمپ per-slot (رفع پینگ‌پنگ ارسال تکراری خبرها — همان ریشه باگ آکادمی BET)
+  // v18.4 — claim اتمی: مسیر موازی هرگز دوبار نمی‌فرستد
   const stamp = `${tehranDayKey()}:${slot}`;
   const stampKey = `${KEY_NEWS_LAST}:${slot}`;
   if (!force) {
-    const last = (await getSetting(stampKey)) ?? (await getSetting(KEY_NEWS_LAST));
-    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
+    const claimed = await claimSetting(stampKey, stamp);
+    if (!claimed) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
   }
 
   const items = await fetchSoccerNews(8);
-  if (items.length === 0) return { ok: false, detail: "WIRE_EMPTY" };
+  if (items.length === 0) {
+    // v18.4 — وایر خالی → claim را آزاد کن تا اسلات خبر در تیک بعدی دوباره تلاش شود
+    if (!force) await unclaimSetting(stampKey, stamp);
+    return { ok: false, detail: "WIRE_EMPTY" };
+  }
 
   const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
   const photo = await renderNewsBoardPNG({
@@ -1841,17 +1980,20 @@ export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: b
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `news-board-${tehranDayKey()}-${slot}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
-    await setSetting(stampKey, stamp);
     await logOutbox(null, "FOOTBALL_NEWS", true, `public:${chatId}:items=${Math.min(6, items.length)}:fa=1`);
+  } else if (!force) {
+    await unclaimSetting(stampKey, stamp); // اسلات از دست نرود — ریتیپ تیک بعدی
   }
   return { ok, detail: ok ? `news-sent:${items.length} headlines:fa-translated` : "send-failed" };
 }
+
+export const sendFootballNews = withFunnelLock(sendFootballNewsInner);
 
 /**
  * v18.0 — گزارش هفتگی (جمعه ۲۲:۰۰ تهران → هر دو کانال):
  * KPIهای ۷ روز اخیر با افراز مجزای خطوط تولید + بهترین روز + بانک ۱۰۰۰ واحدی.
  */
-export async function sendWeeklyDigest(force = false): Promise<{ ok: boolean; detail: string }> {
+async function sendWeeklyDigestInner(force = false): Promise<{ ok: boolean; detail: string }> {
   const [pub, vip] = await Promise.all([publicChannelId(), channelId()]);
   if (!pub && !vip) return { ok: false, detail: "NO_CHANNEL" };
 
@@ -1927,6 +2069,8 @@ export async function sendWeeklyDigest(force = false): Promise<{ ok: boolean; de
   }
   return { ok: okAny, detail: okAny ? `weekly-sent:settled=${settled}:net=${net.toFixed(1)}` : "send-failed" };
 }
+
+export const sendWeeklyDigest = withFunnelLock(sendWeeklyDigestInner);
 
 /** وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5 + v18.0 + v18.3 per-slot) */
 export async function funnelStatus() {

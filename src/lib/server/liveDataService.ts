@@ -763,8 +763,8 @@ export async function backfillSlipLearning(force = false): Promise<{ scanned: nu
       const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
       const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
 
-      const tipKindA = s.tipKindA ?? (edgeA !== null ? deriveTipKind(legsA.map((l) => l.key), s.oddsA) : null);
-      const tipKindB = s.tipKindB ?? (edgeB !== null ? deriveTipKind(legsB.map((l) => l.key), s.oddsB) : null);
+      const tipKindA = (s.tipKindA as TipKind | null) ?? (edgeA !== null ? deriveTipKind(legsA.map((l) => l.key), s.oddsA) : null);
+      const tipKindB = (s.tipKindB as TipKind | null) ?? (edgeB !== null ? deriveTipKind(legsB.map((l) => l.key), s.oddsB) : null);
       const koMs = s.kickoff.getTime();
       const winA = s.timingWindowA ? null : tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
       const winB = s.timingWindowB ? null : tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
