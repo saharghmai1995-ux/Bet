@@ -6,19 +6,28 @@ import {
   sendNightlyPnl,
   sendDailyDigest,
   sendWinRateReport,
+  // v18.0 — ایجنت سوپروایزر تلگرام
+  sendVipMorningBrief,
+  sendBetTermLesson,
+  sendFootballNews,
+  sendWeeklyDigest,
 } from "@/lib/server/telegram-service";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
 /**
- * GET /api/telegram/funnel — وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5)
+ * GET /api/telegram/funnel — وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5 + v18.0)
  * POST /api/telegram/funnel — اجرای دستی پست‌ها:
  *   { action: "gift" }    → کارت رایگان روزانه (اولویت دژ نفوذناپذیر) → کانال عمومی
  *   { action: "ad" }      → بنر بازاریابی ساعتی (موضوع چرخشی) → کانال عمومی
  *   { action: "digest" }  → کارت نتیجه برایند روزانه → هر دو کانال
  *   { action: "winrate" } → گزارش وین‌ریت تصویری → کانال عمومی
  *   { action: "pnl" }     → برآیند واقعی شب با افراز مجزا → کانال عمومی
+ *   { action: "brief" }   → بریفینگ صبح VIP (کارت‌های امروز + توصیه‌ها) → کانال VIP
+ *   { action: "news" }    → خبرهای مهم فوتبال (وایر ESPN) → کانال عمومی
+ *   { action: "edu" }     → درس آکادمی اصطلاحات BET → کانال عمومی
+ *   { action: "weekly" }  → گزارش هفتگی با افراز مجزا → هر دو کانال
  */
 export async function GET() {
   try {
@@ -32,7 +41,8 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { action?: string };
+    const body = (await req.json()) as { action?: string; slot?: number };
+    const slot = Number(body.slot) === 1 ? 1 : 0;
     switch (body.action) {
       case "gift": {
         const r = await sendDailyGiftCard(true);
@@ -53,6 +63,22 @@ export async function POST(req: NextRequest) {
       case "pnl": {
         const ok = await sendNightlyPnl(true);
         return NextResponse.json({ success: ok, detail: ok ? "برآیند شبانه با افراز مجزا ارسال شد" : "ارسال ناموفق — اتصال تلگرام را بررسی کنید" });
+      }
+      case "brief": {
+        const r = await sendVipMorningBrief(true);
+        return NextResponse.json({ success: r.ok, detail: r.ok ? `بریفینگ صبح VIP به کانال اعضا ارسال شد (${r.detail})` : `ارسال نشد: ${r.detail}` });
+      }
+      case "news": {
+        const r = await sendFootballNews(true, slot);
+        return NextResponse.json({ success: r.ok, detail: r.ok ? `تخته خبرهای فوتبال به کانال عمومی ارسال شد (${r.detail})` : `ارسال نشد: ${r.detail}` });
+      }
+      case "edu": {
+        const r = await sendBetTermLesson(true, slot);
+        return NextResponse.json({ success: r.ok, detail: r.ok ? `درس آکادمی BET به کانال عمومی ارسال شد (${r.detail})` : `ارسال نشد: ${r.detail}` });
+      }
+      case "weekly": {
+        const r = await sendWeeklyDigest(true);
+        return NextResponse.json({ success: r.ok, detail: r.ok ? `گزارش هفتگی به هر دو کانال ارسال شد (${r.detail})` : `ارسال نشد: ${r.detail}` });
       }
       default:
         return NextResponse.json({ success: false, error: "action نامعتبر" }, { status: 400 });

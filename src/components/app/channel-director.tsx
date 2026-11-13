@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useState } from "react";
-import { BadgeCheck, CheckCircle2, Clock, Gift, Loader2, Megaphone, Moon, PieChart, Send, XCircle } from "lucide-react";
+import { BadgeCheck, CheckCircle2, Clock, Gift, GraduationCap, Loader2, Megaphone, Moon, Newspaper, PieChart, Send, Sunrise, XCircle, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +30,10 @@ interface FunnelStatusDTO {
   pnlSentToday?: boolean;
   giftSentToday?: boolean;
   digestSentToday?: boolean;
-  adSentThisHour?: boolean;
+  briefSentToday?: boolean;
+  eduSentThisSlot?: boolean;
+  newsSentThisSlot?: boolean;
+  weeklySentThisWeek?: boolean;
   lastAdStamp?: string | null;
   stats?: { scanned: number; vetoed: number; golden: number };
   sentCounts?: Record<string, number>;
@@ -47,6 +50,10 @@ const KIND_LABEL: Record<string, string> = {
   MARKETING_AD: "📣 بنر بازاریابی ساعتی (عمومی)",
   DAILY_DIGEST: "📊 برآیند روزانه ۲۱:۰۰ (عمومی + VIP)",
   WINRATE: "🎯 گزارش وین‌ریت (عمومی)",
+  VIP_BRIEF: "🌅 بریفینگ صبح ۱۰:۰۰ (VIP)",
+  BET_TERM: "🎓 آکادمی اصطلاحات BET (عمومی)",
+  FOOTBALL_NEWS: "📰 خبرهای فوتبال ESPN (عمومی)",
+  WEEKLY_DIGEST: "🗓 گزارش هفتگی جمعه ۲۲:۰۰ (عمومی + VIP)",
 };
 
 export function ChannelDirectorTab() {
@@ -120,7 +127,7 @@ export function ChannelDirectorTab() {
     [load]
   );
 
-  // ─── خط لوله v13.5 — ۵ پست خودکار ───
+  // ─── خط لوله v18.0 — ۹ پست خودکار ایجنت سوپروایزر تلگرام ───
   const posts = [
     {
       n: 1,
@@ -134,7 +141,37 @@ export function ChannelDirectorTab() {
     },
     {
       n: 2,
-      time: "۱۲:۰۰ تهران",
+      time: "۱۰:۰۰ تهران · کانال VIP",
+      icon: Sunrise,
+      title: "بریفینگ صبح VIP — کارت‌های امروز + توصیه‌های مهم سوپروایزر",
+      desc: "پوستر آرکید بریفینگ: فهرست کارت‌های تاییدشده امروز، انتخاب اول سوپروایزر، پنجره ثبت، انضباط استیک ثابت + شفافیت وتوها؛ بدون کارت = پیام انضباط کامل.",
+      action: "brief",
+      done: status?.briefSentToday,
+      btn: "🌅 ارسال بریفینگ VIP",
+    },
+    {
+      n: 3,
+      time: "۰۹:۳۰ و ۱۶:۳۰ تهران · کانال عمومی",
+      icon: Newspaper,
+      title: "خلاصه خبرهای مهم فوتبال (وایر ESPN)",
+      desc: "تیترهای تازه وایر ESPN روی پوستر آرکید + کپشن فارسی — آگاهی پیش از شرط؛ شکست وایر بدون پیام خطا skip می‌شود.",
+      action: "news",
+      done: status?.newsSentThisSlot,
+      btn: "📰 ارسال خبرهای فوتبال",
+    },
+    {
+      n: 4,
+      time: "۱۱:۳۰ و ۱۸:۳۰ تهران · کانال عمومی",
+      icon: GraduationCap,
+      title: "آکادمی اصطلاحات BET — دو درس چرخشی در روز",
+      desc: "۱۴ اصطلاح کلیدی (Value، EV، کلی، داچینگ، CLV، ایکس‌جی و...) روی پوستر آموزشی انگلیسی + توضیح کامل فارسی در کپشن.",
+      action: "edu",
+      done: status?.eduSentThisSlot,
+      btn: "🎓 ارسال درس آموزشی",
+    },
+    {
+      n: 5,
+      time: "۱۲:۰۰ تهران (۹ تا ۲۳ چرخشی)",
       icon: Gift,
       title: "۱ کارت VIP رایگان روزانه (تایید سوپروایزر یا دژ نفوذناپذیر) — کانال عمومی",
       desc: "اولویت با کارت‌های دژ (ریسک باخت همزمان زیر ۷٪)؛ در نبود دژ، بالاترین امتیاز سوپروایزر انتخاب می‌شود.",
@@ -143,17 +180,17 @@ export function ChannelDirectorTab() {
       btn: "🎁 ارسال کارت رایگان",
     },
     {
-      n: 3,
+      n: 6,
       time: "ساعتی · ۰۹ تا ۲۳ تهران",
       icon: Megaphone,
       title: "بنر بازاریابی هوشمند تصویری (۱۰ موضوع چرخشی) — کانال عمومی",
       desc: "بنر کاملاً انگلیسی با KPI واقعی کانال + کپشن فارسی حرفه‌ای — برای جذب اشتراک VIP.",
       action: "ad",
-      done: status?.adSentThisHour,
+      done: status?.adSentThisHour ?? false,
       btn: "📣 ارسال بنر بازاریابی",
     },
     {
-      n: 4,
+      n: 7,
       time: "۲۱:۰۰ تهران",
       icon: PieChart,
       title: "کارت نتیجه برایند روزانه — هر دو کانال (عمومی + VIP)",
@@ -163,7 +200,17 @@ export function ChannelDirectorTab() {
       btn: "📊 ارسال برایند روزانه",
     },
     {
-      n: 5,
+      n: 8,
+      time: "جمعه ۲۲:۰۰ تهران · هر دو کانال",
+      icon: CalendarDays,
+      title: "گزارش هفتگی — برایند ۷ روز با افراز مجزای خطوط تولید",
+      desc: "KPIهای هفته: تسویه‌ها، وین‌ریت، جکپات، سود هر خط تولید (تک‌بازی/میکس/اسنایپر)، بهترین روز و موقعیت بانک ۱۰۰۰ واحدی.",
+      action: "weekly",
+      done: status?.weeklySentThisWeek,
+      btn: "🗓 ارسال گزارش هفتگی",
+    },
+    {
+      n: 9,
       time: "۲۳:۳۰ تهران",
       icon: Moon,
       title: "برآیند واقعی شب با افراز مجزا — کانال عمومی",
@@ -192,13 +239,13 @@ export function ChannelDirectorTab() {
         <p className="flex items-start gap-1.5 text-[10px] leading-4 text-foreground/85">
           <BadgeCheck className="mt-0.5 size-3.5 shrink-0 text-cyan-300" />
           <span>
-            <b>کانال عمومی {status?.publicChannel ?? "@aineobet"}:</b> فقط نتایج FT، گزارش وین‌ریت، برآیند روزانه، ۱ کارت رایگان روزانه و بنرهای بازاریابی ساعتی.
+            <b>کانال عمومی {status?.publicChannel ?? "@aineobet"}:</b> نتایج FT، گزارش وین‌ریت، برآیند روزانه، ۱ کارت رایگان روزانه، خبرهای ESPN، درس آکادمی BET و بنرهای بازاریابی ساعتی.
           </span>
         </p>
         <p className="flex items-start gap-1.5 text-[10px] leading-4 text-foreground/85">
           <BadgeCheck className="mt-0.5 size-3.5 shrink-0 text-amber-300" />
           <span>
-            <b>کانال VIP {status?.vipChannel ?? "—"}</b> (اعضای ویژه): فقط فلش‌کارت‌های بازی + کارت نتیجه برایند روزانه — بدون تبلیغ، بدون نویز.
+            <b>کانال VIP {status?.vipChannel ?? "—"}</b> (اعضای ویژه): فلش‌کارت‌های بازی + بریفینگ صبح با توصیه‌های مهم + کارت نتیجه برایند روزانه + گزارش هفتگی — بدون تبلیغ، بدون نویز.
           </span>
         </p>
       </div>
@@ -240,7 +287,7 @@ export function ChannelDirectorTab() {
         </div>
       )}
 
-      {/* ۵ پست خط لوله */}
+      {/* ۹ پست خط لوله */}
       <div className="grid gap-2 lg:grid-cols-2">
         {posts.map((p) => (
           <div key={p.n} className={cn("space-y-1.5 rounded-xl border p-3", p.done ? "border-emerald-500/30 bg-emerald-500/[0.05]" : "border-white/10 bg-white/[0.02]")}>

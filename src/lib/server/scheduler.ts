@@ -1,14 +1,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// زمان‌بند سرور (Server-Side Automation Loop) — v13.5 NeoBet Official Broadcast
+// زمان‌بند سرور (Server-Side Automation Loop) — v18.0 NeoBet Official Broadcast
 //
 // پاسخ به مستقیم‌ترین دستور کارفرما: «سیستم و ارسال پیام‌ها به تلگرام نباید
-// وابسته به مرورگر باشد» + خط لوله جدید کانال‌ها (v13.5):
+// وابسته به مرورگر باشد» + خط لوله کامل ایجنت سوپروایزر تلگرام (v18.0):
 //   · هر ۹۰ ثانیه: اسکن ESPN → صدور کارت → تسویه FT → انتشار خودکار:
 //       کانال VIP  = فلش‌کارت‌های تاییدشده (فقط بازی‌های امروز تهران)
 //       کانال عمومی @aineobet = فقط نتایج FT
-//   · ۱۲:۰۰ تهران: ۱ کارت VIP رایگان روزانه (اولویت دژ نفوذناپذیر)
-//   · ۰۹ تا ۲۳ تهران: هر ساعت یک بنر بازاریابی تصویری چرخشی
+//   · ۰۹:۳۰ و ۱۶:۳۰ تهران: خبرهای مهم فوتبال (وایر ESPN) → کانال عمومی
+//   · ۱۰:۰۰ تهران: بریفینگ صبح VIP (کارت‌های امروز + توصیه‌های مهم) → کانال VIP
+//   · ۱۱:۳۰ و ۱۸:۳۰ تهران: آکادمی اصطلاحات BET (دو درس چرخشی) → کانال عمومی
+//   · ۰۹ تا ۲۳ تهران: ۱ کارت رایگان روزانه + بنر بازاریابی ساعتی → کانال عمومی
 //   · ۲۱:۰۰ تهران: کارت نتیجه برایند روزانه → هر دو کانال
+//   · ۲۲:۰۰ جمعه تهران: گزارش هفتگی با افراز مجزا → هر دو کانال
 //   · ۲۳:۳۰ تهران: برآیند واقعی شب با افراز مجزا → کانال عمومی
 //   · heartbeat در Setting — برای نمایش «اتوماسیون سرور فعال» در UI
 // ─────────────────────────────────────────────────────────────────────────────
@@ -19,9 +22,20 @@ import { setSetting } from "./telegram-service";
 const TICK_INTERVAL_MS = 90_000;
 const DAILY_REPORT_HOUR_TEHRAN = 21;
 const DAILY_REPORT_MINUTE_WINDOW = 5; // پنجره ۵ دقیقه‌ای پس از ساعت هدف
-// v13.5 — ساعت‌های مدیر کانال‌ها
-// v13.5.1 — کارت رایگان روزانه دیگر به ساعت ۱۲ گره نیست: هر تیک بین ۹ تا ۲۳ تلاش می‌کند
-// (Dedupe داخلی روزانه) تا اگر ساعت ۱۲ کارت تاییدشده‌ای وجود نداشت، با اولین صدور امروز ارسال شود.
+// v18.0 — ساعت‌های ایجنت سوپروایزر تلگرام
+const VIP_BRIEF_HOUR = 10;       // بریفینگ صبح کانال VIP
+const NEWS_SLOTS = [             // خبرهای فوتبال (وایر ESPN) → کانال عمومی
+  { hour: 9, minute: 30, slot: 0 },
+  { hour: 16, minute: 30, slot: 1 },
+];
+const EDU_SLOTS = [              // آکادمی اصطلاحات BET → کانال عمومی
+  { hour: 11, minute: 30, slot: 0 },
+  { hour: 18, minute: 30, slot: 1 },
+];
+const WEEKLY_HOUR = 22;          // گزارش هفتگی — جمعه ۲۲:۰۰
+const WEEKLY_MINUTE_WINDOW = 10;
+const WEEKDAY_FRIDAY = 5;        // Intl: 0=Sunday … 5=Friday
+// v13.5 — کارت رایگان روزانه دیگر به ساعت ۱۲ گره نیست: هر تیک بین ۹ تا ۲۳ تلاش می‌کند
 const FUNNEL_PNL_HOUR = 23;   // برآیند واقعی شب
 const FUNNEL_PNL_MINUTE = 30;
 const MARKETING_START_HOUR = 9;  // پنجره بنر بازاریابی ساعتی ۰۹ تا ۲۳ تهران
@@ -36,8 +50,8 @@ const g = globalThis as unknown as { __fqSchedulerState?: SchedulerState };
 g.__fqSchedulerState = g.__fqSchedulerState ?? { timer: null, busy: false };
 const state = g.__fqSchedulerState;
 
-/** ساعت و دقیقه فعلی به وقت تهران */
-function tehranNow(): { hour: number; minute: number; dateKey: string } {
+/** ساعت، دقیقه و روز هفته فعلی به وقت تهران (weekday: 0=یکشنبه … 6=شنبه) */
+function tehranNow(): { hour: number; minute: number; dateKey: string; weekday: number } {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Tehran",
     hour: "2-digit",
@@ -46,12 +60,15 @@ function tehranNow(): { hour: number; minute: number; dateKey: string } {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    weekday: "short",
   }).formatToParts(new Date());
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  const WEEKDAYS: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
     hour: Number(get("hour")),
     minute: Number(get("minute")),
     dateKey: `${get("year")}-${get("month")}-${get("day")}`,
+    weekday: WEEKDAYS[get("weekday")] ?? 0,
   };
 }
 
@@ -98,16 +115,16 @@ async function runTick(): Promise<void> {
       }
     }
 
-    // ═══ v13.5 — ۴) مدیر کانال عمومی @aineobet و کانال VIP (خط لوله جدید کارفرما) ═══
-    //   کانال عمومی: فقط نتایج (کارت نتیجه FT از مرحله ۲ می‌آید) + ۱ کارت رایگان روزانه
-    //   (۱۲:۰۰) + بنر بازاریابی ساعتی (۰۹ تا ۲۳) + برآیند شب ۲۳:۳۰
-    //   کانال VIP: فلش‌کارت‌ها (از مرحله ۲ می‌آید) + برآیند روزانه ۲۱:۰۰
+    // ═══ v18.0 — ۴) ایجنت سوپروایزر تلگرام: کانال عمومی @aineobet و کانال VIP ═══
+    //   کانال عمومی: نتایج + ۱ کارت رایگان روزانه + بنر بازاریابی ساعتی + برآیند شب ۲۳:۳۰
+    //   + خبرهای فوتبال (۰۹:۳۰/۱۶:۳۰) + آکادمی BET (۱۱:۳۰/۱۸:۳۰)
+    //   کانال VIP: فلش‌کارت‌ها (از مرحله ۲) + برآیند روزانه ۲۱:۰۰ + بریفینگ صبح ۱۰:۰۰
+    //   جمعه ۲۲:۰۰: گزارش هفتگی → هر دو کانال
     try {
       const funnel = await import("./telegram-service");
 
-      // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — v13.5.1: هر تیک بین ۹ تا ۲۳ تلاش می‌شود؛
-      // Dedupe داخلی KEY_FUNNEL_GIFT_DAY ارسال تکراری را صفر می‌کند — اگر ساعت ۱۲ کارت امروز
-      // وجود نداشت، به محض صدور اولین کارت تاییدشده امروز، هدیه خودکار ارسال می‌شود.
+      // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — هر تیک بین ۹ تا ۲۳ تلاش می‌شود؛
+      // Dedupe داخلی KEY_FUNNEL_GIFT_DAY ارسال تکراری را صفر می‌کند.
       if (th.hour >= MARKETING_START_HOUR && th.hour <= MARKETING_END_HOUR) {
         const gift = await funnel.sendDailyGiftCard(false);
         if (gift.ok) console.log(`[scheduler] daily free VIP card sent to public (${gift.detail})`);
@@ -118,6 +135,38 @@ async function runTick(): Promise<void> {
       if (th.hour >= MARKETING_START_HOUR && th.hour <= MARKETING_END_HOUR) {
         const ad = await funnel.sendHourlyVipAd(false);
         if (ad.ok) console.log(`[scheduler] hourly VIP marketing banner sent: ${ad.topic}`);
+      }
+
+      // ─── v18.0 — بریفینگ صبح کانال VIP (۱۰:۰۰ تهران): کارت‌های امروز + توصیه‌های مهم ───
+      if (th.hour === VIP_BRIEF_HOUR && th.minute < DAILY_REPORT_MINUTE_WINDOW) {
+        const brief = await funnel.sendVipMorningBrief(false);
+        if (brief.ok) console.log(`[scheduler] VIP morning brief sent (${brief.detail})`);
+        else if (!brief.detail.startsWith("ALREADY")) console.warn(`[scheduler] VIP brief skipped: ${brief.detail}`);
+      }
+
+      // ─── v18.0 — خبرهای مهم فوتبال (وایر ESPN) — ۰۹:۳۰ و ۱۶:۳۰ تهران → کانال عمومی ───
+      for (const ns of NEWS_SLOTS) {
+        if (th.hour === ns.hour && th.minute >= ns.minute && th.minute < ns.minute + DAILY_REPORT_MINUTE_WINDOW) {
+          const news = await funnel.sendFootballNews(false, ns.slot);
+          if (news.ok) console.log(`[scheduler] football news board sent (slot ${ns.slot})`);
+          else if (news.detail !== "ALREADY_SENT_THIS_SLOT" && news.detail !== "WIRE_EMPTY") console.warn(`[scheduler] football news skipped: ${news.detail}`);
+        }
+      }
+
+      // ─── v18.0 — آکادمی اصطلاحات BET — ۱۱:۳۰ و ۱۸:۳۰ تهران → کانال عمومی ───
+      for (const es of EDU_SLOTS) {
+        if (th.hour === es.hour && th.minute >= es.minute && th.minute < es.minute + DAILY_REPORT_MINUTE_WINDOW) {
+          const edu = await funnel.sendBetTermLesson(false, es.slot);
+          if (edu.ok) console.log(`[scheduler] BET term lesson sent (slot ${es.slot})`);
+          else if (!edu.detail.startsWith("ALREADY")) console.warn(`[scheduler] BET lesson skipped: ${edu.detail}`);
+        }
+      }
+
+      // ─── v18.0 — گزارش هفتگی (جمعه ۲۲:۰۰ تهران → هر دو کانال) ───
+      if (th.weekday === WEEKDAY_FRIDAY && th.hour === WEEKLY_HOUR && th.minute < WEEKLY_MINUTE_WINDOW) {
+        const weekly = await funnel.sendWeeklyDigest(false);
+        if (weekly.ok) console.log(`[scheduler] weekly audit report sent to both channels (${weekly.detail})`);
+        else if (!weekly.detail.startsWith("ALREADY")) console.warn(`[scheduler] weekly digest skipped: ${weekly.detail}`);
       }
 
       // ─── برآیند واقعی شب ۲۳:۳۰ تهران با افراز مجزا (Dedupe روزانه داخلی) ───

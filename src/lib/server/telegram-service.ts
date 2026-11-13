@@ -23,8 +23,15 @@ import {
   renderDailyRadarPNG,
   // v13.5.1 — رفع باگ «RENDER_FAILED» بنر بازاریابی ساعتی: این تابع هیچ‌وقت import نشده بود
   renderVipAdBannerPNG,
+  // v18.0 — قالب‌های ایجنت سوپروایزر تلگرام (آکادمی BET / خبر / بریفینگ VIP / گزارش هفتگی)
+  renderBetLessonPNG,
+  renderNewsBoardPNG,
+  renderVipBriefPNG,
+  renderWeeklyDigestPNG,
 } from "./slip-images";
+import { fetchSoccerNews, newsTimeEn } from "./news-service";
 import { marketEnLabel, SETTLEMENT_RULE_EN, SETTLEMENT_RULE_FA } from "@/lib/engine/orthogonal";
+import { score100Of } from "@/lib/supervisor";
 import type { IssuedSlip } from "@prisma/client";
 
 // ═════════════════════ تنظیمات (Setting + env) ═════════════════════
@@ -1442,9 +1449,413 @@ export async function sendNightlyPnl(force = false): Promise<boolean> {
   return res.ok;
 }
 
-/** وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5) */
+// ═══════════════════════════════════════════════════════════════
+// v18.0 — ایجنت سوپروایزر تلگرام (Telegram Supervisor Agent — نسخه مهندسی‌شده)
+// برنامه پایدار و دقیق پخش، طبق دستور کارفرما:
+//   · کانال VIP  → ۱۰:۰۰ بریفینگ صبح (کارت‌های امروز + توصیه‌های مهم + انضباط اجرا)
+//                  ← کارت‌های بازی از خط لوله auto-dispatch (هر ۹۰ ثانیه)
+//                  ← ۲۱:۰۰ برآیند روزانه (sendDailyDigest) + جمعه ۲۲:۰۰ گزارش هفتگی
+//   · کانال عمومی → ۰۹:۳۰ و ۱۶:۳۰ خبرهای فوتبال (وایر ESPN)
+//                  ← ۱۱:۳۰ و ۱۸:۳۰ آکادمی اصطلاحات BET (دو درس در روز، چرخشی)
+//                  ← کارت رایگان روزانه + بنر بازاریابی ساعتی + نتایج FT + وین‌ریت
+//                  ← ۲۱:۰۰ برآیند روزانه + ۲۳:۳۰ برآیند شب + جمعه ۲۲:۰۰ گزارش هفتگی
+// همه پست‌ها با Dedupe روی Setting — صفر ارسال تکراری، صفر وابستگی به مرورگر.
+// ═══════════════════════════════════════════════════════════════
+
+const KEY_VIP_BRIEF_DAY = "vip_last_brief_day";
+const KEY_EDU_LAST = "edu_last_stamp";
+const KEY_NEWS_LAST = "news_last_stamp";
+const KEY_WEEKLY_LAST = "weekly_last_week";
+
+// ─── آکادمی اصطلاحات BET — ۱۴ درس چرخشی (تصویر انگلیسی + کپشن فارسی) ───
+
+interface BetTerm {
+  term: string;
+  tagline: string;
+  definition: string;
+  example: string;
+  fa: string; // توضیح کامل فارسی برای کپشن تلگرام
+}
+
+export const BET_TERMS: BetTerm[] = [
+  {
+    term: "VALUE",
+    tagline: "the only reason a sharp bet exists",
+    definition: "A bet has value when the true probability is higher than the odds imply. Edge = model probability − implied probability. No edge, no bet.",
+    example: "Model says 50% win chance → fair odds 2.00. Book offers 2.30 → implied 43.5% → +6.5% edge → a VALUE ticket.",
+    fa: "ارزش (Value): وقتی احتمال واقعی برد بیشتر از چیزی است که ضریب نشان می‌دهد. NeoBet با موتور پواسون/دیکسون-کولز احتمال واقعی را می‌سازد و فقط کارت‌هایی با لبه مثبت صادر می‌کند.",
+  },
+  {
+    term: "IMPLIED PROBABILITY",
+    tagline: "what the odds secretly tell you",
+    definition: "Implied probability = 1 ÷ decimal odds. It is the win chance the market has priced in — before the bookmaker's margin.",
+    example: "Odds 2.50 → 1/2.50 = 40%. Odds 1.50 → 66.7%. Sum of all outcomes > 100% — the excess is the book's fee.",
+    fa: "احتمال ضمنی: معکوس ضریب اعشاری. مثلا ضریب ۲.۵۰ یعنی بازار ۴۰٪ شانس می‌بیند. با حذف مارجین کتابmaker (روش شین) قیمت‌های عادلانه آشکار می‌شوند.",
+  },
+  {
+    term: "DUTCH COVER",
+    tagline: "the NeoBet signature — one ticket, two tips",
+    definition: "Splitting one 100-unit ticket across two complementary tips so that EITHER winning outcome pays the same fixed profit. Full scoreboard corridor.",
+    example: "Tip A 42u @ 3.10 + Tip B 58u @ 1.85 → Home-win pays +88.2u · Over-pays +87.3u — profit locked at issue time.",
+    fa: "پوشش داچینگ: امضای NeoBet — یک بلیت ۱۰۰ واحدی بین دو تیپ مکمل تقسیم می‌شود و هر نتیجه‌ای دربیاید سود ثابت همان است. سود لحظه صدور روی کارت چاپ می‌شود.",
+  },
+  {
+    term: "HEDGE",
+    tagline: "locking profit mid-match",
+    definition: "Backing the opposite outcome after the market moves, to lock a guaranteed profit or cut the loss — the core of live risk management.",
+    example: "Pre-bet: Over 2.5 @ 1.90. Early goal → live Under @ 4.20. A 24u live hedge locks profit whatever happens next.",
+    fa: "هج (پوشش مقابل): وقتی بازار جابه‌جا شد، نتیجه مقابل را می‌خریم تا سود تضمین یا زیان قطع شود. هج‌بات NeoBet این پنجره را زنده و لحظه‌ای پیشنهاد می‌دهد.",
+  },
+  {
+    term: "KELLY STAKE",
+    tagline: "the mathematical bankroll fraction",
+    definition: "Kelly criterion: f* = edge ÷ variance — the growth-optimal fraction of bankroll. Full Kelly is violent; pros use fractional Kelly (0.15–0.25×).",
+    example: "Edge 6% at odds 2.20 → full Kelly ≈ 5.5% of bank → NeoBet fractional 0.15× ≈ 0.8% — survival first.",
+    fa: "استیک کلی: کسر بهینه سرمایه برای بیشترین رشد بلندمدت. NeoBet همیشه کلی کسری (۰.۱۵ تا ۰.۲۵ برابر) استفاده می‌کند تا نوسان مرگبار حذف شود.",
+  },
+  {
+    term: "FLAT STAKING",
+    tagline: "no martingale, no chasing, no tilt",
+    definition: "Every card gets the same fixed stake (100 units) regardless of previous results. Flat staking survives variance that destroys progressions.",
+    example: "10 losing cards in a row on martingale = 100× stake. On flat 100u staking the bank loses only 10% and stays alive.",
+    fa: "استیک ثابت: هر کارت همیشه ۱۰۰ واحد — نه مارتینگل، نه دوبرابر کردن بعد از باخت. تنها روشی که با نوسان چندباخت متوالی زنده می‌ماند.",
+  },
+  {
+    term: "BANKROLL",
+    tagline: "your betting capital, measured in units",
+    definition: "The total betting capital. NeoBet standard: 1 unit = 1% of your bank. A 100-unit ticket on a 1000-unit bank is exactly 10%.",
+    example: "Bank $100 → 1 unit = $1. The +88.2u golden ticket = +$88.2 — the same math scales to any bank size.",
+    fa: "بانک‌رول: کل سرمایه شرط‌بندی. قانون NeoBet: هر واحد = ۱٪ بانک شما. کارت ۱۰۰ واحدی روی بانک ۱۰۰۰ واحدی دقیقا ۱۰٪ است و با هر موجودی مقیاس‌پذیر است.",
+  },
+  {
+    term: "JOINT-LOSS RISK",
+    tagline: "the probability both tips lose together",
+    definition: "For dual-tip cards: the simulated probability that BOTH tips lose simultaneously. NeoBet's hard gate vetoes every card above 10.5%.",
+    example: "Monte-Carlo 10,000 runs → both-lose in 8.2% of worlds → approved. 13% → vetoed to the shadow ledger.",
+    fa: "ریسک باخت همزمان: احتمال شبیه‌سازی‌شده این‌که هر دو تیپ با هم ببازند. گیت سخت v16 هر کارت بالای ۱۰.۵٪ را وتو می‌کند — کارت‌های وتوشده به دفتر سایه می‌روند.",
+  },
+  {
+    term: "DOUBLE-WIN",
+    tagline: "the golden jackpot scenario",
+    definition: "When both complementary tips cash the same moment — the rarest and most profitable outcome, shown as DOUBLE_WIN on the ledger.",
+    example: "Tip A (Home win) + Tip B (Over 2.5) both cash on 2-1 → stakeA×oddsA + stakeB×oddsB − 100 = the jackpot line.",
+    fa: "برد طلایی همزمان: هر دو تیپ مکمل یک لحظه برنده می‌شوند — کمیاب‌ترین و سودآورترین سناریو که به‌صورت DOUBLE_WIN در کارنامه ثبت می‌شود.",
+  },
+  {
+    term: "CLV — CLOSING LINE VALUE",
+    tagline: "the sharpest long-run quality metric",
+    definition: "CLV = beating the market's final (closing) odds. If you consistently get better prices than the close, you are a long-term winner regardless of short variance.",
+    example: "You take Home @ 2.10; market closes at 1.95 → you beat the close by 7.7% — positive CLV.",
+    fa: "CLV: فاصله ضریب شما با ضریب نهایی بازار. اگر پیوسته بهتر از خط پایانی گرفته باشید، برنده بلندمدت هستید. کارت‌های NeoBet لبه نسبت به خط شارپ پیناکل را چاپ می‌کنند.",
+  },
+  {
+    term: "xG — EXPECTED GOALS",
+    tagline: "chance quality, not luck",
+    definition: "xG measures the quality of every chance (location, assist type, pressure). It exposes teams that over/under-perform their real strength.",
+    example: "Team shooting 15 shots × 0.06 xG each = 0.9 xG — one lucky goal from 3 shots = regression coming.",
+    fa: "ایکس‌جی: کیفیت واقعی موقعیت‌ها. سوخت موتور پیش‌بینی NeoBet — لامبدهای پواسون از xG و PPDA ساخته می‌شوند، نه از هیاهوی رسانه‌ای.",
+  },
+  {
+    term: "POISSON MATRIX",
+    tagline: "where every NeoBet tip is born",
+    definition: "A score-probability grid built from each team's attack/defense lambdas (Dixon-Coles adjusted). Every market price derives from this matrix.",
+    example: "λ_home 1.8 × λ_away 0.9 → P(2-1)=…, P(1-1)=… — the 6×6 grid feeds Over/Under, 1X2, BTTS and the golden pair.",
+    fa: "ماتریس پواسون: جدول احتمال نتیجه‌ها از لامبدای حمله/دفاع دو تیم (با تصحیح دیکسون-کولز). همه تیپ‌های NeoBet از همین ماتریس زاده می‌شوند.",
+  },
+  {
+    term: "MARGIN (VIG)",
+    tagline: "the hidden fee inside every odd",
+    definition: "The bookmaker's commission baked into odds. Removing the vig (Shin method) reveals the fair market price you must beat.",
+    example: "1X2 odds 2.10/3.40/3.30 → implied 112.4% → 12.4% vig. Fair prices after Shin removal: 2.24/3.63/3.52.",
+    fa: "مارجین (ویج): کارمزد پنهان بوکمیکر داخل ضرایب. موتور شین دی‌ویگ NeoBet این مارجین را حذف می‌کند تا قیمت عادلانه و لبه واقعی مشخص شود.",
+  },
+  {
+    term: "TIMING WINDOW",
+    tagline: "when to place the bet matters as much as what",
+    definition: "Odds swing hardest at lineup release (T-60), early sharp moves and the late underdog peak. Each NeoBet card prints its exact entry window.",
+    example: "Card window: 19:30–21:00 Tehran — the EARLY FAVORITE WINDOW before the sharp money re-prices the line.",
+    fa: "پنجره زمانی: «چه زمانی» به اندازه «چه چیزی» مهم است. هر کارت NeoBet پنجره دقیق ثبت (به وقت تهران) را چاپ می‌کند — بهترین ضریب در پنجره درست گرفته می‌شود.",
+  },
+];
+
+/** آمار واقعی کانال برای تزریق در پوسترهای آموزشی/بریفینگ */
+async function channelKpis(): Promise<{ winRatePct: number | null; settled: number; netProfit: number }> {
+  try {
+    const rows = await db.issuedSlip.findMany({
+      where: { supervisorApproved: true, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+      select: { status: true, netProfit: true },
+    });
+    if (rows.length === 0) return { winRatePct: null, settled: 0, netProfit: 0 };
+    const wins = rows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+    return {
+      winRatePct: (wins / rows.length) * 100,
+      settled: rows.length,
+      netProfit: rows.reduce((a, r) => a + (r.netProfit ?? 0), 0),
+    };
+  } catch {
+    return { winRatePct: null, settled: 0, netProfit: 0 };
+  }
+}
+
+/**
+ * v18.0 — بریفینگ صبح کانال VIP (۱۰:۰۰ تهران، یک‌بار در روز):
+ * کارت‌های تاییدشده امروز + توصیه‌های مهم سوپروایزر + انضباط اجرا.
+ * اگر امروز کارتی تایید نشده باشد، پوستر «انضباط کامل» با شمار وتوها مخابره می‌شود
+ * (شفافیت کامل — هیچ کارت ساختگی تولید نمی‌شود).
+ */
+export async function sendVipMorningBrief(force = false): Promise<{ ok: boolean; detail: string }> {
+  const chatId = await channelId();
+  if (!chatId) return { ok: false, detail: "NO_VIP_CHANNEL" };
+
+  const today = tehranDayKey();
+  if (!force) {
+    const last = await getSetting(KEY_VIP_BRIEF_DAY);
+    if (last === today) return { ok: false, detail: "ALREADY_SENT_TODAY" };
+  }
+
+  const day = tehranDayRange();
+  const [cards, vetoedToday, kpis] = await Promise.all([
+    db.issuedSlip.findMany({
+      where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: day.start, lt: day.end } },
+      orderBy: [{ supervisorScore: "desc" }, { kickoff: "asc" }],
+      take: 5,
+    }),
+    db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false, createdAt: { gte: day.start, lt: day.end } } }),
+    channelKpis(),
+  ]);
+
+  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+  const kickoffEn = (d: Date) => new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d);
+
+  const photo = await renderVipBriefPNG({
+    dateLabelEn,
+    cards: cards.map((c) => {
+      const tw = c.timingWindowA ?? c.timingWindowB;
+      const timingEn = tw && typeof tw === "string" ? tw.replace(/_/g, " ") : "EXECUTION WINDOW";
+      return {
+        teams: `${c.homeTeam} vs ${c.awayTeam}`,
+        league: c.league,
+        kickoffEn: kickoffEn(c.kickoff),
+        oddsA: c.oddsA,
+        oddsB: c.oddsB,
+        marginPct: c.marginPct,
+        riskPct: c.jointLossRiskPct ?? 0,
+        tipA: c.labelA,
+        tipB: c.labelB,
+        timingEn,
+        score100: c.supervisorScore != null ? score100Of(c.supervisorScore) : null,
+      };
+    }),
+    vetoedToday,
+    netUnitsAllTime: kpis.netProfit,
+    winRatePct: kpis.winRatePct,
+  });
+
+  const cardLines = cards
+    .map((c, i) => `${i + 1}. <b>${esc(c.homeTeam)} × ${esc(c.awayTeam)}</b> · ${esc(c.league)}\n   🔹 تیپ A @${c.oddsA.toFixed(2)}: ${esc(c.labelA)}\n   🟢 تیپ B @${c.oddsB.toFixed(2)}: ${esc(c.labelB)}\n   💰 پوشش تضمینی +${c.marginPct.toFixed(1)}٪ · ریسک همزمان ${(c.jointLossRiskPct ?? 0).toFixed(1)}٪`)
+    .join("\n\n");
+
+  const caption =
+    `🌅 <b>NEOBET QUANT PRO — بریفینگ صبح کانال VIP</b>\n` +
+    `📅 ${dateLabelEn}\n\n` +
+    (cards.length > 0
+      ? `👑 <b>کارت‌های تاییدشده امروز: ${cards.length}</b>\n\n${cardLines}\n\n` +
+        `⭐ <b>توصیه‌های مهم سوپروایزر:</b>\n` +
+        `۱) فقط داخل پنجره زمانی چاپ‌شده روی کارت ضریب ثبت کنید — بهترین قیمت پیش از حرکت پول شارپ است.\n` +
+        `۲) استیک ثابت ۱۰۰ واحد؛ هرگز بعد از باخت استیک را بالا نبرید (بدون مارتینگل).\n` +
+        `۳) هر ۱ واحد = ۱٪ بانک شخصی شما — مقیاس با موجودی خودتان.\n`
+      : `🛡️ <b>امروز هیچ کارت تاییدشده‌ای صادر نشد — حالت انضباط کامل.</b>\n` +
+        `سوپروایزر همه ${vetoedToday} کاندیدای پرریسک را وتو کرد؛ هیچ کارت ساختگی صادر نمی‌شود و هیچ کارتی به کانال تحمیل نمی‌شود.\n\n` +
+        `⭐ <b>توصیه امروز:</b> بی‌کارت ماندن هم یک تصمیم حرفه‌ای است — سرمایه حفظ‌شده، سرمایه آماده برای روزهای تراز اول است.\n`) +
+    `———————\n` +
+    `📊 سود تجمعی کانال: ${kpis.netProfit >= 0 ? "+" : ""}${kpis.netProfit.toFixed(1)} واحد · وین‌ریت واقعی ESPN: ${kpis.winRatePct != null ? kpis.winRatePct.toFixed(1) + "٪" : "—"}\n` +
+    `🤖 پیام‌های این کانال کامل خودکار است — صدور، تسویه ESPN و گزارش‌ها.`;
+
+  let ok = (await tgSendPhotoTo(chatId, photo, caption, `vip-brief-${today}.png`)).ok;
+  if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  if (ok) {
+    await setSetting(KEY_VIP_BRIEF_DAY, today);
+    await logOutbox(null, "VIP_BRIEF", true, `vip:${chatId}:cards=${cards.length}:vetoed=${vetoedToday}`);
+  }
+  return { ok, detail: ok ? (cards.length > 0 ? `brief-sent:${cards.length} cards` : "brief-sent:discipline-mode") : "send-failed" };
+}
+
+/**
+ * v18.0 — آکادمی اصطلاحات BET (۱۱:۳۰ و ۱۸:۳۰ تهران):
+ * دو درس تصویری چرخشی در روز به کانال عمومی — آموزش زبان پول شارپ.
+ * slot: ۰ یا ۱ (دو اسلات روزانه) — اصطلاح با (شماره روز + slot) چرخش می‌شود.
+ */
+export async function sendBetTermLesson(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
+  const token = await botToken();
+  if (!token) return { ok: false, detail: "NO_TOKEN" };
+  const chatId = await publicChannelId();
+  if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
+
+  const stamp = `${tehranDayKey()}:${slot}`;
+  if (!force) {
+    const last = await getSetting(KEY_EDU_LAST);
+    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
+  }
+
+  const dayIndex = Math.floor(Date.now() / 86_400_000);
+  const term = BET_TERMS[(dayIndex + slot) % BET_TERMS.length];
+  const kpis = await channelKpis();
+
+  const photo = await renderBetLessonPNG({
+    term: term.term,
+    tagline: term.tagline,
+    definition: term.definition,
+    example: term.example,
+    lessonNo: ((dayIndex + slot) % BET_TERMS.length) + 1,
+    winRatePct: kpis.winRatePct,
+    settled: kpis.settled,
+  });
+
+  const caption =
+    `🎓 <b>آکادمی BET NeoBet — درس ${(((dayIndex + slot) % BET_TERMS.length) + 1).toLocaleString("fa-IR")} · ${esc(term.term)}</b>\n\n` +
+    `${esc(term.fa)}\n\n` +
+    `💬 <b>مثال واقعی:</b> ${esc(term.example)}\n\n` +
+    `👑 اعضای VIP همه کارت‌ها + راهنمای کامل اجرا را دریافت می‌کنند — عضویت: @Aineobet_bot`;
+
+  let ok = (await tgSendPhotoTo(chatId, photo, caption, `bet-lesson-${(dayIndex + slot) % BET_TERMS.length}.png`)).ok;
+  if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  if (ok) {
+    await setSetting(KEY_EDU_LAST, stamp);
+    await logOutbox(null, "BET_TERM", true, `public:${chatId}:${term.term}`);
+  }
+  return { ok, detail: ok ? `lesson-sent:${term.term}` : "send-failed" };
+}
+
+/**
+ * v18.0 — خبرهای مهم فوتبال (۰۹:۳۰ و ۱۶:۳۰ تهران):
+ * تیترهای وایر ESPN روی پوستر آرکید + کپشن فارسی — آگاهی پیش از شرط.
+ * slot: ۰ یا ۱ — شکست وایر = skip بی‌صدا (بدون پیام خطا به کانال).
+ */
+export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
+  const token = await botToken();
+  if (!token) return { ok: false, detail: "NO_TOKEN" };
+  const chatId = await publicChannelId();
+  if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
+
+  const stamp = `${tehranDayKey()}:${slot}`;
+  if (!force) {
+    const last = await getSetting(KEY_NEWS_LAST);
+    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
+  }
+
+  const items = await fetchSoccerNews(8);
+  if (items.length === 0) return { ok: false, detail: "WIRE_EMPTY" };
+
+  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+  const photo = await renderNewsBoardPNG({
+    dateLabelEn,
+    items: items.slice(0, 6).map((n) => ({ headline: n.headline, timeEn: newsTimeEn(n.published) })),
+  });
+
+  const headlineList = items
+    .slice(0, 4)
+    .map((n) => `• <i>${esc(n.headline)}</i>`)
+    .join("\n");
+
+  const caption =
+    `📰 <b>خلاصه خبرهای مهم فوتبال — وایر ESPN</b>\n\n` +
+    `${headlineList}\n\n` +
+    `🧠 خبرها ورودی تصمیم‌اند، نه سیگنال — ترکیب‌ها، مصدومان و حواشی در محاسبات لامبدای موتور لحاظ می‌شوند.\n` +
+    `👑 برای دریافت کارت‌های تاییدشده سوپروایزر: @Aineobet_bot`;
+
+  let ok = (await tgSendPhotoTo(chatId, photo, caption, `news-board-${tehranDayKey()}-${slot}.png`)).ok;
+  if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  if (ok) {
+    await setSetting(KEY_NEWS_LAST, stamp);
+    await logOutbox(null, "FOOTBALL_NEWS", true, `public:${chatId}:items=${Math.min(6, items.length)}`);
+  }
+  return { ok, detail: ok ? `news-sent:${items.length} headlines` : "send-failed" };
+}
+
+/**
+ * v18.0 — گزارش هفتگی (جمعه ۲۲:۰۰ تهران → هر دو کانال):
+ * KPIهای ۷ روز اخیر با افراز مجزای خطوط تولید + بهترین روز + بانک ۱۰۰۰ واحدی.
+ */
+export async function sendWeeklyDigest(force = false): Promise<{ ok: boolean; detail: string }> {
+  const [pub, vip] = await Promise.all([publicChannelId(), channelId()]);
+  if (!pub && !vip) return { ok: false, detail: "NO_CHANNEL" };
+
+  const weekKey = tehranDayKey(); // یک‌بار در هفته جمعه — کلید = روز جمعه
+  if (!force) {
+    const last = await getSetting(KEY_WEEKLY_LAST);
+    if (last === weekKey) return { ok: false, detail: "ALREADY_SENT_THIS_WEEK" };
+  }
+
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 86_400_000);
+  const rows = await db.issuedSlip.findMany({
+    where: {
+      supervisorApproved: true,
+      retroIssued: false,
+      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+      settledAt: { not: null, gte: weekAgo },
+    },
+    select: { status: true, netProfit: true, productLine: true, settledAt: true },
+  });
+
+  const settled = rows.length;
+  const wins = rows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+  const net = rows.reduce((a, r) => a + (r.netProfit ?? 0), 0);
+  const jackpots = rows.filter((r) => r.status === "DOUBLE_WIN").length;
+  const tierNetOf = (line: string) => rows.filter((r) => (r.productLine ?? "SINGLE") === line).reduce((a, r) => a + (r.netProfit ?? 0), 0);
+
+  // بهترین روز هفته (کلید روز تهران)
+  const dayMap = new Map<string, number>();
+  for (const r of rows) {
+    if (!r.settledAt) continue;
+    const k = tehranDayKey(r.settledAt);
+    dayMap.set(k, (dayMap.get(k) ?? 0) + (r.netProfit ?? 0));
+  }
+  let bestDay: { label: string; net: number } | null = null;
+  for (const [k, netDay] of dayMap.entries()) {
+    if (!bestDay || netDay > bestDay.net) bestDay = { label: k, net: netDay };
+  }
+
+  const bankNow = 1000 + (await channelKpis()).netProfit;
+  const weekLabelEn = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", timeZone: "Asia/Tehran" }).format(weekAgo) + " – " + new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(now);
+
+  const photo = await renderWeeklyDigestPNG({
+    weekLabelEn,
+    settled,
+    winRatePct: winRate,
+    netProfit: net,
+    jackpots,
+    bestDay: bestDay ? { label: bestDay.label, net: bestDay.net } : null,
+    tierNet: { single: tierNetOf("SINGLE"), combo: tierNetOf("COMBO"), sniper: tierNetOf("SNIPER") },
+    bankNow,
+  });
+
+  const caption =
+    `🗓 <b>NEOBET QUANT PRO — گزارش هفتگی ${weekLabelEn}</b>\n\n` +
+    `🧾 کارت‌های تسویه‌شده: <b>${settled}</b> · وین‌ریت هفته: <b>${winRate.toFixed(1)}٪</b> · جکپات طلایی: <b>${jackpots}</b>\n` +
+    `💰 سود خالص هفته: <b>${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد</b> (افراز مجزا: تک‌بازی ${tierNetOf("SINGLE").toFixed(1)} · میکس ${tierNetOf("COMBO").toFixed(1)} · اسنایپر ${tierNetOf("SNIPER").toFixed(1)})\n` +
+    `📈 بانک ۱۰۰۰ واحدی: <b>${bankNow.toFixed(1)} واحد</b>\n\n` +
+    `🛡️ فقط کارت‌های تاییدشده سوپروایزر و تسویه رسمی ESPN — بدون شبیه‌سازی، بدون کارت کاغذی.\n` +
+    `👑 عضویت VIP: @Aineobet_bot`;
+
+  const targets = [...new Set([pub, vip].filter((x): x is string => Boolean(x)))];
+  let okAny = false;
+  for (const chatId of targets) {
+    let ok = (await tgSendPhotoTo(chatId, photo, caption, `weekly-digest-${weekKey}.png`)).ok;
+    if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+    if (ok) okAny = true;
+  }
+  if (okAny) {
+    await setSetting(KEY_WEEKLY_LAST, weekKey);
+    await logOutbox(null, "WEEKLY_DIGEST", true, `targets:${targets.join("|")}:settled=${settled}`);
+  }
+  return { ok: okAny, detail: okAny ? `weekly-sent:settled=${settled}:net=${net.toFixed(1)}` : "send-failed" };
+}
+
+/** وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5 + v18.0) */
 export async function funnelStatus() {
-  const [pub, vip, radarDay, pnlDay, giftDay, lastAd, digestDay, stats] = await Promise.all([
+  const [pub, vip, radarDay, pnlDay, giftDay, lastAd, digestDay, briefDay, eduStamp, newsStamp, weeklyWeek, stats] = await Promise.all([
     publicChannelId(),
     channelId(),
     getSetting(KEY_FUNNEL_RADAR_DAY),
@@ -1452,11 +1863,15 @@ export async function funnelStatus() {
     getSetting(KEY_FUNNEL_GIFT_DAY),
     getSetting(KEY_MARKETING_LAST_AD),
     getSetting(KEY_LAST_DIGEST_DAY),
+    getSetting(KEY_VIP_BRIEF_DAY),
+    getSetting(KEY_EDU_LAST),
+    getSetting(KEY_NEWS_LAST),
+    getSetting(KEY_WEEKLY_LAST),
     funnelRadarStats(),
   ]);
   const counts = await db.telegramOutbox.groupBy({ by: ["kind"], where: { kind: { startsWith: "FUNNEL" } }, _count: { kind: true } });
-  const adCounts = await db.telegramOutbox.groupBy({ by: ["kind"], where: { kind: "MARKETING_AD" }, _count: { kind: true } });
-  const recent = await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_RADAR", "FUNNEL_TEASER", "FUNNEL_GIFT", "FUNNEL_UNBLUR", "FUNNEL_PNL", "MARKETING_AD", "DAILY_DIGEST", "WINRATE"] } }, orderBy: { createdAt: "desc" }, take: 14, select: { kind: true, ok: true, detail: true, createdAt: true } });
+  const adCounts = await db.telegramOutbox.groupBy({ by: ["kind"], where: { kind: { in: ["MARKETING_AD", "VIP_BRIEF", "BET_TERM", "FOOTBALL_NEWS", "WEEKLY_DIGEST"] } }, _count: { kind: true } });
+  const recent = await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_RADAR", "FUNNEL_TEASER", "FUNNEL_GIFT", "FUNNEL_UNBLUR", "FUNNEL_PNL", "MARKETING_AD", "DAILY_DIGEST", "WINRATE", "VIP_BRIEF", "BET_TERM", "FOOTBALL_NEWS", "WEEKLY_DIGEST"] } }, orderBy: { createdAt: "desc" }, take: 18, select: { kind: true, ok: true, detail: true, createdAt: true } });
   return {
     publicChannel: pub,
     vipChannel: vip,
@@ -1465,6 +1880,13 @@ export async function funnelStatus() {
     pnlSentToday: pnlDay === tehranDayKey(),
     giftSentToday: giftDay === tehranDayKey(),
     digestSentToday: digestDay === tehranDayKey(),
+    briefSentToday: briefDay === tehranDayKey(),
+    lastEduStamp: eduStamp,
+    eduSentThisSlot: eduStamp != null && eduStamp.startsWith(`${tehranDayKey()}:`),
+    lastNewsStamp: newsStamp,
+    newsSentThisSlot: newsStamp != null && newsStamp.startsWith(`${tehranDayKey()}:`),
+    weeklySentThisWeek: weeklyWeek != null && weeklyWeek.length > 0,
+    lastWeeklyWeek: weeklyWeek,
     lastAdStamp: lastAd,
     adSentThisHour: lastAd === `${tehranDayKey()}:${tehranHour()}`,
     stats,

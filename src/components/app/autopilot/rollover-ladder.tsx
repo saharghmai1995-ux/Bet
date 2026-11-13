@@ -95,6 +95,9 @@ export function RolloverLadder({ startBank = 100 }: { startBank?: number }) {
             oddsA: c.pair.totalOddsA,
             oddsB: c.pair.totalOddsB,
             marginPct: c.pair.guaranteedMarginPct,
+            // v18.0 — تیپ‌ها روی پله‌ها و پوستر (نام رسمی بین‌المللی مارکت)
+            tipA: c.pair.marketAEn ?? c.pair.labelA,
+            tipB: c.pair.marketBEn ?? c.pair.labelB,
           })),
         }),
       });
@@ -165,6 +168,17 @@ export function RolloverLadder({ startBank = 100 }: { startBank?: number }) {
               ورود <b className="font-num text-foreground" dir="ltr">{faNum(r.enter, 1)}</b> ← خروج{" "}
               <b className={cn("font-num", i === 2 ? "text-amber-300" : "text-emerald-300")} dir="ltr">{faNum(r.exit, 1)}</b>
             </p>
+            {/* v18.0 — تیپ‌های هر پله: پاسخ مستقیم «تیپ‌ها مشخص نشده‌اند» */}
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-bold text-sky-300" dir="ltr">
+                A · {r.card.pair.labelA}
+              </span>
+              <span className="font-num text-[9px] text-muted-foreground" dir="ltr">@{faNum(r.card.pair.totalOddsA, 2)}</span>
+              <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300" dir="ltr">
+                B · {r.card.pair.labelB}
+              </span>
+              <span className="font-num text-[9px] text-muted-foreground" dir="ltr">@{faNum(r.card.pair.totalOddsB, 2)}</span>
+            </div>
             <p className="font-num text-[10px] text-emerald-300" dir="ltr">+{faNum(r.card.pair.guaranteedMarginPct, 1)}% تضمینی · ریسک {faNum(r.card.pair.jointStates.bothLose * 100, 1)}%</p>
           </div>
         ))}

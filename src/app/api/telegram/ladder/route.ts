@@ -5,6 +5,11 @@ import { telegramStatus, sendBroadcastPhoto } from "@/lib/server/telegram-servic
 
 export const dynamic = "force-dynamic";
 
+/** فرار HTML برای کپشن تلگرام */
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 /** یک پله نردبان مرکب — از فلش‌کارت کلاینت */
 interface LadderStepInput {
   homeTeam: string;
@@ -14,6 +19,9 @@ interface LadderStepInput {
   oddsA: number;
   oddsB: number;
   marginPct: number;
+  /** v18.0 — نام مارکت تیپ A/B برای چاپ روی پوستر (انگلیسی — ترجیح) */
+  tipA?: string;
+  tipB?: string;
 }
 
 /**
@@ -69,6 +77,9 @@ export async function POST(req: Request) {
         oddsA: s.oddsA,
         oddsB: s.oddsB,
         marginPct: s.marginPct,
+        // v18.0 — تیپ‌های هر پله روی پوستر (پاسخ مستقیم «تیپ‌ها مشخص نشده‌اند»)
+        tipA: typeof s.tipA === "string" && s.tipA.trim() ? s.tipA.trim() : undefined,
+        tipB: typeof s.tipB === "string" && s.tipB.trim() ? s.tipB.trim() : undefined,
       })),
       startBank,
       finalBank: Math.round(finalBank * 10) / 10,
@@ -83,7 +94,13 @@ export async function POST(req: Request) {
     const caption =
       `🪜 <b>NEOBET QUANT PRO • @AINEOBET — Daily Compound Rollover Plan</b>\n` +
       `${steps.length} پله روی کارت‌های تاییدشده ریسک زیر ۱۰٪ · ورود ${startBank} واحد → خروج هدف ${finalBank.toFixed(1)} واحد (+${totalGrowthPct.toFixed(1)}٪)\n` +
-      `🔒 هر پله پیش از شروع پله بعد تسویه و برداشت می‌شود — گیت سخت ریسک اتمیک v16.0 (۱۰.۵٪).`;
+      steps
+        .map(
+          (s, i) =>
+            `${i + 1}. ${esc(s.homeTeam)} × ${esc(s.awayTeam)} — تیپ A: ${esc(s.tipA ?? "—")} @${s.oddsA.toFixed(2)} · تیپ B: ${esc(s.tipB ?? "—")} @${s.oddsB.toFixed(2)} · پوشش +${s.marginPct.toFixed(1)}٪`
+        )
+        .join("\n") +
+      `\n🔒 هر پله پیش از شروع پله بعد تسویه و برداشت می‌شود — گیت سخت ریسک اتمیک v16.0 (۱۰.۵٪).`;
     const stadium = (await getStadiumBackground("DAILY_REPORT")) !== null;
     const res = await sendBroadcastPhoto(photo, caption, `rollover-ladder-${Date.now()}.png`, stadium);
     return NextResponse.json({ success: res.ok, detail: res.detail, finalBank: Math.round(finalBank * 10) / 10, totalGrowthPct: Math.round(totalGrowthPct * 10) / 10 });

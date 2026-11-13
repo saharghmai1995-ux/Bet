@@ -1017,6 +1017,28 @@ export async function getLedger(): Promise<LedgerDTO> {
     lastSettledAt: lastSettled ? lastSettled.toISOString() : null,
   };
 
+  // ─── v18.0 — نبض کارنامه (Ledger Pulse): تشخیص صادقانه «چرا آمار تغییر نکرده» ───
+  // آمار رسمی فقط کارت‌های تاییدشده را می‌شمارد؛ اگر گیت سوپروایزر همه کارت‌های
+  // تازه را وتو کند، منحنی/وین‌ریت تخت می‌ماند — این نبض همان وضعیت را شفاف نشان می‌دهد.
+  const pulseNow = Date.now();
+  const weekAgoMs = pulseNow - 7 * 86_400_000;
+  const TEHRAN_OFFSET_MS = 3.5 * 3600_000;
+  const dayStartShifted = Math.floor((pulseNow + TEHRAN_OFFSET_MS) / 86_400_000) * 86_400_000;
+  const tehranDayStart = new Date(dayStartShifted - TEHRAN_OFFSET_MS);
+  const [pendingApproved, vetoedTotal, approvedLive] = await Promise.all([
+    db.issuedSlip.count({ where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] } } }),
+    db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false } }),
+    db.issuedSlip.count({ where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: tehranDayStart, lt: new Date(tehranDayStart.getTime() + 86_400_000) } } }),
+  ]);
+  const pulse = {
+    lastSettledAt: lastSettled ? lastSettled.toISOString() : null,
+    settled7d: curveRows.filter((r) => r.settledAt && r.settledAt.getTime() >= weekAgoMs).length,
+    settledToday: curveRows.filter((r) => r.settledAt && r.settledAt >= tehranDayStart).length,
+    pendingApproved,
+    approvedLiveToday: approvedLive,
+    vetoedTotal,
+  };
+
   return {
     success: true,
     slips: slipsView,
@@ -1042,6 +1064,7 @@ export async function getLedger(): Promise<LedgerDTO> {
     },
     unitBasis: { stakePerTicket: 100, unitPctOfBankroll: 1, exampleBankrollUsd: 10 },
     equity,
+    pulse,
   };
 }
 

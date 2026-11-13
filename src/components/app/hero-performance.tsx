@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useMemo, useState } from "react";
-import { BadgeCheck, Copy, Crown, Database, Loader2, ScanLine, ShieldCheck, Sparkles, TrendingUp, Wallet } from "lucide-react";
+import { Activity, BadgeCheck, Copy, Crown, Database, Loader2, ScanLine, ShieldCheck, Sparkles, TrendingUp, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -414,6 +414,67 @@ function TierSwitch() {
   );
 }
 
+/**
+ * v18.0 — نبض کارنامه (Ledger Pulse):
+ * پاسخ صادقانه و مهندسی‌شده به «چرا عملکرد/وین‌ریت/منحنی تغییری نکرده؟»:
+ *   ۱) آمار رسمی فقط از کارت‌های تاییدشده سوپروایزر ساخته می‌شود (پول واقعی).
+ *   ۲) اگر گیت v16 همه کارت‌های تازه را وتو کند، منحنی تخت می‌ماند — اینجا عددی
+ *      شفاف می‌شود (وتوها، کارت در انتظار FT، آخرین تسویه رسمی).
+ *   ۳) دفتر سایه (تسویه کاغذی وتوها) کنارش نمایش داده می‌شود تا همیشه عدد زنده باشد.
+ *   ۴) خود ماژول هر ۹۰ ثانیه رفرش می‌شود تا تسویه‌های تازه فوری ظاهر شوند.
+ */
+function LedgerPulse({ ledger, savedByVeto }: { ledger: LedgerDTO | null; savedByVeto: number }) {
+  const pulse = ledger?.pulse;
+  const shadow = ledger?.shadow;
+  if (!pulse) return null;
+
+  const rel = (iso: string | null) => {
+    if (!iso) return null;
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.round(diffMs / 60_000);
+    if (mins < 1) return "همین حالا";
+    if (mins < 60) return `${faNum(mins, 0)} دقیقه پیش`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${faNum(hours, 0)} ساعت پیش`;
+    const days = Math.round(hours / 24);
+    return `${faNum(days, 0)} روز پیش`;
+  };
+  const lastSettled = rel(pulse.lastSettledAt);
+  const frozen = pulse.settled7d === 0;
+
+  const chip = (label: string, value: string, tone: string) => (
+    <span className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/25 px-2 py-1 text-[10px]" title={label}>
+      <span className="text-muted-foreground">{label}</span>
+      <b className={cn("font-num", tone)} dir="ltr">{value}</b>
+    </span>
+  );
+
+  return (
+    <div className="space-y-2 border-b border-white/8 bg-gradient-to-l from-cyan-500/[0.05] to-transparent px-4 py-2.5" role="status" aria-label="نبض کارنامه">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="flex items-center gap-1 text-[10px] font-bold text-cyan-300">
+          <Activity className="size-3.5" aria-hidden /> نبض کارنامه:
+        </span>
+        {chip("آخرین تسویه رسمی", lastSettled ?? "—", "text-foreground/90")}
+        {chip("تسویه ۷ روز اخیر", faNum(pulse.settled7d, 0), pulse.settled7d > 0 ? "text-emerald-300" : "text-amber-300")}
+        {chip("در انتظار FT", faNum(pulse.pendingApproved, 0), "text-cyan-300")}
+        {chip("وتوی سوپروایزر", faNum(pulse.vetoedTotal, 0), "text-rose-300")}
+        {chip("دفتر سایه (کاغذی)", `${shadow ? faNum(shadow.settled, 0) : faNum(0, 0)} کارت · ${shadow?.winRatePct != null ? faNum(shadow.winRatePct, 1) + "٪" : "—"} · ${faNum(shadow?.netProfit ?? 0, 1)}u`, "text-muted-foreground")}
+        {savedByVeto > 0 && chip("سرمایه نجات‌یافته", `+${faNum(savedByVeto, 1)}u`, "text-amber-300")}
+      </div>
+      {frozen ? (
+        <p className="rounded-lg border border-amber-500/35 bg-amber-500/[0.08] px-2 py-1.5 text-[10px] leading-4 text-amber-200">
+          <b>وضعیت فعلی: کتاب رسمی در انتظار کارت تازه است.</b> آمار و منحنی فقط از کارت‌های «تایید سوپروایزر با پول واقعی» ساخته می‌شوند؛ {faNum(pulse.vetoedTotal, 0)} کاندیدای پرریسک توسط گیت سخت v16.0 (ریسک همزمان &gt; ۱۰.۵٪ / لیگ‌های سمّی / فاوریت بدون برتری واضح) به دفتر سایه رفت‌اند — به‌محض تایید اولین کارت امروز، منحنی و وین‌ریت همین‌جا به‌روز می‌شود (رفرش خودکار هر ۹۰ ثانیه).
+        </p>
+      ) : (
+        <p className="text-[10px] leading-4 text-muted-foreground">
+          تسویه‌های رسمی در جریان‌اند — آمار این ماژول هر ۹۰ ثانیه خودکار رفرش می‌شود؛ منحنی انتهایش دقیقاً برابر «سود خالص مجموع» است.
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** ═══ ماژول اصلی هیرو ═══ */
 export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
   const [ledger, setLedger] = useState<LedgerDTO | null>(null);
@@ -422,21 +483,26 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
   // v11.0-④ — سرمایه نجات‌یافته توسط وتو (زیان کاغذی سایه که واقعی نشد)
   const savedByVeto = Math.max(0, -(ledger?.shadow?.netProfit ?? 0));
 
+  // v18.0 — بارگذاری تکرارشونده: هر ۹۰ ثانیه خودکار رفرش می‌شود تا به‌محض تسویه ESPN
+  // جدید، وین‌ریت/منحنی/عملکرد بدون reload مرورگر به‌روز شوند (رفع «تغییری نکرده»).‌
   useEffect(() => {
     let alive = true;
-    void (async () => {
+    const load = async () => {
       try {
         const res = await fetch("/api/settlement/ledger", { cache: "no-store" });
         const data = (await res.json()) as LedgerDTO;
         if (alive && data.success) setLedger(data);
       } catch {
-        // خطای شبکه — ویجت با حالت خالی صادقانه رندر می‌شود
+        // خطای شبکه — ویجت با آخرین دیتای سالم رندر می‌ماند
       } finally {
         if (alive) setLoading(false);
       }
-    })();
+    };
+    void load();
+    const t = setInterval(() => void load(), 90_000);
     return () => {
       alive = false;
+      clearInterval(t);
     };
   }, []);
 
@@ -519,6 +585,9 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           </span>
         </div>
       </div>
+
+      {/* نبض کارنامه — v18.0: تشخیص شفاف «چرا آمار تغییر می‌کند/نمی‌کند» + دفتر سایه زنده */}
+      <LedgerPulse ledger={ledger} savedByVeto={savedByVeto} />
 
       {/* چهار ویجت */}
       <div className="grid gap-4 p-4 lg:grid-cols-2 xl:grid-cols-4">

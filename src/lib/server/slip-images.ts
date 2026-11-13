@@ -21,6 +21,11 @@ import {
   renderLockedTeaserPNG,
   renderDailyRadarPNG,
   renderVipAdPNG,
+  // v18.0 — قالب‌های ایجنت سوپروایزر تلگرام
+  renderBetLessonPNG,
+  renderNewsBoardPNG,
+  renderVipBriefPNG,
+  renderWeeklyDigestPNG,
   englishSelectionLabel,
   type ResultKind,
   type VipAdInput,
@@ -122,10 +127,11 @@ async function cardBase(slip: IssuedSlip) {
     awayTeam: slip.awayTeam,
     league: slip.league,
     kickoffIso: slip.kickoff.toISOString(),
-    labelAEn: englishSelectionLabel(legsA, slip.archetype),
+    // v18.0 — کد لاتین الگو (G1/G2/...) به‌جای نام فارسی archetype — منع متن فارسی در تصویر
+    labelAEn: englishSelectionLabel(legsA, slip.archetypeCode),
     oddsA: slip.oddsA,
     stakeA: slip.stakeA,
-    labelBEn: englishSelectionLabel(legsB, slip.archetype),
+    labelBEn: englishSelectionLabel(legsB, slip.archetypeCode),
     oddsB: slip.oddsB,
     stakeB: slip.stakeB,
     guaranteedPct: slip.marginPct,
@@ -310,6 +316,9 @@ export {
   renderDailyRadarPNG,
 };
 export type { ComboPosterInput, ComboPosterLeg, SniperPosterInput, LockedTeaserInput, DailyRadarInput } from "./card-render";
+// v18.0 — قالب‌های ایجنت سوپروایزر (آکادمی BET / خبر ESPN / بریفینگ VIP / گزارش هفتگی)
+export { renderBetLessonPNG, renderNewsBoardPNG, renderVipBriefPNG, renderWeeklyDigestPNG };
+export type { BetLessonInput, NewsBoardInput, VipBriefInput, WeeklyDigestInput } from "./card-render";
 
 // ═══════════════════ v13.5 — بنر بازاریابی ساعتی VIP (KPI واقعی + قیمت انگلیسی) ═══════════════════
 

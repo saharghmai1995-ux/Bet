@@ -134,6 +134,10 @@ const KEY_EN: Record<string, string> = {
   ASIAN_U20: "Asian Total Under 2.0",
   TGOAL_HOME: "Home To Score 1+",
   TGOAL_AWAY: "Away To Score 1+",
+  HOME_O15: "Home Team Total: Over 1.5",
+  AWAY_O15: "Away Team Total: Over 1.5",
+  HOME_U15: "Home Team Total: Under 1.5",
+  AWAY_U15: "Away Team Total: Under 1.5",
   WIN_NIL_HOME: "Home Team to Win to Nil: Yes",
   WIN_NIL_AWAY: "Away Win To Nil",
   EXACT2: "Exact Total Goals: 2 Goals",
@@ -142,11 +146,21 @@ const KEY_EN: Record<string, string> = {
   C_U95: "Corners Under 9.5",
 };
 
+/** حذف هر کاراکتر غیرلاتین از برچسب — منع مطلق متن فارسی/عربی در تصویر */
+function latinOnly(s: string): string {
+  return String(s ?? "")
+    .replace(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 /** برچسب انگلیسی یک تیپ از کلیدهای بازار — ۱۰۰٪ لاتین برای رندر بی‌نقص */
-export function englishSelectionLabel(keys: string[], archetypeShort?: string | null): string {
+export function englishSelectionLabel(keys: string[], archetypeCode?: string | null): string {
   const known = (keys ?? []).map((k) => KEY_EN[String(k).toUpperCase()]).filter(Boolean);
-  if (known.length > 0) return known.join("  +  ");
-  return archetypeShort ? `${archetypeShort} orthogonal coverage` : "Orthogonal coverage pair";
+  if (known.length > 0) return latinOnly(known.join("  +  "));
+  // v18.0 — فالبک فقط با کد لاتین الگو (G1/G2/...) — هرگز نام فارسی archetype چاپ نمی‌شود
+  const code = latinOnly(String(archetypeCode ?? "")).replace(/[^A-Za-z0-9 _+.\-×/]/g, "").trim();
+  return code ? `${code} · orthogonal dual-tip coverage` : "Orthogonal dual-tip coverage";
 }
 
 // ═════════════════════ عناصر تزئینی مشترک ═════════════════════
@@ -167,166 +181,210 @@ function seeded(seed: number): () => number {
 }
 
 /**
- * ═══ v13.0 — موتور خودساز گرافیک استادیوم و موشن (Zero-Upload Procedural Stadium Engine) ═══
- * بدون هیچ فایل خارجی — نورافکن‌های radialGradient، چمن با پرسپکتیو یک‌سوم پایینی،
- * محوطه جریمه و دایره وسط، ذرات بوکه، آتش‌بازی طلایی/زمردی، باران (LOSS)، تور دروازه (WIN)،
- * نمای هوایی چمن (DAILY_REPORT) و تم بنفش/طلایی (SNIPER).
+ * ═══ v18.0 — RETRO 16-BIT ARCADE ENGINE (Zero-Upload Procedural Pixel Art) ═══
+ * موتور خودساز گرافیک کانال — بازطراحی کامل به سبک کنسول‌های ۱۶ بیتی:
+ *   · آسمان پیکسلی با ستاره‌های چانکی + برج‌های نورافکن پیکسلی
+ *   · سکوهای تماشاگر با جمعیت پیکسلی (grid 12px — dithered roster)
+ *   · چمن با نوارهای تخت (flat stripes) و خطوط ۹۰ درجه — پرسپکتیو حذف شد
+ *   · فایرورک پیکسلی (WIN/DOUBLE_WIN) · باران پیکسلی (LOSS)
+ *   · لایه CRT: scanline + vignette روی کل پوستر (احساس مانیتور آرکید)
+ * تمام متن‌ها انگلیسی خالص (منع متن فارسی در تصویر).
  */
-function proceduralStadium(w: number, h: number, kind: StadiumKind, accent: string): string {
-  const rnd = seeded(kind.length * 7919 + 41);
+const A = {
+  sky0: "#04060f",
+  sky1: "#0a1030",
+  stand0: "#1a2142",
+  stand1: "#232a52",
+  ledge: "#39406e",
+  pole: "#39406e",
+  pitch0: "#1c8a3e",
+  pitch1: "#167636",
+  hud: "#04060c",
+  dim: "#9db0ca",
+  faint: "#5c6c85",
+  crowd: ["#2c3560", "#39406e", "#4a5490", "#5a6480", "#3d4a7a", "#46528c"],
+};
+
+/** پیکسل‌های ثابت — هر پوستر همیشه با همان چیدمان رندر می‌شود (Deterministic) */
+function arcadeBackdrop(w: number, h: number, kind: StadiumKind, accent: string): string {
+  const rnd = seeded(kind.length * 6151 + 97);
   const theme =
-    kind === "DOUBLE_WIN" ? "gold" : kind === "LOSS" ? "rain" : kind === "SNIPER" ? "sniper" : kind === "DAILY_REPORT" ? "aerial" : kind === "WIN" ? "win" : kind === "TEASER" ? "teaser" : "night";
+    kind === "DOUBLE_WIN" ? "gold" : kind === "LOSS" ? "rain" : kind === "SNIPER" ? "sniper" : kind === "DAILY_REPORT" ? "aerial" : kind === "WIN" ? "win" : kind === "TEASER" ? "teaser" : kind === "RADAR" ? "radar" : "night";
 
-  const skyTop = theme === "gold" ? "#0d0a04" : theme === "rain" ? "#0a0d14" : theme === "sniper" ? "#0d0716" : theme === "aerial" ? "#0c1a10" : "#070d18";
-  const skyBottom = theme === "gold" ? "#1a1206" : theme === "rain" ? "#101623" : theme === "sniper" ? "#170b28" : theme === "aerial" ? "#0f2b18" : "#0b1526";
-  const pitchTop = theme === "aerial" ? "#1c7a3d" : "#157a38";
-  const pitchBottom = theme === "aerial" ? "#0d5426" : "#0a4a20";
+  const sky0 = theme === "sniper" ? "#0a0618" : theme === "aerial" ? "#04120a" : A.sky0;
+  const sky1 = theme === "sniper" ? "#181040" : theme === "aerial" ? "#0a2a14" : A.sky1;
 
-  // ─── چمن با پرسپکتیو (یک‌سوم پایینی؛ در حالت aerial تمام بوم) ───
-  const pitchY0 = theme === "aerial" ? 0 : Math.round(h * 0.52);
+  // ─── ستاره‌های پیکسلی آسمان (چانکی ۲–۴px) ───
+  const stars = Array.from({ length: 84 }, () => {
+    const x = Math.floor(rnd() * (w / 4)) * 4;
+    const y = Math.floor(rnd() * (h * 0.24 / 4)) * 4;
+    const s = rnd() > 0.82 ? 4 : 2;
+    const o = 0.18 + rnd() * 0.6;
+    const c = rnd() > 0.9 ? accent : "#cdd8ee";
+    return `<rect x="${x}" y="${y}" width="${s}" height="${s}" fill="${c}" opacity="${o.toFixed(2)}"/>`;
+  }).join("");
+
+  // ─── سکوهای تماشاگر + جمعیت پیکسلی (grid 12px) ───
+  const standTop = Math.round(h * 0.26);
+  const ledge1 = Math.round(h * 0.36);
+  const ledge2 = Math.round(h * 0.465);
+  const pitchY0 = Math.round(h * 0.52);
+  const crowdColors = [...A.crowd, accent, "#f5c542", "#3ddc97", "#38d6f5"];
+  const crowd: string[] = [];
+  const rows = Math.floor((pitchY0 - standTop) / 12);
+  for (let r = 0; r < rows; r++) {
+    const y = standTop + r * 12;
+    for (let cxi = 0; cxi < Math.ceil(w / 12); cxi++) {
+      if (rnd() > 0.52) continue;
+      const x = cxi * 12 + 2;
+      const ci = Math.floor(rnd() * crowdColors.length);
+      const op = 0.5 + rnd() * 0.5;
+      crowd.push(`<rect x="${x}" y="${y + 2}" width="8" height="8" fill="${crowdColors[ci]}" opacity="${op.toFixed(2)}"/>`);
+    }
+  }
+  const stands = `
+  <rect x="0" y="${standTop}" width="${w}" height="${ledge1 - standTop}" fill="${A.stand0}"/>
+  <rect x="0" y="${ledge1}" width="${w}" height="6" fill="${A.ledge}"/>
+  <rect x="0" y="${ledge1 + 6}" width="${w}" height="${ledge2 - ledge1 - 6}" fill="${A.stand1}"/>
+  <rect x="0" y="${ledge2}" width="${w}" height="7" fill="${A.ledge}"/>
+  ${crowd.join("")}`;
+
+  // ─── برج‌های نورافکن پیکسلی ───
+  const tower = (cx: number) => {
+    const headY = Math.round(h * 0.055);
+    const cells: string[] = [];
+    for (let r = 0; r < 3; r++)
+      for (let c = 0; c < 5; c++)
+        cells.push(`<rect x="${cx - 44 + c * 18}" y="${headY + r * 18}" width="14" height="14" fill="${rnd() > 0.25 ? "#f8e08e" : "#c9a93e"}"/>`);
+    return `
+    <radialGradient id="fl-${cx}" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.34"/>
+      <stop offset="55%" stop-color="${accent}" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+    </radialGradient>
+    <circle cx="${cx}" cy="${headY + 26}" r="300" fill="url(#fl-${cx})"/>
+    <rect x="${cx - 7}" y="${headY + 54}" width="14" height="${pitchY0 - headY - 54}" fill="${A.pole}"/>
+    <rect x="${cx - 24}" y="${headY + 54}" width="48" height="8" fill="${A.ledge}"/>
+    ${cells.join("")}`;
+  };
+
+  // ─── چمن تخت با نوارهای پیکسلی (بدون پرسپکتیو — ۱۶ بیت واقعی) ───
   const stripes: string[] = [];
-  const N = 9;
+  const N = 10;
   for (let i = 0; i < N; i++) {
     const y0 = pitchY0 + ((h - pitchY0) / N) * i;
-    const y1 = pitchY0 + ((h - pitchY0) / N) * (i + 1);
-    stripes.push(`<rect x="0" y="${y0.toFixed(1)}" width="${w}" height="${(y1 - y0).toFixed(1)}" fill="${i % 2 === 0 ? "rgba(255,255,255,0.045)" : "rgba(0,0,0,0.05)"}"/>`);
+    stripes.push(`<rect x="0" y="${y0.toFixed(1)}" width="${w}" height="${((h - pitchY0) / N).toFixed(1)}" fill="${i % 2 === 0 ? A.pitch0 : A.pitch1}"/>`);
   }
-
-  // ─── خطوط زمین با پرسپکتیو (محوطه جریمه + دایره وسط) ───
-  const cx = w / 2;
-  const markings = theme === "aerial"
-    ? `
-  <g stroke="rgba(255,255,255,0.30)" stroke-width="4" fill="none">
-    <rect x="${cx - 330}" y="${h * 0.20}" width="660" height="${h * 0.60}" rx="6"/>
-    <rect x="${cx - 130}" y="${h * 0.20}" width="260" height="${h * 0.22}"/>
-    <circle cx="${cx}" cy="${h * 0.5}" r="120"/>
-    <line x1="0" y1="${h * 0.5}" x2="${w}" y2="${h * 0.5}"/>
-  </g>`
-    : `
-  <g stroke="rgba(255,255,255,0.26)" stroke-width="3.5" fill="none">
-    <path d="M${cx - 330} ${h - 60} L${cx - 235} ${pitchY0 + 26} L${cx + 235} ${pitchY0 + 26} L${cx + 330} ${h - 60}"/>
-    <path d="M${cx - 150} ${h - 60} L${cx - 112} ${pitchY0 + 26} M${cx + 150} ${h - 60} L${cx + 112} ${pitchY0 + 26}"/>
-    <ellipse cx="${cx}" cy="${h * 0.80}" rx="190" ry="62"/>
-    <path d="M40 ${pitchY0 + 26} L${w - 40} ${pitchY0 + 26}"/>
+  const cxp = w / 2;
+  const markings = `
+  <g fill="none" stroke="rgba(255,255,255,0.50)" stroke-width="4">
+    <line x1="0" y1="${pitchY0}" x2="${w}" y2="${pitchY0}"/>
+    <rect x="${cxp - 300}" y="${pitchY0 + 34}" width="600" height="${h - pitchY0 - 110}"/>
+    <rect x="${cxp - 130}" y="${pitchY0 + 34}" width="260" height="120"/>
+    <polygon points="${cxp},${pitchY0 + 60} ${cxp + 70},${pitchY0 + 90} ${cxp + 70},${pitchY0 + 140} ${cxp},${pitchY0 + 170} ${cxp - 70},${pitchY0 + 140} ${cxp - 70},${pitchY0 + 90}"/>
   </g>`;
 
-  // ─── نورافکن‌ها (radialGradient چهارگوشه بالایی) ───
-  const beam = (x: number, y: number, r: number, op: number) =>
-    `<radialGradient id="fl-${x}-${y}" cx="50%" cy="50%" r="50%">
-       <stop offset="0%" stop-color="${accent}" stop-opacity="${op}"/>
-       <stop offset="45%" stop-color="${accent}" stop-opacity="${op * 0.28}"/>
-       <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
-     </radialGradient>
-     <circle cx="${x}" cy="${y}" r="${r}" fill="url(#fl-${x}-${y})"/>`;
-  const floodlights = `
-  <defs>${beam(120, 110, 430, 0.34)}${beam(w - 120, 110, 430, 0.34)}${beam(cx, 40, 520, 0.16)}</defs>
-  ${beam(120, 110, 430, 0.34)}${beam(w - 120, 110, 430, 0.34)}${beam(cx, 40, 520, 0.16)}
-  <g stroke="rgba(255,255,255,0.30)" stroke-width="3">${[-1, 1].map((s) => `<line x1="${s < 0 ? 120 : w - 120}" y1="96" x2="${s < 0 ? 150 : w - 150}" y2="${pitchY0 + 10}"/>`).join("")}</g>`;
-
-  // ─── سکوهای تماشاگر + نقاط جمعیت ───
-  const crowd = Array.from({ length: 240 }, () => {
-    const x = rnd() * w;
-    const y = pitchY0 * (0.30 + rnd() * 0.55);
-    const o = 0.05 + rnd() * 0.14;
-    return `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${(0.8 + rnd() * 1.6).toFixed(1)}" fill="rgba(255,255,255,${o.toFixed(2)})"/>`;
-  }).join("");
-
-  // ─── ذرات بوکه ───
-  const bokehColors = [accent, "#f5c542", "#3ddc97", "#38d6f5"];
-  const bokeh = Array.from({ length: 30 }, () => {
-    const x = rnd() * w;
-    const y = rnd() * h * 0.55;
-    const r = 2 + rnd() * 7;
-    const c = bokehColors[Math.floor(rnd() * bokehColors.length)];
-    return `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${r.toFixed(1)}" fill="${c}" opacity="${(0.05 + rnd() * 0.16).toFixed(2)}"/>`;
-  }).join("");
-
-  // ─── آتش‌بازی (DOUBLE_WIN / WIN) ───
+  // ─── فایرورک پیکسلی (WIN / DOUBLE_WIN) ───
+  const pixelBurst = (fx: number, fy: number, col: string) => {
+    const arm = (dx: number, dy: number) => `<rect x="${fx + dx * 10 - 4}" y="${fy + dy * 10 - 4}" width="8" height="8" fill="${col}"/><rect x="${fx + dx * 20 - 3}" y="${fy + dy * 20 - 3}" width="6" height="6" fill="${col}" opacity="0.8"/>`;
+    return `<g>${arm(0, 0)}${arm(1, 0)}${arm(-1, 0)}${arm(0, 1)}${arm(0, -1)}${arm(1, 1)}${arm(-1, -1)}${arm(1, -1)}${arm(-1, 1)}</g>`;
+  };
   const fireworks =
     theme === "gold" || theme === "win"
-      ? Array.from({ length: 2 }, (_, k) => {
-          const fx = k === 0 ? w * 0.2 : w * 0.8;
-          const fy = 150 + k * 60;
-          const rays = Array.from({ length: 14 }, (_, i) => {
-            const a = (i / 14) * Math.PI * 2 + k;
-            const len = 55 + rnd() * 65;
-            const x2 = fx + Math.cos(a) * len;
-            const y2 = fy + Math.sin(a) * len * 0.9;
-            return `<line x1="${fx}" y1="${fy}" x2="${x2.toFixed(0)}" y2="${y2.toFixed(0)}" stroke="${theme === "gold" ? "#f5c542" : "#3ddc97"}" stroke-width="2.6" stroke-linecap="round" opacity="${(0.35 + rnd() * 0.4).toFixed(2)}"/>`;
-          }).join("");
-          return `<g>${rays}<circle cx="${fx}" cy="${fy}" r="6" fill="${theme === "gold" ? "#f5c542" : "#3ddc97"}" opacity="0.85"/></g>`;
-        }).join("")
+      ? [pixelBurst(w * 0.18, h * 0.14, "#f5c542"), pixelBurst(w * 0.82, h * 0.12, "#3ddc97"), pixelBurst(w * 0.5, h * 0.19, accent), pixelBurst(w * 0.32, h * 0.08, "#38d6f5"), pixelBurst(w * 0.68, h * 0.22, "#f5c542")].join("")
       : "";
 
-  // ─── باران (LOSS) ───
+  // ─── باران پیکسلی (LOSS) ───
   const rain =
     theme === "rain"
       ? Array.from({ length: 90 }, () => {
-          const x = rnd() * w;
-          const y = rnd() * h;
-          const len = 26 + rnd() * 44;
-          return `<line x1="${x.toFixed(0)}" y1="${y.toFixed(0)}" x2="${(x - len * 0.22).toFixed(0)}" y2="${(y + len).toFixed(0)}" stroke="rgba(180,205,255,0.20)" stroke-width="1.6" stroke-linecap="round"/>`;
+          const x = Math.floor(rnd() * w);
+          const y = Math.floor(rnd() * h);
+          const len = 12 + Math.floor(rnd() * 18);
+          return `<rect x="${x}" y="${y}" width="3" height="${len}" fill="rgba(160,190,255,0.28)"/>`;
         }).join("")
-      : "";
-
-  // ─── تور دروازه (WIN) ───
-  const net =
-    theme === "win"
-      ? `<g stroke="rgba(255,255,255,0.13)" stroke-width="1.7" fill="none">
-      ${Array.from({ length: 13 }, (_, i) => `<line x1="${(90 + i * 75).toFixed(0)}" y1="${(pitchY0 + 8).toFixed(0)}" x2="${(60 + i * 80).toFixed(0)}" y2="${h - 56}"/>`).join("")}
-      ${Array.from({ length: 9 }, (_, i) => { const y = pitchY0 + 20 + ((h - 76 - pitchY0) / 9) * i; return `<path d="M85 ${y.toFixed(0)} Q${cx} ${(y - 26).toFixed(0)} ${w - 85} ${y.toFixed(0)}"/>`; }).join("")}
-    </g>`
       : "";
 
   return `
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${skyTop}"/>
-      <stop offset="${theme === "aerial" ? 30 : 52}" stop-color="${skyBottom}"/>
-      <stop offset="1" stop-color="${theme === "aerial" ? skyBottom : pitchBottom}"/>
-    </linearGradient>
-    <linearGradient id="pitch" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="${pitchTop}"/>
-      <stop offset="1" stop-color="${pitchBottom}"/>
+      <stop offset="0" stop-color="${sky0}"/>
+      <stop offset="${pitchY0}" stop-color="${sky1}"/>
     </linearGradient>
   </defs>
   <rect width="${w}" height="${h}" fill="url(#bg)"/>
-  ${floodlights}
-  ${crowd}
-  ${theme === "aerial" ? "" : `<rect x="0" y="${pitchY0}" width="${w}" height="${h - pitchY0}" fill="url(#pitch)" opacity="0.94"/>`}
+  ${stars}
+  ${tower(130)}
+  ${tower(w - 130)}
+  ${stands}
   ${stripes.join("")}
   ${markings}
-  ${net}
-  ${bokeh}
   ${fireworks}
   ${rain}
-  <rect width="${w}" height="${h}" fill="rgba(2,6,14,0.30)"/>`;
+  <rect width="${w}" height="${h}" fill="rgba(2,6,14,0.32)"/>`;
 }
 
-/** هدر رسمی برند — NEOBET QUANT PRO • @AINEOBET */
+/** لایه CRT روی کل پوستر — scanline + vignette (احساس مانیتور آرکید ۱۶ بیتی) */
+function crtOverlay(w: number, h: number): string {
+  return `
+  <defs>
+    <pattern id="crt-scan" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="2" fill="rgba(0,0,0,0.14)"/>
+    </pattern>
+    <radialGradient id="crt-vig" cx="50%" cy="46%" r="74%">
+      <stop offset="56%" stop-color="rgba(0,0,0,0)"/>
+      <stop offset="100%" stop-color="rgba(0,0,8,0.52)"/>
+    </radialGradient>
+  </defs>
+  <rect width="${w}" height="${h}" fill="url(#crt-scan)"/>
+  <rect width="${w}" height="${h}" fill="url(#crt-vig)"/>`;
+}
+
+/** هدر آرکید HUD — NEOBET QUANT PRO • @AINEOBET (سبک نوار بالای بازی‌های ۱۶ بیتی) */
 function brandHeader(w: number, accent: string, right = BRAND_HANDLE): string {
   return `
-  <rect x="0" y="0" width="${w}" height="92" fill="rgba(4,8,16,0.72)"/>
-  <rect x="0" y="90" width="${w}" height="3" fill="${accent}" opacity="0.7"/>
-  <circle cx="54" cy="46" r="19" fill="none" stroke="${C.gold}" stroke-width="3"/>
-  <text x="54" y="55" text-anchor="middle" font-family="${C.sans}" font-size="21" font-weight="bold" fill="${C.gold}">N</text>
-  <text x="88" y="42" font-family="${C.sans}" font-size="27" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">${BRAND_TITLE}</text>
-  <text x="88" y="70" font-family="${C.sans}" font-size="14.5" fill="${C.inkDim}" letter-spacing="3">${BRAND_SUB}</text>
-  <text x="${w - 40}" y="55" text-anchor="end" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.cyan}" letter-spacing="1.5">${esc(right)}</text>`;
+  <rect x="0" y="0" width="${w}" height="92" fill="${A.hud}"/>
+  <rect x="0" y="88" width="${w}" height="4" fill="${accent}"/>
+  <rect x="0" y="92" width="${w}" height="3" fill="rgba(0,0,0,0.65)"/>
+  <rect x="34" y="22" width="48" height="48" fill="${C.gold}"/>
+  <rect x="34" y="22" width="48" height="8" fill="rgba(255,255,255,0.35)"/>
+  <rect x="34" y="62" width="48" height="8" fill="rgba(0,0,0,0.35)"/>
+  <text x="58" y="56" text-anchor="middle" font-family="${C.sans}" font-size="27" font-weight="bold" fill="#0a0f1c">N</text>
+  <text x="96" y="44" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}" letter-spacing="3">${BRAND_TITLE}</text>
+  <text x="96" y="70" font-family="${C.sans}" font-size="12.5" fill="${A.dim}" letter-spacing="3.5">${BRAND_SUB}</text>
+  <rect x="${w - 128}" y="26" width="52" height="18" fill="#c86bff"/>
+  <text x="${w - 102}" y="39" text-anchor="middle" font-family="${C.sans}" font-size="10.5" font-weight="bold" fill="#12061f" letter-spacing="1">16-BIT</text>
+  <text x="${w - 40}" y="58" text-anchor="end" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${C.cyan}" letter-spacing="1.5">${esc(right)}</text>
+  <text x="${w - 40}" y="78" text-anchor="end" font-family="${C.sans}" font-size="10.5" fill="${A.faint}" letter-spacing="2">INSERT COIN → JOIN VIP</text>`;
 }
 
-/** فوتر سلب مسئولیت */
+/** فوتر آرکید — جان‌ها + سکه + متن سلب مسئولیت */
 function footer(w: number, h: number, note: string): string {
+  const heart = (x: number, y: number, c: string) =>
+    `<rect x="${x}" y="${y}" width="10" height="4" fill="${c}"/><rect x="${x - 3}" y="${y - 4}" width="6" height="4" fill="${c}"/><rect x="${x + 7}" y="${y - 4}" width="6" height="4" fill="${c}"/><rect x="${x}" y="${y + 4}" width="10" height="3" fill="${c}"/><rect x="${x + 2}" y="${y + 7}" width="6" height="3" fill="${c}"/>`;
+  const coin = (x: number, y: number) =>
+    `<rect x="${x}" y="${y}" width="14" height="14" fill="${C.gold}"/><rect x="${x + 2}" y="${y + 2}" width="10" height="10" fill="${A.hud}"/><rect x="${x + 4}" y="${y + 4}" width="6" height="6" fill="${C.gold}"/>`;
   return `
-  <rect x="0" y="${h - 46}" width="${w}" height="46" fill="rgba(0,0,0,0.5)"/>
-  <text x="${w / 2}" y="${h - 17}" text-anchor="middle" font-family="${C.sans}" font-size="16" fill="${C.inkFaint}">${esc(note)}</text>`;
+  <rect x="0" y="${h - 52}" width="${w}" height="52" fill="${A.hud}"/>
+  <rect x="0" y="${h - 52}" width="${w}" height="3" fill="${C.gold}" opacity="0.65"/>
+  ${heart(42, h - 32, C.rose)}${heart(60, h - 32, C.rose)}${heart(78, h - 32, "rgba(255,107,122,0.25)")}
+  <text x="${w / 2}" y="${h - 19}" text-anchor="middle" font-family="${C.sans}" font-size="14.5" fill="${A.dim}">${esc(note)}</text>
+  ${coin(w - 104, h - 36)}${coin(w - 82, h - 36)}
+  <text x="${w - 62}" y="${h - 24}" font-family="${C.sans}" font-size="12" font-weight="bold" fill="${C.gold}" letter-spacing="1">×2</text>`;
 }
 
-/** باکس شیشه‌ای استاندارد.broadcast — با پس‌زمینه تیره‌ی نیمه‌شفاف روی هر عکسی خوانا می‌ماند */
-function glassBox(x: number, y: number, w: number, h: number, accent: string, rx = 22, fillOpacity = 0.82): string {
+/** قاب کارت آرکید — قاب پیکسلی با گوشه‌های notch (جایگزین glassBox شیشه‌ای) */
+function glassBox(x: number, y: number, w: number, h: number, accent: string, _rx = 22, fillOpacity = 0.82): string {
+  const s = 9;
   return `
-  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="rgba(6,10,20,${fillOpacity})" stroke="${accent}" stroke-opacity="0.65" stroke-width="2.5"/>
-  <rect x="${x}" y="${y}" width="${w}" height="${rx}" rx="${rx}" fill="${accent}" fill-opacity="0.14"/>`;
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="rgba(4,8,18,${fillOpacity})"/>
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="${accent}" stroke-opacity="0.9" stroke-width="3"/>
+  <rect x="${x + 5}" y="${y + 5}" width="${w - 10}" height="${h - 10}" fill="none" stroke="${accent}" stroke-opacity="0.22" stroke-width="2"/>
+  <rect x="${x - 3}" y="${y - 3}" width="${s}" height="${s}" fill="${accent}"/>
+  <rect x="${x + w + 3 - s}" y="${y - 3}" width="${s}" height="${s}" fill="${accent}"/>
+  <rect x="${x - 3}" y="${y + h + 3 - s}" width="${s}" height="${s}" fill="${accent}"/>
+  <rect x="${x + w + 3 - s}" y="${y + h + 3 - s}" width="${s}" height="${s}" fill="${accent}"/>
+  <rect x="${x}" y="${y}" width="${w}" height="6" fill="${accent}" fill-opacity="0.22"/>`;
 }
 
 /** ساعت کوچک برداری */
@@ -393,9 +451,9 @@ function crestInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-/** کامپوز نهایی v13.0: پس‌زمینه پروسیجرال خودساز + لایه برداری — خروجی PNG 1080×1440 (صفر آپلود) */
+/** کامپوز نهایی v18.0: پس‌زمینه آرکید پیکسلی + لایه برداری + لایه CRT — خروجی PNG 1080×1440 (صفر آپلود) */
 function compose(kind: StadiumKind, overlaySvg: string, accent: string): Promise<Buffer> {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${proceduralStadium(W, H, kind, accent)}${overlaySvg}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${arcadeBackdrop(W, H, kind, accent)}${overlaySvg}${crtOverlay(W, H)}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
@@ -976,7 +1034,8 @@ function faEn(v: number): string {
 
 export interface RolloverLadderInput {
   dateLabelEn: string;
-  steps: { index: number; kickoffEn: string; teams: string; league: string; oddsA: number; oddsB: number; marginPct: number }[];
+  /** v18.0 — نام مارکت تیپ‌ها روی هر پله (انگلیسی — پاسخ مستقیم «تیپ‌ها مشخص نشده») */
+  steps: { index: number; kickoffEn: string; teams: string; league: string; oddsA: number; oddsB: number; marginPct: number; tipA?: string; tipB?: string }[];
   startBank: number; // ۱۰۰
   finalBank: number;
   totalGrowthPct: number;
@@ -991,13 +1050,17 @@ export async function renderRolloverLadderPNG(input: RolloverLadderInput): Promi
       const y = 330 + i * 250;
       const endBank = i === rows.length - 1 ? input.finalBank : (() => { const b = bank * (1 + s.marginPct / 100); bank = b; return b; })();
       const teamSize = fitSize(s.teams, 520, 26, 14, 700);
+      const tips = [s.tipA, s.tipB].filter(Boolean).map((t) => String(t).toUpperCase());
+      const tipLine = tips.length > 0 ? `TIP A: ${esc(tips[0])}${tips[1] ? `  ·  TIP B: ${esc(tips[1])}` : ""}` : "orthogonal dual-tip coverage";
+      const tipSize = fitSize(tipLine.replace(/&amp;/g, "&"), 640, 17, 11, 700);
       return `
     ${glassBox(90, y, 900, 200, C.emerald, 20)}
     <circle cx="150" cy="${y + 100}" r="40" fill="rgba(245,197,66,0.14)" stroke="${C.gold}" stroke-width="3"/>
     <text x="150" y="${y + 112}" text-anchor="middle" font-family="${C.sans}" font-size="30" font-weight="bold" fill="${C.gold}">${i + 1}</text>
-    <text x="220" y="${y + 56}" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(s.teams)}</text>
-    <text x="220" y="${y + 92}" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">${esc(enLeagueLabel(s.league))} · ${esc(s.kickoffEn)} Tehran · odds ${s.oddsA.toFixed(2)} / ${s.oddsB.toFixed(2)}</text>
-    <text x="220" y="${y + 136}" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">Enter with <tspan font-weight="bold" fill="${C.ink}">${bankAt(input, i).toFixed(1)} u</tspan> → guaranteed profit <tspan font-weight="bold" fill="${C.emerald}">+${s.marginPct.toFixed(1)}%</tspan></text>
+    <text x="220" y="${y + 52}" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(s.teams)}</text>
+    <text x="220" y="${y + 84}" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">${esc(enLeagueLabel(s.league))} · ${esc(s.kickoffEn)} Tehran · odds ${s.oddsA.toFixed(2)} / ${s.oddsB.toFixed(2)}</text>
+    <text x="220" y="${y + 116}" font-family="${C.sans}" font-size="${tipSize}" font-weight="bold" fill="${C.cyan}" letter-spacing="1">${tipLine}</text>
+    <text x="220" y="${y + 152}" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">Enter with <tspan font-weight="bold" fill="${C.ink}">${bankAt(input, i).toFixed(1)} u</tspan> → guaranteed profit <tspan font-weight="bold" fill="${C.emerald}">+${s.marginPct.toFixed(1)}%</tspan></text>
     <text x="960" y="${y + 108}" text-anchor="end" font-family="${C.mono}" font-size="32" font-weight="bold" fill="${C.emerald}">${endBank.toFixed(1)} u</text>
     ${i < rows.length - 1 ? `<path d="M940 ${y + 214} l-16 -22 h10 v-30 h12 v30 h10 z" fill="${C.gold}" opacity="0.85"/>` : ""}`;
     })
@@ -1494,4 +1557,243 @@ export async function renderVipAdPNG(input: VipAdInput): Promise<Buffer> {
   ${footer(W, H, `JOIN ${BRAND_HANDLE} VIP · USDT TRC-20 / SOL / BSC / POLYGON · instant auto-verify`)}`;
 
   return compose("TEASER", overlay, accent);
+}
+
+// ═══════════════════ ۸) قالب‌های ایجنت سوپروایزر تلگرام (v18.0) ═══════════════════
+// همه قالب‌ها روی موتور Retro 16-Bit Arcade — انگلیسی خالص داخل تصویر.
+
+/** ۸-۱) آکادمی اصطلاحات BET — پوستر آموزشی کانال عمومی */
+export interface BetLessonInput {
+  term: string; // "DUTCH COVER"
+  tagline: string; // short EN definition one-liner
+  definition: string; // 2-3 lines EN
+  example: string; // worked example on a NeoBet card
+  lessonNo: number; // شماره درس (چرخشی)
+  winRatePct: number | null;
+  settled: number | null;
+}
+
+export async function renderBetLessonPNG(input: BetLessonInput): Promise<Buffer> {
+  const termSize = fitSize(input.term, 860, 74, 40, 800);
+  const defLines = wrapText(input.definition, 860, 24, 400, 3);
+  const exLines = wrapText(input.example, 820, 20, 400, 3);
+  const overlay = `
+  ${brandHeader(W, "#c86bff")}
+
+  <text x="${W / 2}" y="216" text-anchor="middle" font-family="${C.sans}" font-size="24" font-weight="bold" fill="${A.dim}" letter-spacing="6">BET TERM ACADEMY · LESSON ${String(input.lessonNo).padStart(2, "0")}</text>
+
+  ${glassBox(90, 260, 900, 190, C.gold)}
+  <text x="${W / 2}" y="366" text-anchor="middle" font-family="${C.sans}" font-size="${termSize}" font-weight="800" fill="${C.gold}" letter-spacing="2">${esc(input.term)}</text>
+  <text x="${W / 2}" y="416" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">${esc(input.tagline)}</text>
+
+  ${glassBox(90, 500, 900, 260, C.cyan)}
+  <text x="126" y="556" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.cyan}" letter-spacing="3">WHAT IT MEANS</text>
+  <text x="126" y="612" font-family="${C.sans}" font-size="24" fill="${C.ink}">${tspans(defLines, 126, 612, 38)}</text>
+
+  ${glassBox(90, 810, 900, 250, C.emerald)}
+  <text x="126" y="866" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.emerald}" letter-spacing="3">EXAMPLE ON A NEOBET CARD</text>
+  <text x="126" y="922" font-family="${C.sans}" font-size="21" fill="${C.inkDim}">${tspans(exLines, 126, 922, 34)}</text>
+
+  ${glassBox(90, 1110, 900, 130, C.gold)}
+  <text x="${W / 2}" y="1166" text-anchor="middle" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.gold}" letter-spacing="2">NEW LESSON EVERY DAY · MASTER THE LANGUAGE OF SHARP MONEY</text>
+  <text x="${W / 2}" y="1204" text-anchor="middle" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">channel win-rate ${input.winRatePct != null ? `${input.winRatePct.toFixed(1)}%` : "—"} on ${input.settled ?? 0} real ESPN-settled tickets</text>
+
+  ${glassBox(90, 1270, 900, 52, "#c86bff", 14, 0.9)}
+  <text x="${W / 2}" y="1303" text-anchor="middle" font-family="${C.sans}" font-size="16.5" font-weight="bold" fill="#c86bff" letter-spacing="1.5">VIP MEMBERS GET EVERY CARD + THE FULL PLAYBOOK — JOIN @AINEOBET</text>
+
+  ${footer(W, H, "NEOBET BET ACADEMY · education first · not financial advice")}`;
+
+  return compose("RADAR", overlay, "#c86bff");
+}
+
+/** ۸-۲) تخته خبرهای فوتبال — تیترهای وایر ESPN روی قالب آرکید */
+export interface NewsBoardInput {
+  dateLabelEn: string;
+  items: { headline: string; timeEn: string }[];
+}
+
+export async function renderNewsBoardPNG(input: NewsBoardInput): Promise<Buffer> {
+  const rows = input.items.slice(0, 6);
+  const rowH = 148;
+  const startY = 330;
+  const newsRows = rows
+    .map((n, i) => {
+      const y = startY + i * rowH;
+      // v18.0 — عرض ۶۴۰px برای تیتر تا با برچسب ESPN WIRE هم‌پوشانی نکند
+      const lines = wrapText(n.headline, 640, 21, 700, 2);
+      return `
+    ${glassBox(90, y, 900, rowH - 22, C.cyan)}
+    <rect x="106" y="${y + 18}" width="112" height="26" fill="${C.cyan}"/>
+    <text x="162" y="${y + 36}" text-anchor="middle" font-family="${C.sans}" font-size="13" font-weight="bold" fill="#04101c" letter-spacing="1">${esc(n.timeEn)}</text>
+    <text x="238" y="${y + 38}" font-family="${C.sans}" font-size="${fitSize(lines.join(" "), 640, 21, 15, 700)}" font-weight="bold" fill="${C.ink}">${tspans(lines, 238, y + 38, 28)}</text>
+    <text x="962" y="${y + 36}" text-anchor="end" font-family="${C.sans}" font-size="13" fill="${A.faint}" letter-spacing="1">ESPN WIRE</text>`;
+    })
+    .join("");
+
+  const overlay = `
+  ${brandHeader(W, C.cyan)}
+
+  <text x="${W / 2}" y="200" text-anchor="middle" font-family="${C.sans}" font-size="40" font-weight="800" fill="${C.ink}" letter-spacing="3">FOOTBALL NEWS TICKER</text>
+  <text x="${W / 2}" y="244" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${A.dim}">${esc(input.dateLabelEn)} · top headlines from the soccer wire</text>
+  <rect x="${W / 2 - 210}" y="266" width="420" height="40" fill="rgba(56,214,245,0.12)" stroke="${C.cyan}" stroke-opacity="0.5" stroke-width="2"/>
+  <text x="${W / 2}" y="293" text-anchor="middle" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.cyan}" letter-spacing="2.5">STAY INFORMED · BET SMARTER</text>
+
+  ${newsRows}
+
+  ${glassBox(90, 1290, 900, 60, C.gold, 14, 0.9)}
+  <text x="${W / 2}" y="1327" text-anchor="middle" font-family="${C.sans}" font-size="16.5" font-weight="bold" fill="${C.gold}" letter-spacing="1.5">EVERY VIP CARD STILL SETTLES ON THE OFFICIAL ESPN SCOREBOARD</text>
+
+  ${footer(W, H, "headlines via ESPN wire · team news is input, not betting advice")}`;
+
+  return compose("RADAR", overlay, C.cyan);
+}
+
+/** ۸-۳) بریفینگ صبح کانال VIP — کارت‌های امروز + توصیه‌های مهم */
+export interface VipBriefInput {
+  dateLabelEn: string;
+  cards: { teams: string; league: string; kickoffEn: string; oddsA: number; oddsB: number; marginPct: number; riskPct: number; tipA: string; tipB: string; timingEn: string; score100: number | null }[];
+  vetoedToday: number;
+  netUnitsAllTime: number;
+  winRatePct: number | null;
+}
+
+export async function renderVipBriefPNG(input: VipBriefInput): Promise<Buffer> {
+  const rows = input.cards.slice(0, 4);
+  const hasCards = rows.length > 0;
+  const rowH = 190;
+  const cardRows = rows
+    .map((c, i) => {
+      const y = 470 + i * rowH;
+      const teamSize = fitSize(c.teams, 620, 24, 14, 700);
+      const tipLine = `TIP A: ${c.tipA.toUpperCase()} @${c.oddsA.toFixed(2)} · TIP B: ${c.tipB.toUpperCase()} @${c.oddsB.toFixed(2)}`;
+      const tipSize = fitSize(tipLine, 640, 16, 10, 700);
+      return `
+    ${glassBox(90, y, 900, 168, C.gold)}
+    <rect x="106" y="${y + 16}" width="64" height="30" fill="${C.gold}"/>
+    <text x="138" y="${y + 37}" text-anchor="middle" font-family="${C.sans}" font-size="15" font-weight="bold" fill="#120a02">#${i + 1}</text>
+    <text x="186" y="${y + 40}" font-family="${C.sans}" font-size="${teamSize}" font-weight="bold" fill="${C.ink}">${esc(c.teams)}</text>
+    <text x="186" y="${y + 70}" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">${esc(enLeagueLabel(c.league))} · ${esc(c.kickoffEn)} Tehran · ${c.riskPct.toFixed(1)}% joint risk${c.score100 != null ? ` · supervisor ${Math.round(c.score100)}/100` : ""}</text>
+    <text x="186" y="${y + 100}" font-family="${C.sans}" font-size="${tipSize}" font-weight="bold" fill="${C.cyan}" letter-spacing="0.5">${esc(tipLine)}</text>
+    <text x="186" y="${y + 132}" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">guaranteed cover <tspan font-weight="bold" fill="${C.emerald}">+${c.marginPct.toFixed(1)}%</tspan> · window <tspan font-weight="bold" fill="${C.gold}">${esc(c.timingEn)}</tspan></text>
+    <text x="962" y="${y + 40}" text-anchor="end" font-family="${C.sans}" font-size="13" fill="${A.faint}" letter-spacing="1">APPROVED</text>`;
+    })
+    .join("");
+
+  const emptyBlock = hasCards
+    ? ""
+    : `
+  ${glassBox(90, 470, 900, 220, C.rose)}
+  <text x="${W / 2}" y="560" text-anchor="middle" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.rose}" letter-spacing="1.5">NO CARD TODAY — FULL DISCIPLINE MODE</text>
+  <text x="${W / 2}" y="606" text-anchor="middle" font-family="${C.sans}" font-size="18" fill="${C.inkDim}">the supervisor vetoed every candidate on today's board — capital stays flat</text>
+  <text x="${W / 2}" y="644" text-anchor="middle" font-family="${C.sans}" font-size="17" fill="${C.inkDim}">${input.vetoedToday} high-risk patterns rejected · no card is safer than a forced card</text>`;
+
+  const reco = hasCards
+    ? (() => {
+        const top = [...input.cards].sort((a, b) => (b.score100 ?? -1) - (a.score100 ?? -1))[0];
+        const line = `TOP PICK: ${top.teams.toUpperCase()} · +${top.marginPct.toFixed(1)}% COVER · ${top.timingEn.toUpperCase()} WINDOW`;
+        return `
+  ${glassBox(90, hasCards ? 470 + rows.length * rowH : 730, 900, 118, C.emerald)}
+  <text x="126" y="${(hasCards ? 470 + rows.length * rowH : 730) + 44}" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.emerald}" letter-spacing="3">SUPERVISOR RECOMMENDATION</text>
+  <text x="126" y="${(hasCards ? 470 + rows.length * rowH : 730) + 84}" font-family="${C.sans}" font-size="${fitSize(line, 820, 18, 12, 700)}" font-weight="bold" fill="${C.ink}">${esc(line)}</text>`;
+      })()
+    : "";
+
+  const overlay = `
+  ${brandHeader(W, C.gold)}
+
+  <text x="${W / 2}" y="206" text-anchor="middle" font-family="${C.sans}" font-size="42" font-weight="800" fill="${C.gold}" letter-spacing="3">VIP DAILY BRIEF</text>
+  <text x="${W / 2}" y="250" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${A.dim}">${esc(input.dateLabelEn)} · supervisor-approved board only</text>
+
+  <g>
+    ${glassBox(90, 292, 440, 130, C.emerald)}
+    <text x="310" y="352" text-anchor="middle" font-family="${C.mono}" font-size="44" font-weight="bold" fill="${C.emerald}">${hasCards ? String(rows.length) : "0"}</text>
+    <text x="310" y="394" text-anchor="middle" font-family="${C.sans}" font-size="14" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">CARDS TODAY</text>
+    ${glassBox(550, 292, 440, 130, C.cyan)}
+    <text x="770" y="352" text-anchor="middle" font-family="${C.mono}" font-size="44" font-weight="bold" fill="${C.cyan}">${input.vetoedToday}</text>
+    <text x="770" y="394" text-anchor="middle" font-family="${C.sans}" font-size="14" font-weight="bold" fill="${C.inkDim}" letter-spacing="1.5">VETOED CANDIDATES</text>
+  </g>
+
+  ${cardRows}
+  ${emptyBlock}
+  ${reco}
+
+  ${glassBox(90, 1180, 900, 110, C.gold)}
+  <text x="126" y="1224" font-family="${C.sans}" font-size="16.5" font-weight="bold" fill="${C.gold}" letter-spacing="2">EXECUTION DISCIPLINE</text>
+  <text x="126" y="1258" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">flat 100u ticket · place inside the printed window · 1 unit = 1% of your own bank</text>
+
+  ${footer(W, H, `channel all-time net ${sign(input.netUnitsAllTime)} units · win-rate ${input.winRatePct != null ? input.winRatePct.toFixed(1) + "%" : "—"} · not financial advice`)}`;
+
+  return compose("PRE_MATCH", overlay, C.gold);
+}
+
+/** ۸-۴) گزارش هفتگی — برایند هفت به هر دو کانال */
+export interface WeeklyDigestInput {
+  weekLabelEn: string; // "Mon 09 Nov – Sun 15 Nov"
+  settled: number;
+  winRatePct: number;
+  netProfit: number;
+  jackpots: number;
+  bestDay: { label: string; net: number } | null;
+  tierNet: { single: number; combo: number; sniper: number };
+  bankNow: number; // بانک ۱۰۰۰ واحدی
+}
+
+export async function renderWeeklyDigestPNG(input: WeeklyDigestInput): Promise<Buffer> {
+  const good = input.netProfit >= 0;
+  const accent = good ? C.emerald : C.rose;
+  const kpis = [
+    { label: "TICKETS SETTLED", value: String(input.settled), color: C.cyan },
+    { label: "WEEK WIN-RATE", value: `${input.winRatePct.toFixed(1)}%`, color: C.emerald },
+    { label: "GOLDEN JACKPOTS", value: String(input.jackpots), color: C.gold },
+    { label: "NET UNITS", value: `${input.netProfit >= 0 ? "+" : "−"}${Math.abs(input.netProfit).toFixed(1)}`, color: good ? C.emerald : C.rose },
+  ];
+  const kpiBoxes = kpis
+    .map((k, i) => {
+      const x = 90 + i * 232;
+      return `
+  ${glassBox(x, 420, 208, 150, k.color)}
+  <text x="${x + 104}" y="${420 + 78}" text-anchor="middle" font-family="${C.mono}" font-size="${fitSize(k.value, 170, 40, 20, 700)}" font-weight="bold" fill="${k.color}">${esc(k.value)}</text>
+  <text x="${x + 104}" y="${420 + 118}" text-anchor="middle" font-family="${C.sans}" font-size="12.5" font-weight="bold" fill="${C.inkDim}" letter-spacing="1">${esc(k.label)}</text>`;
+    })
+    .join("");
+
+  const tiers = [
+    { label: "TIER 1 · DUAL-HEDGE", net: input.tierNet.single },
+    { label: "TIER 2 · COMBO", net: input.tierNet.combo },
+    { label: "TIER 3 · SNIPER", net: input.tierNet.sniper },
+  ];
+  const tierRows = tiers
+    .map((t, i) => {
+      const y = 640 + i * 120;
+      return `
+    ${glassBox(90, y, 900, 96, t.net >= 0 ? C.emerald : C.rose)}
+    <text x="126" y="${y + 58}" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.ink}" letter-spacing="1.5">${esc(t.label)}</text>
+    <text x="960" y="${y + 60}" text-anchor="end" font-family="${C.mono}" font-size="28" font-weight="bold" fill="${t.net >= 0 ? C.emerald : C.rose}">${t.net >= 0 ? "+" : "−"}${Math.abs(t.net).toFixed(1)} u</text>`;
+    })
+    .join("");
+
+  const overlay = `
+  ${brandHeader(W, accent)}
+
+  <text x="${W / 2}" y="206" text-anchor="middle" font-family="${C.sans}" font-size="42" font-weight="800" fill="${accent}" letter-spacing="3">WEEKLY AUDIT REPORT</text>
+  <text x="${W / 2}" y="252" text-anchor="middle" font-family="${C.sans}" font-size="20" fill="${A.dim}">${esc(input.weekLabelEn)} · official ESPN settlements only</text>
+  <rect x="${W / 2 - 250}" y="282" width="500" height="56" fill="rgba(0,0,0,0.35)" stroke="${accent}" stroke-opacity="0.55" stroke-width="2"/>
+  <text x="${W / 2}" y="318" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${accent}" letter-spacing="2">7-DAY DISJOINT PRODUCT-LINE ACCOUNTING</text>
+
+  ${kpiBoxes}
+
+  ${tierRows}
+
+  ${glassBox(90, 1030, 900, 150, C.gold)}
+  <text x="126" y="1078" font-family="${C.sans}" font-size="18" font-weight="bold" fill="${C.gold}" letter-spacing="2">BANK 1000-UNIT CURVE</text>
+  <text x="126" y="1124" font-family="${C.sans}" font-size="30" font-weight="bold" fill="${C.ink}">1000 u → <tspan fill="${input.bankNow >= 1000 ? C.emerald : C.rose}">${input.bankNow.toFixed(1)} u</tspan> <tspan fill="${input.bankNow >= 1000 ? C.emerald : C.rose}" font-size="22">(${input.bankNow >= 1000 ? "+" : "−"}${Math.abs(input.bankNow - 1000).toFixed(1)})</tspan></text>
+  <text x="126" y="1158" font-family="${C.sans}" font-size="14.5" fill="${C.inkDim}">flat 100-unit tickets · vetoes excluded from real money · ${input.bestDay ? `best day: ${esc(input.bestDay.label)} (${input.bestDay.net >= 0 ? "+" : "−"}${Math.abs(input.bestDay.net).toFixed(1)}u)` : "—"}</text>
+
+  ${glassBox(90, 1220, 900, 90, C.emerald)}
+  <text x="${W / 2}" y="1262" text-anchor="middle" font-family="${C.sans}" font-size="17" font-weight="bold" fill="${C.emerald}" letter-spacing="1.5">SAME PIPELINE NEXT WEEK · EVERY TICKET HASHED BEFORE KICKOFF</text>
+  <text x="${W / 2}" y="1292" text-anchor="middle" font-family="${C.sans}" font-size="14.5" fill="${C.inkDim}">full SHA-256 ledger + live ESPN grading — verifiable by anyone</text>
+
+  ${footer(W, H, "NEOBET WEEKLY AUDIT · no simulation · not financial advice")}`;
+
+  return compose("DAILY_REPORT", overlay, accent);
 }
