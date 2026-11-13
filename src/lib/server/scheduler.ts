@@ -1,11 +1,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// زمان‌بند سرور (Server-Side Automation Loop) — v18.0 NeoBet Official Broadcast
+// زمان‌بند سرور (Server-Side Automation Loop) — v18.2 NeoBet Official Broadcast
 //
 // پاسخ به مستقیم‌ترین دستور کارفرما: «سیستم و ارسال پیام‌ها به تلگرام نباید
 // وابسته به مرورگر باشد» + خط لوله کامل ایجنت سوپروایزر تلگرام (v18.0):
 //   · هر ۹۰ ثانیه: اسکن ESPN → صدور کارت → تسویه FT → انتشار خودکار:
 //       کانال VIP  = فلش‌کارت‌های تاییدشده (فقط بازی‌های امروز تهران)
 //       کانال عمومی @aineobet = فقط نتایج FT
+//   · v18.2 — Slot Catch-Up Engine: اسلات‌های از‌دست‌رفته (خاموشی موتور در پنجره)
+//     بعد از روشن شدن در همان روز جبران می‌شوند — هیچ پستی برای کل روز گم نمی‌شود.
 //   · ۰۹:۳۰ و ۱۶:۳۰ تهران: خبرهای مهم فوتبال (وایر ESPN) → کانال عمومی
 //   · ۱۰:۰۰ تهران: بریفینگ صبح VIP (کارت‌های امروز + توصیه‌های مهم) → کانال VIP
 //   · ۱۱:۳۰ و ۱۸:۳۰ تهران: آکادمی اصطلاحات BET (دو درس چرخشی) → کانال عمومی
@@ -48,6 +50,19 @@ interface SchedulerState {
   lastTickAt: number;
   /** v18.1 — تایمر نگهبان: اگر حلقه اصلی بمیرد، خودکار ری‌استارت می‌کند */
   watchdog: ReturnType<typeof setInterval> | null;
+}
+
+/**
+ * v18.2 — Slot Catch-Up Engine: اگر موتور در پنجره دقیق یک اسلات خاموش بوده،
+ * محتوای همان روز بعد از روشن شدن دیرتر ارسال می‌شود — هیچ اسلاتی گم نمی‌شود.
+ * امنیت: هر تابع فانل dedupe داخلی با Setting دارد؛ فراخوانی تکراری no-op است.
+ */
+function slotDue(
+  th: { hour: number; minute: number },
+  hour: number,
+  minute: number
+): boolean {
+  return th.hour > hour || (th.hour === hour && th.minute >= minute);
 }
 
 const g = globalThis as unknown as { __fqSchedulerState?: SchedulerState };
@@ -119,7 +134,8 @@ async function tickBody(): Promise<void> {
     const th = tehranNow();
     const todayKey = th.dateKey;
     const lastReportDay = st.lastDailyReportAt ? tehranNowKey(st.lastDailyReportAt) : null;
-    if (th.hour === DAILY_REPORT_HOUR_TEHRAN && th.minute < DAILY_REPORT_MINUTE_WINDOW && lastReportDay !== todayKey) {
+    // v18.2 — catch-up: اگر ۲۱:۰۰ از دست رفته بود، هر تیک تا پایان همان روز جبران می‌کند
+    if (slotDue(th, DAILY_REPORT_HOUR_TEHRAN, 0) && lastReportDay !== todayKey) {
       try {
         const { sendWinRateReport, sendDailyDigest } = await import("./telegram-service");
         const ok = await sendWinRateReport(true);
@@ -157,40 +173,40 @@ async function tickBody(): Promise<void> {
         if (ad.ok) console.log(`[scheduler] hourly VIP marketing banner sent: ${ad.topic}`);
       }
 
-      // ─── v18.0 — بریفینگ صبح کانال VIP (۱۰:۰۰ تهران): کارت‌های امروز + توصیه‌های مهم ───
-      if (th.hour === VIP_BRIEF_HOUR && th.minute < DAILY_REPORT_MINUTE_WINDOW) {
+      // ─── v18.0+18.2 — بریفینگ صبح کانال VIP (۱۰:۰۰ تهران + جبران تا پایان روز) ───
+      if (slotDue(th, VIP_BRIEF_HOUR, 0)) {
         const brief = await funnel.sendVipMorningBrief(false);
         if (brief.ok) console.log(`[scheduler] VIP morning brief sent (${brief.detail})`);
         else if (!brief.detail.startsWith("ALREADY")) console.warn(`[scheduler] VIP brief skipped: ${brief.detail}`);
       }
 
-      // ─── v18.0 — خبرهای مهم فوتبال (وایر ESPN) — ۰۹:۳۰ و ۱۶:۳۰ تهران → کانال عمومی ───
+      // ─── v18.0+18.2 — خبرهای مهم فوتبال (۰۹:۳۰ و ۱۶:۳۰ تهران + جبران اسلات از دست‌رفته) ───
       for (const ns of NEWS_SLOTS) {
-        if (th.hour === ns.hour && th.minute >= ns.minute && th.minute < ns.minute + DAILY_REPORT_MINUTE_WINDOW) {
+        if (slotDue(th, ns.hour, ns.minute)) {
           const news = await funnel.sendFootballNews(false, ns.slot);
           if (news.ok) console.log(`[scheduler] football news board sent (slot ${ns.slot})`);
           else if (news.detail !== "ALREADY_SENT_THIS_SLOT" && news.detail !== "WIRE_EMPTY") console.warn(`[scheduler] football news skipped: ${news.detail}`);
         }
       }
 
-      // ─── v18.0 — آکادمی اصطلاحات BET — ۱۱:۳۰ و ۱۸:۳۰ تهران → کانال عمومی ───
+      // ─── v18.0+18.2 — آکادمی اصطلاحات BET (۱۱:۳۰ و ۱۸:۳۰ تهران + جبران) ───
       for (const es of EDU_SLOTS) {
-        if (th.hour === es.hour && th.minute >= es.minute && th.minute < es.minute + DAILY_REPORT_MINUTE_WINDOW) {
+        if (slotDue(th, es.hour, es.minute)) {
           const edu = await funnel.sendBetTermLesson(false, es.slot);
           if (edu.ok) console.log(`[scheduler] BET term lesson sent (slot ${es.slot})`);
           else if (!edu.detail.startsWith("ALREADY")) console.warn(`[scheduler] BET lesson skipped: ${edu.detail}`);
         }
       }
 
-      // ─── v18.0 — گزارش هفتگی (جمعه ۲۲:۰۰ تهران → هر دو کانال) ───
-      if (th.weekday === WEEKDAY_FRIDAY && th.hour === WEEKLY_HOUR && th.minute < WEEKLY_MINUTE_WINDOW) {
+      // ─── v18.0+18.2 — گزارش هفتگی (جمعه ۲۲:۰۰ تهران + جبران تا پایان جمعه) ───
+      if (th.weekday === WEEKDAY_FRIDAY && slotDue(th, WEEKLY_HOUR, 0)) {
         const weekly = await funnel.sendWeeklyDigest(false);
         if (weekly.ok) console.log(`[scheduler] weekly audit report sent to both channels (${weekly.detail})`);
         else if (!weekly.detail.startsWith("ALREADY")) console.warn(`[scheduler] weekly digest skipped: ${weekly.detail}`);
       }
 
-      // ─── برآیند واقعی شب ۲۳:۳۰ تهران با افراز مجزا (Dedupe روزانه داخلی) ───
-      if (th.hour === FUNNEL_PNL_HOUR && th.minute >= FUNNEL_PNL_MINUTE && th.minute < FUNNEL_PNL_MINUTE + 10) {
+      // ─── برآیند واقعی شب ۲۳:۳۰ تهران با افراز مجزا (Dedupe روزانه داخلی + جبران تا ۲۳:۵۹) ───
+      if (slotDue(th, FUNNEL_PNL_HOUR, FUNNEL_PNL_MINUTE)) {
         const ok = await funnel.sendNightlyPnl(false);
         if (ok) console.log("[scheduler] funnel nightly disjoint PnL sent to public channel");
       }
@@ -244,7 +260,7 @@ export function startScheduler(): void {
     }, WATCHDOG_INTERVAL_MS);
   }
 
-  console.log(`[scheduler] v18.1 server automation active — tick every ${TICK_INTERVAL_MS / 1000}s (browser-independent + always-warm watchdog)`);
+  console.log(`[scheduler] v18.2 server automation active — tick every ${TICK_INTERVAL_MS / 1000}s (browser-independent + always-warm watchdog + slot catch-up)`);
 }
 
 export function stopScheduler(): void {
