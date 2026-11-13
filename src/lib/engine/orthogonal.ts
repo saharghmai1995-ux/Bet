@@ -261,12 +261,33 @@ export function orthoLegOdds(key: string, p: number, ctx: OrthoContext): number 
 // ═══════════ v16.0 — فرمول واقعی ضریب بوک‌میکر بدون سقف مصنوعی ═══════════
 
 /**
- * v16.0 Real Market Odds (بخش ۲ سند ارتقا v16.0):
- *   odds = Number((0.96 / prob).toFixed(2)) — کسر ۴٪ کارمزد بوک‌میکر از احتمال ماتریس
- *   بازه طبیعی [1.70, 4.20] — سقف مصنوعی min(2.35) که میانگین سود بردها را به ۱۹.۵٪
- *   محدود می‌کرد، به‌کلی حذف شد (۴ باگ ریاضی نسخه ۱۵ — باگ شماره ۴).
- *   ضریب غیرواقعی بالای ۴.۲۰ همچنان بُرش می‌خورد (خط دفاعی ضد ناهنجاری).
+ * v19.0 — فرمول قیمت‌گذاری ارزش‌محور (+EV Market-Edge Odds Formula):
+ * باگ قاتل سود نسخه‌های قبل «odds = 0.96 / prob» حذف شد — آن فرمول فرض می‌کرد مدل
+ * صفر درصد برتری (+EV Edge) نسبت به بوک‌میکر دارد و سود هر برد را به ~۵ واحد می‌رساند.
+ * در بازی‌های منتخب سوپروایزر، بازار حداقل ۱۲٪ تا ۲۲٪ خطای قیمت‌گذاری دارد؛ بنابراین
+ * ضریب باید شامل لبه ارزش مدل باشد (edgeBoost بین ۱.۱۴ تا ۱.۲۶ بر اساس فاصله
+ * λ_Hybrid با خط بازار):
+ *   · ضریب تیپ A در بازه ۱.۹۵x تا ۲.۲۵x و تیپ B در بازه ۲.۹۵x تا ۳.۴۵x قرار می‌گیرد
+ *   · مجموع معکوس ضرایب حول ۰.۸۰ تا ۰.۸۴ → سود خالص هر کارت برنده از +۵.۵ به
+ *     +۲۰.۰ تا +۲۶.۵ واحد (و در Double-Win نتایج ۱-۰ و ۲-۰ به +۱۴۵ واحد) می‌رسد.
  */
+export function computeValueMarketOdds(trueModelProb: number, edgeBoost = 1.18): number {
+  const clampedProb = Math.max(0.18, Math.min(0.68, trueModelProb));
+  const rawValueOdds = edgeBoost / clampedProb;
+  return Number(Math.max(1.82, Math.min(3.95, rawValueOdds)).toFixed(2));
+}
+
+/**
+ * v19.0 — ضریب لبه ارزش بر اساس خطای قیمت‌گذاری بازار نسبت به مدل:
+ * implied = احتمال ضمنی بازار (۱ ÷ ضریب بازار). اگر بازار مدل را کم‌قیمت کرده باشد
+ * (implied < modelProb)، لبه بزرگ‌تر است — بازه مجاز سند: ۱.۱۴ تا ۱.۲۶.
+ */
+export function edgeBoostForMispricing(modelProb: number, marketImpliedProb: number | null): number {
+  if (!marketImpliedProb || marketImpliedProb <= 0 || marketImpliedProb >= 1) return 1.18;
+  const mispricing = Math.max(0, Math.min(0.3, modelProb - marketImpliedProb));
+  return Math.round(Math.min(1.26, Math.max(1.14, 1.14 + mispricing * 0.5)) * 1000) / 1000;
+}
+
 export const ATOMIC_ODDS_BAND = {
   A: { lo: 1.7, hi: 4.2 },
   B: { lo: 1.7, hi: 4.2 },
@@ -280,8 +301,9 @@ export function atomicOdds(prob: number, band: AtomicBand, realPrice?: number): 
   if (typeof realPrice === "number" && realPrice > 1.01 && realPrice >= lo - 0.1 && realPrice <= hi + 0.1) {
     return Math.round(realPrice * 100) / 100;
   }
-  // v16.0 — فرمول واقعی بازار با کسر ۴٪ (بدون سقف مصنوعی min(2.35))
-  const raw = 0.96 / Math.max(0.01, Math.min(0.99, prob));
+  // v19.0 — قیمت‌گذاری ارزش‌محور با لبه مدل (جایگزین فرمول بی‌لبه 0.96/prob)
+  const boost = edgeBoostForMispricing(prob, typeof realPrice === "number" && realPrice > 1.01 ? 1 / realPrice : null);
+  const raw = computeValueMarketOdds(prob, boost);
   const clamped = Math.min(hi, Math.max(lo, raw));
   return Math.round(clamped * 100) / 100;
 }
@@ -584,42 +606,50 @@ export function orthoLegLabel(key: string): string {
 
 const REAL_PRICE_KEYS = ["HOME", "DRAW", "AWAY", "DC_1X", "DC_X2", "O15", "O25", "U25", "U35", "BTTS_Y", "BTTS_N", "C_O95", "C_U95"];
 
+// ═══ v19.0 — تخصیص شتاب‌دهنده نامتقارن (Asymmetric Alpha Staking) — پیش‌فرض فعال ═══
+/** استیک ثابت تیپ A (بال اصلی) — سند v19.0: ۶۵ واحد */
+export const ASYM_STAKE_A_UNITS = 65;
+/** استیک ثابت تیپ B (بال پوششی) — سند v19.0: ۳۵ واحد (در ~۳.۱۰x → برگشت ۱۰۸.۵ = اصل + ۸.۵٪) */
+export const ASYM_STAKE_B_UNITS = 35;
+/**
+ * v19.0 — تخصیص هوشمند استیک ۱۰۰ واحدی (پیش‌فرض فعال برای همه کارت‌های تایید سوپروایزر):
+ *   · بال پوششی (تیپ B ~۳.۱۰x): دقیقاً ۳۵ واحد → برد B = ۱۰۸.۵ واحد (اصل پول + ۸.۵٪ سود)
+ *   · بال اصلی (تیپ A ~۲.۱۰x): ۶۵ واحد → برد A = ۱۳۶.۵ واحد (+۳۶.۵ سود خالص)
+ *   · برد طلایی همزمان (Double-Win در ۱-۰ و ۲-۰): ۱۳۶.۵ + ۱۰۸.۵ = ۲۴۵.۰ → +۱۴۵.۰ واحد در یک مسابقه
+ * «سود تضمینی» کارت = کمینه سود دو بال (محافظه‌کارانه و صادقانه).
+ */
+export function asymmetricAlphaStakes(
+  oddsA: number,
+  oddsB: number
+): { active: boolean; stakeA: number; stakeB: number; profitOnA: number; profitOnB: number; guaranteed: number; profitOnDoubleWin: number; note: string } {
+  const total = ASYM_STAKE_A_UNITS + ASYM_STAKE_B_UNITS;
+  const stakeA = ASYM_STAKE_A_UNITS;
+  const stakeB = ASYM_STAKE_B_UNITS;
+  const profitOnA = Math.round((stakeA * oddsA - total) * 10) / 10;
+  const profitOnB = Math.round((stakeB * oddsB - total) * 10) / 10;
+  const guaranteed = Math.round(Math.min(profitOnA, profitOnB) * 10) / 10;
+  const profitOnDoubleWin = Math.round((stakeA * oddsA + stakeB * oddsB - total) * 10) / 10;
+  return {
+    active: true,
+    stakeA,
+    stakeB,
+    profitOnA,
+    profitOnB,
+    guaranteed,
+    profitOnDoubleWin,
+    note: `⚡ تخصیص نامتقارن آلفا — ${stakeA} واحد روی تیپ A در ضریب ${oddsA.toFixed(2)} (برد = +${profitOnA.toFixed(1)}u) + ${stakeB} واحد روی تیپ B در ضریب ${oddsB.toFixed(2)} (برد = ${profitOnB >= 0 ? "+" : ""}${profitOnB.toFixed(1)}u) — برد طلایی همزمان ۱-۰/۲-۰ = جک‌پات +${profitOnDoubleWin.toFixed(1)} واحد`,
+  };
+}
+
+/** سازگاری نسخه‌های قبلی — سند v19.0: شتاب‌دهنده حالا همیشه فعال با ۶۵/۳۵ ثابت است */
+export const asymmetricAcceleratorStakes = asymmetricAlphaStakes;
+
 /** v16.0 — آستانه فعال‌سازی شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ */
 export const ACCELERATOR_PROFIT_PCT_THRESHOLD = 12;
 /** v16.0 — اصل سرمایه قفل‌شده روی تیپ B در شتاب‌دهنده نامتقارن */
 export const ACCELERATOR_CAPITAL_LOCK_UNITS = 100;
-
-/**
- * v16.0 — شتاب‌دهنده نامتقارن (بخش ۲ سند ارتقا — بند ۳):
- * برای بازی‌هایی که سود برابرشان زیر ۱۲٪ است:
- *   · قفل اصل سرمایه ۱۰۰ واحد روی تیپ B — stakeB = 100 / oddsB (اگر تیپ B ببرد،
- *     دقیقاً اصل سرمایه ۱۰۰ واحدی برمی‌گردد — صفر زیان)
- *   · تجمیس کل سود روی تیپ A — stakeA = 100 − stakeB (کل باقیمانده سمت سود)
- *   · پاداش Double-Win در نتایج ۱-۰ و ۲-۰ — هر دو تیپ همزمان می‌برند و جک‌پات
- */
-export function asymmetricAcceleratorStakes(
-  oddsA: number,
-  oddsB: number,
-  equalProfitPct: number
-): { active: boolean; stakeA: number; stakeB: number; profitOnA: number; profitOnDoubleWin: number; note: string } {
-  const total = ACCELERATOR_CAPITAL_LOCK_UNITS;
-  const lockB = total / Math.max(1.01, oddsB);
-  const stakeA = Math.round((total - lockB) * 10) / 10;
-  const stakeB = Math.round(lockB * 10) / 10;
-  const profitOnA = Math.round((stakeA * oddsA - total) * 10) / 10;
-  const profitOnDoubleWin = Math.round((stakeA * oddsA + stakeB * oddsB - total) * 10) / 10;
-  const active = equalProfitPct < ACCELERATOR_PROFIT_PCT_THRESHOLD;
-  return {
-    active,
-    stakeA: active ? stakeA : 0,
-    stakeB: active ? stakeB : 0,
-    profitOnA: active ? profitOnA : 0,
-    profitOnDoubleWin: active ? profitOnDoubleWin : 0,
-    note: active
-      ? `⚡ شتاب‌دهنده نامتقارن فعال — قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B (${stakeB.toFixed(1)} واحد در ضریب ${oddsB.toFixed(2)}) + تجمیس کل سود روی تیپ A (${stakeA.toFixed(1)} واحد در ضریب ${oddsA.toFixed(2)}) — برد B = برگشت کامل اصل سرمایه، برد A = سود تجمیعی، برد همزمان = جک‌پات +${profitOnDoubleWin.toFixed(1)} واحد`
-      : "",
-  };
-}
+// v19.0 — پیاده‌سازی قدیمی شتاب‌دهنده (۳ آرگومان + فعال‌سازی شرطی) حذف شد؛
+// نسخه جدید asymmetricAlphaStakes (۶۵/۳۵ ثابت، همیشه فعال) در بالای همین فایل است.
 
 /**
  * تبدیل یک زوج اتمیک طلایی به PortfolioPairDTO استاندارد — مشترک بین
@@ -632,13 +662,13 @@ export function buildOrthoPortfolioPair(
 ): PortfolioPairDTO {
   const matchLabel = `${match.homeTeam} - ${match.awayTeam}`;
   const impliedSum = a.impliedSum;
-  const stakeA = bankroll * (1 / Math.max(1.01, a.slipA.odds)) / impliedSum;
-  const stakeB = bankroll * (1 / Math.max(1.01, a.slipB.odds)) / impliedSum;
-  // v8.0 — فرمول صحیح سود خالص واحد: Payout − B که Payout = B / S
-  const profit = bankroll / impliedSum - bankroll;
-  // v16.0 — شتاب‌دهنده نامتقارن برای بازی‌هایی با سود برابر زیر ۱۲٪
-  const equalProfitPct = (profit / Math.max(1, bankroll)) * 100;
-  const accelerator = asymmetricAcceleratorStakes(a.slipA.odds, a.slipB.odds, equalProfitPct);
+  // v19.0 — تخصیص نامتقارن آلفا پیش‌فرض فعال (۶۵u تیپ A / ۳۵u تیپ B) — جایگزین داچینگ سود برابر؛
+  // برد A = +۳۶.۵u در ~۲.۱۰x · برد B = اصل پول + ۸.۵٪ در ~۳.۱۰x · Double-Win = جک‌پات +۱۴۵u
+  const accelerator = asymmetricAlphaStakes(a.slipA.odds, a.slipB.odds);
+  const stakeA = accelerator.stakeA;
+  const stakeB = accelerator.stakeB;
+  // سود تضمینی کارت = کمینه سود دو بال (محافظه‌کارانه)
+  const profit = accelerator.guaranteed;
 
   const selectionA: PortfolioSelectionDTO = {
     key: `ORTHO_${a.code}_A`,
@@ -706,19 +736,20 @@ export function buildOrthoPortfolioPair(
     totalOddsB: a.slipB.odds,
     jointStates: a.jointStates,
     impliedSum,
-    guaranteedMarginPct: (1 - impliedSum) * 100,
+    // v19.0 — مارجین کارت = سود تضمینی واقعی با استیک نامتقارن (کمینه دو بال) به درصد
+    guaranteedMarginPct: Math.round(accelerator.guaranteed * 10) / 10,
     equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
-    // v16.0 — شتاب‌دهنده نامتقارن (قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A)
-    accelerator: accelerator.active
-      ? {
-          active: true,
-          stakeA: accelerator.stakeA,
-          stakeB: accelerator.stakeB,
-          profitOnA: accelerator.profitOnA,
-          profitOnDoubleWin: accelerator.profitOnDoubleWin,
-          note: accelerator.note,
-        }
-      : undefined,
+    // v19.0 — تخصیص نامتقارن آلفا (۶۵/۳۵، همیشه فعال)
+    accelerator: {
+      active: true,
+      stakeA: accelerator.stakeA,
+      stakeB: accelerator.stakeB,
+      profitOnA: accelerator.profitOnA,
+      profitOnB: accelerator.profitOnB,
+      guaranteed: accelerator.guaranteed,
+      profitOnDoubleWin: accelerator.profitOnDoubleWin,
+      note: accelerator.note,
+    },
     kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
     sharpEdgePct: pairSharpEdgePct,
     archetype: {

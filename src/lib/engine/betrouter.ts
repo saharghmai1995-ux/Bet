@@ -20,6 +20,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PortfolioPairDTO } from "../types";
+// v19.0 — قیمت‌گذاری ارزش‌محور + تخصیص نامتقارن آلفا (۶۵/۳۵)
+import { computeValueMarketOdds, edgeBoostForMispricing, asymmetricAlphaStakes } from "./orthogonal";
 
 // ═══════════════════════════════ تایپ‌ها ═══════════════════════════════
 
@@ -495,15 +497,19 @@ export function buildComboCandidates(
     const biasCover = d.coverKey === "U25" ? biasOf("O25") : 1;
     const realCoverProb = Math.min(0.97, Math.max(0.02, pCover * biasCover));
 
-    // مارکت ترکیبی رسمی تک‌دکمه‌ای — حاشیه بوک‌میکر ~۴٪ روی نمای بازار
-    const mainOdds = Math.round((1 / realMainProb) * 0.96 * 100) / 100;
-    const coverOdds = Math.round((1 / realCoverProb) * 0.96 * 100) / 100;
+    // v19.0 — قیمت‌گذاری ارزش‌محور کمبو (+EV Market-Edge): فرمول بی‌لبه (1/prob)×0.96 حذف شد؛
+    // ضریب کمبو = computeValueMarketOdds با لبه مدل (بایاس < ۱ یعنی بازار کم‌قیمت → boost بزرگ‌تر)
+    const mainBoost = edgeBoostForMispricing(pMain, realMainProb > 0 ? 1 / realMainProb : null);
+    const coverBoost = edgeBoostForMispricing(pCover, realCoverProb > 0 ? 1 / realCoverProb : null);
+    const mainOdds = computeValueMarketOdds(realMainProb, mainBoost);
+    const coverOdds = computeValueMarketOdds(realCoverProb, coverBoost);
     if (mainOdds < 1.28 || mainOdds > 2.20) continue;
-
-    // داچینگ ۱۰۰ واحدی بین کمبو اصلی و پوشش مکمل
     const implied = 1 / mainOdds + 1 / coverOdds;
-    const stakeMain = r2((1 / mainOdds / implied) * 100);
-    const stakeCover = r2((1 / coverOdds / implied) * 100);
+
+    // v19.0 — تخصیص نامتقارن آلفا روی کمبو هم (۶۵u بال اصلی / ۳۵u پوشش مکمل)
+    const alpha = asymmetricAlphaStakes(mainOdds, coverOdds);
+    const stakeMain = alpha.stakeA;
+    const stakeCover = alpha.stakeB;
     const effectiveOdds = r2(1 / implied);
     const winProb = r3(pUnion);
     // برد دوبل: سناریوهایی که هر دو تیپ می‌برند (تلاقی کمبو اصلی × پوشش)
@@ -544,8 +550,9 @@ export function buildComboCandidates(
       ...sc,
       stakeMain,
       stakeCover,
-      guaranteedProfitUnits: r2(100 / implied - 100),
-      doubleWinProfitUnits: 0,
+      // v19.0 — سود تضمینی کمبو با استیک نامتقارن = کمینه سود دو بال
+      guaranteedProfitUnits: alpha.guaranteed,
+      doubleWinProfitUnits: alpha.profitOnDoubleWin,
     });
   }
   return out.sort((x, y) => y.score - x.score);

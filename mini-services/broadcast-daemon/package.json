@@ -1,0 +1,10 @@
+{
+  "name": "neobet-broadcast-daemon",
+  "version": "19.0.0",
+  "private": true,
+  "description": "NeoBet v19.0 Always-Warm Broadcast Daemon — browser-independent Telegram channel broadcaster (cards/results/funnel slots) sharing the atomic insert-first dedupe with the Next.js scheduler",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "start": "bun index.ts"
+  }
+}

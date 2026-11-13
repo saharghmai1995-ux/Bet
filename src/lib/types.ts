@@ -394,12 +394,17 @@ export interface PortfolioPairDTO {
   impliedSum: number;
   guaranteedMarginPct: number;
   equalProfit: { stakeA: number; stakeB: number; profit: number };
-  /** v16.0 — شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ → قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B + تجمیس کل سود روی تیپ A */
+  /** v19.0 — تخصیص شتاب‌دهنده نامتقارن (Asymmetric Alpha Staking) — پیش‌فرض فعال:
+   *  ۶۵ واحد روی تیپ A (~۲.۱۰x) + ۳۵ واحد روی تیپ B (~۳.۱۰x):
+   *  برد A = +۳۶.۵u · برد B = اصل پول + ۸.۵٪ · برد همزمان 1-0/2-0 = جک‌پات +۱۴۵u */
   accelerator?: {
     active: boolean;
     stakeA: number;
     stakeB: number;
     profitOnA: number;
+    profitOnB: number;
+    /** کمینه سود دو بال — «سود تضمینی» کارت با استیک نامتقارن */
+    guaranteed: number;
     profitOnDoubleWin: number;
     note: string;
   };

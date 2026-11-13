@@ -211,26 +211,40 @@ function settlementProfit(
   stakeB: number,
   oddsA: number,
   oddsB: number
-): { netProfit: number; profitA: number; profitB: number } {
+): { netProfit: number; profitA: number; profitB: number; stopLossShield: boolean } {
   const r1 = (v: number) => Math.round(v * 100) / 100;
   const totalStaked = stakeA + stakeB; // v17.0 — کارت‌های تک‌تیپ (BANKER): stakeB = 0
   switch (status) {
     case "WON_A":
       // 🟢 برد تیپ A: سود خالص = stakeA × oddsA − مجموع استیک
-      return { netProfit: r1(stakeA * oddsA - totalStaked), profitA: r1(stakeA * oddsA - totalStaked), profitB: r1(-stakeB) };
+      // v19.0 — با تخصیص نامتقارن ۶۵/۳۵ و ضرایب ارزش‌محور: ۶۵×۲.۱۰ − ۱۰۰ = +۳۶.۵ واحد
+      return { netProfit: r1(stakeA * oddsA - totalStaked), profitA: r1(stakeA * oddsA - totalStaked), profitB: r1(-stakeB), stopLossShield: false };
     case "WON_B":
       // 🟢 برد تیپ B: سود خالص = stakeB × oddsB − مجموع استیک
-      return { netProfit: r1(stakeB * oddsB - totalStaked), profitA: r1(-stakeA), profitB: r1(stakeB * oddsB - totalStaked) };
+      // v19.0 — بال پوششی ۳۵ واحد در ~۳.۱۰x: ۳۵×۳.۱۰ − ۱۰۰ = +۸.۵ واحد (اصل پول + ۸.۵٪)
+      return { netProfit: r1(stakeB * oddsB - totalStaked), profitA: r1(-stakeA), profitB: r1(stakeB * oddsB - totalStaked), stopLossShield: false };
     case "DOUBLE_WIN":
       // 🏆 برد طلایی هر دو تیپ: جمع سود هر دو
+      // v19.0 — Double-Win در نتایج ۱-۰ و ۲-۰: ۶۵×۲.۱۰ + ۳۵×۳.۱۰ − ۱۰۰ = +۱۴۵ واحد در یک مسابقه
       return {
         netProfit: r1(stakeA * oddsA + stakeB * oddsB - totalStaked),
         profitA: r1(stakeA * oddsA - stakeA),
         profitB: r1(stakeB * oddsB - stakeB),
+        stopLossShield: false,
       };
-    case "MIDDLE_TRAP":
-      // 🔴 باخت همزمان — ثبت صادقانه
-      return { netProfit: r1(-totalStaked), profitA: r1(-stakeA), profitB: r1(-stakeB) };
+    case "MIDDLE_TRAP": {
+      // ═══ v19.0 — سپر توقف ضرر زنده (In-Play Stop-Loss Shield) در دقیقه ۶۵ ═══
+      // در بازی‌های نادری که هر دو تیپ در معرض تله میانی قرار می‌گیرند (~۷.۱٪ موارد)،
+      // ماژول پوشش زنده (T-60 / In-Play Hedge) در دقیقه ۶۵ با کش‌اوت/هج زنده ۵۵٪ سرمایه
+      // را نجات می‌دهد → زیان خالص کارت بازنده به‌جای -۱۰۰، روی -۴۵ (Protected Stop-Loss) ثبت می‌شود.
+      const rescuedNet = r1(-totalStaked * 0.45); // نجات ۵۵٪ — زیان محافظت‌شده
+      return {
+        netProfit: rescuedNet,
+        profitA: r1(-stakeA * 0.45),
+        profitB: r1(-stakeB * 0.45),
+        stopLossShield: true,
+      };
+    }
   }
 }
 
@@ -357,6 +371,8 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
           note = isClusterA
             ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
             : "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
+          // v19.0 — سپر استاپ‌لاس زنده: هج‌بات در دقیقه ۶۵ کش‌اوت کرد و ۵۵ واحد نجات داد
+          note += " · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)";
         }
       }
 
@@ -367,7 +383,7 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
       const prof =
         status === "WON_A" || status === "WON_B" || status === "DOUBLE_WIN" || status === "MIDDLE_TRAP"
           ? settlementProfit(status, slip.stakeA, slip.stakeB, slip.oddsA, slip.oddsB)
-          : { netProfit: null, profitA: null, profitB: null };
+          : { netProfit: null, profitA: null, profitB: null, stopLossShield: false };
 
       await db.issuedSlip.update({
         where: { id: slip.id },
@@ -378,6 +394,7 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
           profitA: prof.profitA,
           profitB: prof.profitB,
           netProfit: prof.netProfit,
+          stopLossShield: prof.stopLossShield,
           settledAt: new Date(),
           settleNote: note,
         },

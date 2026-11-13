@@ -37,11 +37,13 @@ import type { IssueSlipItemDTO, SettlementLegDTO } from "@/lib/types";
 const AUTO_TTL_MS = 10 * 60_000;
 
 /**
- * v16.0 — سقف سند: «فقط ۲۵ تا ۳۵ بازی تراز اول تایید شوند».
- * در بازمحاسبه Clean-Slate، بازی‌های ۳۵ گانه با بالاترین امتیاز سوپروایزر تایید
+ * v19.0 — سقف سند: «۳۵ تا ۴۵ مسابقه برتر در هر ۵ رژیم تایید شوند» (Multi-Regime Bankroll
+ * Integration) — سود خالص هر ۵ خط تولید (Dual-Hedge / Combo / Correct Score / Banker /
+ * Accumulator) در منحنی رشد بانک ۱۰۰۰ واحدی و شاخص ROI کل لحاظ می‌شود.
+ * در بازمحاسبه Clean-Slate، بازی‌های ۴۵ گانه با بالاترین امتیاز سوپروایزر تایید
  * می‌مانند و مازاد به دفتر سایه (supervisorApproved=false) منتقل می‌شود.
  */
-const V16_MAX_APPROVED_CARDS = 35;
+const V16_MAX_APPROVED_CARDS = 45;
 
 // ═══ v18.3 — سهمیه پخش روزانه (Daily Broadcast Quorum) ═══
 // باگ گزارش‌شده کارفرما: «نتیجه بازی‌ها به کانال عمومی ارسال نشده + کارت‌های بازی
@@ -417,21 +419,18 @@ export async function autoSyncPastAndPresentMatches(options?: {
           legsB: legsOf(crown.structure.legsB),
           oddsA: crown.totalOddsA,
           oddsB: crown.totalOddsB,
-          // v16.0 — شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ → قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A
+          // v19.0 — تخصیص نامتقارن آلفا (پیش‌فرض فعال): ۶۵u تیپ A / ۳۵u تیپ B؛
+          // سود تضمینی کارت = کمینه سود دو بال (accelerator.guaranteed)
           // v18.0 — تاج نقره‌ای: استیک نصف‌شده ۵۰ واحدی به روش Half-Kelly
           stakeA: isSilver
             ? silverStakeOf(crown.accelerator?.stakeA ?? crown.equalProfit.stakeA)
-            : crown.accelerator?.stakeA,
+            : (crown.accelerator?.stakeA ?? crown.equalProfit.stakeA),
           stakeB: isSilver
             ? silverStakeOf(crown.accelerator?.stakeB ?? crown.equalProfit.stakeB)
-            : crown.accelerator?.stakeB,
+            : (crown.accelerator?.stakeB ?? crown.equalProfit.stakeB),
           guaranteedProfit: isSilver
-            ? silverStakeOf(crown.accelerator?.active ? (crown.accelerator.profitOnA > 0 ? crown.accelerator.profitOnA : 0) : crown.equalProfit.profit)
-            : crown.accelerator?.active
-              ? crown.accelerator.profitOnA > 0
-                ? crown.accelerator.profitOnA
-                : 0
-              : crown.equalProfit.profit,
+            ? silverStakeOf(Math.max(0, crown.accelerator?.guaranteed ?? crown.equalProfit.profit))
+            : Math.max(0, crown.accelerator?.guaranteed ?? crown.equalProfit.profit),
           marginPct: crown.guaranteedMarginPct,
           archetype: crown.archetype?.short ?? null,
           archetypeCode: crown.archetype?.code ?? null,

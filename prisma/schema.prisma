@@ -336,6 +336,9 @@ model IssuedSlip {
   netProfit  Float?  // سود خالص کل داچینگ
   settledAt  DateTime?
   settleNote String?
+  // v19.0 — سپر توقف ضرر زنده (In-Play Stop-Loss Shield): تله میانی در دقیقه ۶۵ با
+  // کش‌اوت زنده ۵۵٪ سرمایه نجات داده می‌شود → زیان خالص -۴۵ به‌جای -۱۰۰
+  stopLossShield Boolean @default(false)
 
   // ─── وضعیت انتشار تلگرام ───
   telegramCard   Boolean @default(false) // کارت کامل منتشر شد
@@ -355,6 +358,11 @@ model TelegramOutbox {
   ok     Boolean
   detail String? // شناسه پیام تلگرام یا متن خطا
   createdAt DateTime @default(now())
+  // v19.0 — کلید ادعای اتمی broadcast (insert-first claim):
+  // هر پست کانال قبل از ارسال یک ردیف با dedupeKey یکتا می‌سازد؛ شکست INSERT =
+  // ادعای قبلی موجود → بدون ارسال. اتمیک در سطح SQLite و ایمن در برابر هر تعداد
+  // پردازه/ری‌استارت (ریشه ریشه‌ای باگ «ارسال پیام‌های تکراری به کانال عمومی»).
+  dedupeKey String? @unique
 }
 
 // ─── v7.0 — تنظیمات سراسری سمت سرور (توکن بات تلگرام و ...) ───

@@ -125,6 +125,66 @@ export async function unclaimSetting(key: string, value: string): Promise<void> 
   }
 }
 
+// ═══ v19.0 — ادعای اتمی Broadcast (Insert-First Claim) ═══
+// ریشه ریشه‌ای باگ «ارسال پیام‌های تکراری»: الگوی claim قبلی (خواندن Setting سپس
+// update شرطی) در هم‌پوشانی ری‌استارت‌های dev / دو پردازه موازی، توالی خواندن‌ها
+// را stale می‌کرد و هر دو مسیر ادعا را می‌بردند. راه‌حل مهندسی v19.0:
+// قبل از ارسال، یک ردیف TelegramOutbox با dedupeKey یکتا INSERT می‌شود.
+//   · موفق بودن INSERT  = مالکیت ارسال با ماست (اتمیک در سطح SQLite — هر تعداد
+//     پردازه و هر ری‌استارتی که باشد، ایندکس UNIQUE داور است)
+//   · شکست INSERT       = ادعای قبلی موجود → بدون ارسال
+// بعد از ارسال: commitBroadcast (ok=true) | در شکست: releaseBroadcast (حذف ردیف).
+// کلیدها: CARD:<slipId> | RESULT:<slipId> | NEWS:<day>:<slot> | BET:<day>:<slot> |
+// BRIEF:<day> | GIFT:<day> | AD:<day>:<hour> | DIGEST:<day> | PNL:<day> |
+// WEEKLY:<week> | RADAR:<day> | UNBLUR:<slipId> | TEASER:<slipId>
+
+const dedupeKeyOf = {
+  card: (id: string) => `CARD:${id}`,
+  result: (id: string) => `RESULT:${id}`,
+  news: (day: string, slot: number) => `NEWS:${day}:${slot}`,
+  bet: (day: string, slot: number) => `BET:${day}:${slot}`,
+  brief: (day: string) => `BRIEF:${day}`,
+  gift: (day: string) => `GIFT:${day}`,
+  ad: (day: string, hour: number) => `AD:${day}:${hour}`,
+  digest: (day: string) => `DIGEST:${day}`,
+  pnl: (day: string) => `PNL:${day}`,
+  weekly: (week: string) => `WEEKLY:${week}`,
+  radar: (day: string) => `RADAR:${day}`,
+  unblur: (id: string) => `UNBLUR:${id}`,
+  teaser: (id: string) => `TEASER:${id}`,
+  winrate: (day: string, bucket: number) => `WINRATE:${day}:${bucket}`,
+};
+
+async function claimBroadcast(
+  dedupeKey: string,
+  slipId: string | null,
+  kind: string
+): Promise<boolean> {
+  try {
+    await db.telegramOutbox.create({ data: { dedupeKey, slipId, kind, ok: false, detail: "CLAIMED" } });
+    return true;
+  } catch {
+    return false; // کلید یکتا موجود است — مسیر موازی قبلاً ادعا کرده
+  }
+}
+
+async function commitBroadcast(dedupeKey: string, ok: boolean, detail: string): Promise<void> {
+  try {
+    await db.telegramOutbox.updateMany({ where: { dedupeKey }, data: { ok, detail: detail.slice(0, 400) } });
+  } catch (err) {
+    // v18.4 — قابل مشاهده بودن شکست ژورنال (ریشه خرابی repair پرچم‌ها)
+    console.warn("[telegram] outbox commit failed:", dedupeKey, err instanceof Error ? err.message : err);
+  }
+}
+
+async function releaseBroadcast(dedupeKey: string): Promise<void> {
+  try {
+    await db.telegramOutbox.deleteMany({ where: { dedupeKey, ok: false, detail: "CLAIMED" } });
+  } catch {
+    // بهترین‌تلاش
+  }
+}
+
 async function botToken(): Promise<string | null> {
   const stored = await getSetting(KEY_TOKEN);
   return (stored && stored.trim()) || process.env.TELEGRAM_BOT_TOKEN || null;
@@ -448,7 +508,13 @@ export function buildResultMessage(slip: IssuedSlip): string {
     lines.push(`💰 سود تیپ A: <b>+${(slip.profitA ?? 0).toFixed(1)}</b> · سود تیپ B: <b>+${(slip.profitB ?? 0).toFixed(1)}</b>`);
     lines.push(`🎯 جمع سود خالص (Jackpot): <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
   } else if (slip.status === "MIDDLE_TRAP") {
-    lines.push(`📉 زیان کل: <b>${(slip.netProfit ?? 0).toFixed(1)}</b> واحد — ثبت صادقانه و شفاف`);
+    // v19.0 — سپر توقف ضرر زنده: تله میانی در دقیقه ۶۵ کش‌اوت شد و ۵۵ واحد نجات داده شد
+    const shield = slip.stopLossShield;
+    const loss = slip.netProfit ?? -100;
+    lines.push(`📉 زیان کل: <b>${loss.toFixed(1)}</b> واحد — ثبت صادقانه و شفاف`);
+    if (shield) {
+      lines.push(`🛡️ <b>سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵ واحد)</b> — به‌جای -۱۰۰، فقط ${loss.toFixed(1)} واحد زیان ثبت شد؛ باقیمانده پوزیشن با کش‌اوت زنده هج‌بات بسته شد.`);
+    }
   } else {
     lines.push(`💰 سود خالص: <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
     lines.push(`🧮 فرمول: ${(slip.status === "WON_A" ? `stakeA×oddsA−۱۰۰ = ${slip.stakeA.toFixed(1)}×${slip.oddsA.toFixed(2)}−۱۰۰` : `stakeB×oddsB−۱۰۰ = ${slip.stakeB.toFixed(1)}×${slip.oddsB.toFixed(2)}−۱۰۰`)}`);
@@ -497,6 +563,11 @@ export async function publishSlipToTelegram(
     if (!claimed) {
       return { ok: false, detail: "ALREADY_SENT_OR_CLAIMED", preview };
     }
+    // v19.0 — لایه دوم ادعا (INSERT-first، اتمیک بین پردازه‌ها): کلید CARD:<slipId>
+    if (!(await claimBroadcast(dedupeKeyOf.card(slip.id), slip.id, "CARD"))) {
+      await releaseSlipFlag(slip.id, "telegramCard");
+      return { ok: false, detail: "ALREADY_SENT_OR_CLAIMED", preview };
+    }
   }
 
   try {
@@ -521,14 +592,22 @@ export async function publishSlipToTelegram(
         await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramTeaser: true } });
       }
       // telegramCard در claim ست شده — فقط تایید نهایی
+      // v19.0 — commit ردیف ادعای outbox (ok=true) تا repair پرچم‌ها ارسال موفق را ببیند
+      if (mode === "CARD") await commitBroadcast(dedupeKeyOf.card(slip.id), true, result.detail);
       return { ...result, preview };
     }
     // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی مسیر کار را از دست ندهد
-    if (mode === "CARD") await releaseSlipFlag(slip.id, "telegramCard");
+    if (mode === "CARD") {
+      await releaseSlipFlag(slip.id, "telegramCard");
+      await releaseBroadcast(dedupeKeyOf.card(slip.id));
+    }
     return { ...result, preview };
   } catch (err) {
     // رندر/شبکه شکست خورد → آزادسازی claim
-    if (mode === "CARD") await releaseSlipFlag(slip.id, "telegramCard");
+    if (mode === "CARD") {
+      await releaseSlipFlag(slip.id, "telegramCard");
+      await releaseBroadcast(dedupeKeyOf.card(slip.id));
+    }
     throw err;
   }
 }
@@ -558,6 +637,11 @@ export async function sendSettlementNotification(slip: IssuedSlip, opts?: { forc
   if (!opts?.force) {
     const claimed = await claimSlipFlag(slip.id, "telegramResult");
     if (!claimed) return false;
+    // v19.0 — لایه دوم ادعا (INSERT-first اتمیک بین پردازه‌ها): RESULT:<slipId>
+    if (!(await claimBroadcast(dedupeKeyOf.result(slip.id), slip.id, "RESULT"))) {
+      await releaseSlipFlag(slip.id, "telegramResult");
+      return false;
+    }
   }
 
   const caption = buildResultMessage(slip);
@@ -585,9 +669,12 @@ export async function sendSettlementNotification(slip: IssuedSlip, opts?: { forc
   await logOutbox(slip.id, "RESULT", ok, ok ? "sent" : "send-failed");
   if (ok) {
     await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } });
+    // v19.0 — commit ردیف ادعا (ok=true)
+    await commitBroadcast(dedupeKeyOf.result(slip.id), true, "sent");
   } else {
     // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی از دست نرود
     await releaseSlipFlag(slip.id, "telegramResult");
+    await releaseBroadcast(dedupeKeyOf.result(slip.id));
   }
   return ok;
 }
@@ -947,6 +1034,9 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
   if (!status.configured || !status.channelSet) return false;
   const chatId = await publicChannelId();
   if (!chatId) return false;
+  // v19.0 — ادعای اتمی bucket ۱۰ دقیقه‌ای (INSERT-first): هیچ دو مسیری در یک bucket دوبار نمی‌فرستند
+  const wrClaim = dedupeKeyOf.winrate(tehranDayKey(), Math.floor(Date.now() / 600_000));
+  if (!force && !(await claimBroadcast(wrClaim, null, "WINRATE"))) return false;
   const st = await channelWinRateStats();
 
   // v10.0 — گزارش وین‌ریت با تصویر اختصاصی (گیج وین‌ریت + مبنای واحد برای حساب شخصی)
@@ -988,7 +1078,9 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
   }
   if (res.ok) {
     setLastWinRateAt(Date.now());
-    await logOutbox(null, "WINRATE", true, "sent");
+    await commitBroadcast(wrClaim, true, "sent");
+  } else {
+    await releaseBroadcast(wrClaim);
   }
   return res.ok;
 }
@@ -1022,10 +1114,9 @@ async function sendDailyDigestInner(force = false): Promise<boolean> {
   if (!status.configured || !status.channelSet) return false;
 
   const today = tehranDayKey();
-  if (!force) {
-    const last = await getSetting(KEY_LAST_DIGEST_DAY);
-    if (last === today) return false;
-  }
+  // v19.0 — ادعای اتمی روزانه (INSERT-first) — ریشه ریشه‌ای تکرار برآیند روزانه
+  const digestClaim = dedupeKeyOf.digest(today);
+  if (!force && !(await claimBroadcast(digestClaim, null, "DAILY_DIGEST"))) return false;
 
   // بازی‌های تسویه‌شده «امروز تهران» — فقط کارت‌های واقعی تاییدشده (بدون بازخوانی)
   const rows = await db.issuedSlip.findMany({
@@ -1092,7 +1183,9 @@ async function sendDailyDigestInner(force = false): Promise<boolean> {
   }
   if (res.ok) {
     await setSetting(KEY_LAST_DIGEST_DAY, today);
-    await logOutbox(null, "DAILY_DIGEST", true, res.detail);
+    await commitBroadcast(digestClaim, true, res.detail);
+  } else {
+    await releaseBroadcast(digestClaim);
   }
   return res.ok;
 }
@@ -1150,10 +1243,10 @@ async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; det
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
   const today = tehranDayKey();
-  if (!force) {
-    const last = await getSetting(KEY_FUNNEL_GIFT_DAY);
-    if (last === today) return { ok: false, detail: "ALREADY_SENT_TODAY" };
-  }
+  // v19.0 — ادعای اتمی روزانه (INSERT-first) — این کلید بین هر دو مسیر گیفت
+  // (sendDailyGiftCard و پست ۲ فانل sendFunnelTeasers) مشترک است؛ فقط یک مسیر در روز می‌برد.
+  const giftClaim = dedupeKeyOf.gift(today);
+  if (!force && !(await claimBroadcast(giftClaim, null, "FUNNEL_GIFT"))) return { ok: false, detail: "ALREADY_SENT_TODAY" };
 
   const day = tehranDayRange();
   const candidates = await db.issuedSlip.findMany({
@@ -1161,7 +1254,10 @@ async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; det
     orderBy: { kickoff: "asc" },
     take: 24,
   });
-  if (candidates.length === 0) return { ok: false, detail: "NO_TODAY_CARD" };
+  if (candidates.length === 0) {
+    await releaseBroadcast(giftClaim); // امروز کارتی نبود — اسلات برای تیک بعدی آزاد بماند
+    return { ok: false, detail: "NO_TODAY_CARD" };
+  }
 
   // اولویت ۱: دژ نفوذناپذیر (ریسک < ۷٪) با بالاترین امتیاز؛ اولویت ۲: بالاترین امتیاز سوپروایزر
   const scoreOf = (s: IssuedSlip) => s.supervisorScore ?? -999;
@@ -1192,7 +1288,9 @@ async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; det
   }
   if (ok) {
     await setSetting(KEY_FUNNEL_GIFT_DAY, today);
-    await logOutbox(pick.id, "FUNNEL_GIFT", true, `public:${chatId}${isFortress ? ":fortress" : ""}`);
+    await commitBroadcast(giftClaim, true, `public:${chatId}${isFortress ? ":fortress" : ""}`);
+  } else {
+    await releaseBroadcast(giftClaim);
   }
   return { ok, detail: ok ? (isFortress ? "fortress-gift-sent" : "gift-sent") : "send-failed" };
 }
@@ -1358,10 +1456,9 @@ async function sendHourlyVipAdInner(force = false): Promise<{ ok: boolean; detai
   if (!force && (th < 9 || th > 23)) return { ok: false, detail: "OUT_OF_MARKETING_HOURS", topic: "—" };
 
   const stamp = `${tehranDayKey()}:${th}`;
-  if (!force) {
-    const last = await getSetting(KEY_MARKETING_LAST_AD);
-    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_HOUR", topic: "—" };
-  }
+  // v19.0 — ادعای اتمی ساعتی (INSERT-first): AD:<day>:<hour>
+  const adClaim = dedupeKeyOf.ad(tehranDayKey(), th);
+  if (!force && !(await claimBroadcast(adClaim, null, "MARKETING_AD"))) return { ok: false, detail: "ALREADY_SENT_THIS_HOUR", topic: "—" };
 
   const ad = MARKETING_ADS[th % MARKETING_ADS.length];
   try {
@@ -1379,11 +1476,14 @@ async function sendHourlyVipAdInner(force = false): Promise<{ ok: boolean; detai
     }
     if (ok) {
       await setSetting(KEY_MARKETING_LAST_AD, stamp);
-      await logOutbox(null, "MARKETING_AD", true, `public:${chatId}:${ad.key}`);
+      await commitBroadcast(adClaim, true, `public:${chatId}:${ad.key}`);
+    } else {
+      await releaseBroadcast(adClaim);
     }
     return { ok, detail: ok ? "ad-sent" : "send-failed", topic: ad.key };
   } catch (err) {
     console.warn("hourly vip ad failed:", err instanceof Error ? err.message : err);
+    await releaseBroadcast(adClaim); // اسلات ساعت از دست نرود
     return { ok: false, detail: "RENDER_FAILED", topic: ad.key };
   }
 }
@@ -1409,10 +1509,9 @@ export async function sendPublicRadar(force = false): Promise<boolean> {
   if (!chatId) return false;
 
   const today = tehranDayKey();
-  if (!force) {
-    const last = await getSetting(KEY_FUNNEL_RADAR_DAY);
-    if (last === today) return false;
-  }
+  // v19.0 — ادعای اتمی روزانه رادار (INSERT-first)
+  const radarClaim = dedupeKeyOf.radar(today);
+  if (!force && !(await claimBroadcast(radarClaim, null, "FUNNEL_RADAR"))) return false;
 
   const st = await funnelRadarStats();
   const next = await db.issuedSlip.findFirst({
@@ -1443,7 +1542,9 @@ export async function sendPublicRadar(force = false): Promise<boolean> {
   }
   if (res.ok) {
     await setSetting(KEY_FUNNEL_RADAR_DAY, today);
-    await logOutbox(null, "FUNNEL_RADAR", true, `public:${chatId}`);
+    await commitBroadcast(radarClaim, true, `public:${chatId}`);
+  } else {
+    await releaseBroadcast(radarClaim);
   }
   return res.ok;
 }
@@ -1475,7 +1576,9 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
   let teasers = 0;
 
   for (const slip of candidates) {
-    const isGift = giftDay !== today; // هر روز فقط ۱ کارت کامل رایگان
+    // v19.0 — ادعای اتمی per-slip برای گیفت/تیزر (INSERT-first) — مسیر موازی هرگز دوبار نمی‌فرستد
+    const isGift = giftDay !== today && (await claimBroadcast(dedupeKeyOf.gift(today), slip.id, "FUNNEL_GIFT"));
+    if (!isGift && !(await claimBroadcast(dedupeKeyOf.teaser(slip.id), slip.id, "FUNNEL_TEASER"))) continue;
     try {
       if (isGift) {
         const photo = await renderSlipCardPNG(slip);
@@ -1491,7 +1594,9 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
         if (ok) {
           gift = true;
           await setSetting(KEY_FUNNEL_GIFT_DAY, today);
-          await logOutbox(slip.id, "FUNNEL_GIFT", true, `public:${chatId}`);
+          await commitBroadcast(dedupeKeyOf.gift(today), true, `public:${chatId}`);
+        } else {
+          await releaseBroadcast(dedupeKeyOf.gift(today));
         }
       } else {
         // v13.5 — رفع باگ ورودی: renderLockedTeaserPNG قبلاً با IssuedSlip خام صدا زده می‌شد
@@ -1507,7 +1612,9 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
         const ok = (await tgSendPhotoTo(chatId, photo, caption, `teaser-${slip.hash.slice(0, 10)}.png`)).ok;
         if (ok) {
           teasers += 1;
-          await logOutbox(slip.id, "FUNNEL_TEASER", true, `public:${chatId}`);
+          await commitBroadcast(dedupeKeyOf.teaser(slip.id), true, `public:${chatId}`);
+        } else {
+          await releaseBroadcast(dedupeKeyOf.teaser(slip.id));
         }
       }
     } catch (err) {
@@ -1542,6 +1649,9 @@ export async function sendPublicUnblur(): Promise<number> {
 
   let sent = 0;
   for (const slip of slips) {
+    // v19.0 — ادعای اتمی per-slip اثبات عمومی (INSERT-first)
+    const unblurClaim = dedupeKeyOf.unblur(slip.id);
+    if (!(await claimBroadcast(unblurClaim, slip.id, "FUNNEL_UNBLUR"))) continue;
     try {
       const unblurred = await renderSlipCardPNG(slip);
       const result = await renderSlipResultPNG(slip);
@@ -1556,10 +1666,13 @@ export async function sendPublicUnblur(): Promise<number> {
       if (okPhoto) {
         await tgSendPhotoTo(chatId, result, caption, `proof-${slip.hash.slice(0, 10)}.png`);
         sent += 1;
-        await logOutbox(slip.id, "FUNNEL_UNBLUR", true, `public:${chatId}`);
+        await commitBroadcast(unblurClaim, true, `public:${chatId}`);
+      } else {
+        await releaseBroadcast(unblurClaim);
       }
     } catch (err) {
       console.warn("funnel unblur failed:", err instanceof Error ? err.message : err);
+      await releaseBroadcast(unblurClaim);
     }
   }
   return sent;
@@ -1577,10 +1690,9 @@ async function sendNightlyPnlInner(force = false): Promise<boolean> {
   if (!chatId) return false;
 
   const today = tehranDayKey();
-  if (!force) {
-    const last = await getSetting(KEY_FUNNEL_PNL_DAY);
-    if (last === today) return false;
-  }
+  // v19.0 — ادعای اتمی شبانه (INSERT-first): PNL:<day>
+  const pnlClaim = dedupeKeyOf.pnl(today);
+  if (!force && !(await claimBroadcast(pnlClaim, null, "FUNNEL_PNL"))) return false;
 
   const rows = await db.issuedSlip.findMany({
     where: { supervisorApproved: true, retroIssued: false, status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, settledAt: { not: null } },
@@ -1632,7 +1744,9 @@ async function sendNightlyPnlInner(force = false): Promise<boolean> {
   }
   if (res.ok) {
     await setSetting(KEY_FUNNEL_PNL_DAY, today);
-    await logOutbox(null, "FUNNEL_PNL", true, `public:${chatId}`);
+    await commitBroadcast(pnlClaim, true, `public:${chatId}`);
+  } else {
+    await releaseBroadcast(pnlClaim);
   }
   return res.ok;
 }
@@ -1798,10 +1912,9 @@ async function sendVipMorningBriefInner(force = false): Promise<{ ok: boolean; d
   if (!chatId) return { ok: false, detail: "NO_VIP_CHANNEL" };
 
   const today = tehranDayKey();
-  if (!force) {
-    const last = await getSetting(KEY_VIP_BRIEF_DAY);
-    if (last === today) return { ok: false, detail: "ALREADY_SENT_TODAY" };
-  }
+  // v19.0 — ادعای اتمی روزانه بریفینگ VIP (INSERT-first): BRIEF:<day>
+  const briefClaim = dedupeKeyOf.brief(today);
+  if (!force && !(await claimBroadcast(briefClaim, null, "VIP_BRIEF"))) return { ok: false, detail: "ALREADY_SENT_TODAY" };
 
   const day = tehranDayRange();
   const [cards, vetoedToday, kpis] = await Promise.all([
@@ -1865,7 +1978,9 @@ async function sendVipMorningBriefInner(force = false): Promise<{ ok: boolean; d
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
     await setSetting(KEY_VIP_BRIEF_DAY, today);
-    await logOutbox(null, "VIP_BRIEF", true, `vip:${chatId}:cards=${cards.length}:vetoed=${vetoedToday}`);
+    await commitBroadcast(briefClaim, true, `vip:${chatId}:cards=${cards.length}:vetoed=${vetoedToday}`);
+  } else {
+    await releaseBroadcast(briefClaim);
   }
   return { ok, detail: ok ? (cards.length > 0 ? `brief-sent:${cards.length} cards` : "brief-sent:discipline-mode") : "send-failed" };
 }
@@ -1884,13 +1999,13 @@ async function sendBetTermLessonInner(force = false, slot = 0): Promise<{ ok: bo
   const chatId = await publicChannelId();
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
-  // v18.3 — کلید استمپ per-slot: ریشه باگ «ارسال تکراری هر ۹۰ ثانیه در کانال عمومی»
-  // v18.4 — claim اتمی: مسیر موازی (دو پردازه / مسیر دستی) هرگز دوبار نمی‌فرستد
-  const stamp = `${tehranDayKey()}:${slot}`;
-  const stampKey = `${KEY_EDU_LAST}:${slot}`;
+  // v19.0 — ادعای اتمی اسلات درس (INSERT-first): BET:<day>:<slot> — اتمیک در سطح SQLite،
+  // ایمن در برابر هر تعداد پردازه/ری‌استارت (ریشه ریشه‌ای ارسال تکراری هر ۹۰ ثانیه)
+  const claimKey = dedupeKeyOf.bet(tehranDayKey(), slot);
   if (!force) {
-    const claimed = await claimSetting(stampKey, stamp);
+    const claimed = await claimBroadcast(claimKey, null, "BET_TERM");
     if (!claimed) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
+    await setSetting(`${KEY_EDU_LAST}:${slot}`, `${tehranDayKey()}:${slot}`).catch(() => undefined);
   }
 
   const dayIndex = Math.floor(Date.now() / 86_400_000);
@@ -1916,9 +2031,9 @@ async function sendBetTermLessonInner(force = false, slot = 0): Promise<{ ok: bo
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `bet-lesson-${(dayIndex + slot) % BET_TERMS.length}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
-    await logOutbox(null, "BET_TERM", true, `public:${chatId}:${term.term}`);
+    await commitBroadcast(claimKey, true, `public:${chatId}:${term.term}`);
   } else if (!force) {
-    await unclaimSetting(stampKey, stamp); // اسلات از دست نرود — ریتیپ تیک بعدی
+    await releaseBroadcast(claimKey); // اسلات از دست نرود — ریتیپ تیک بعدی
   }
   return { ok, detail: ok ? `lesson-sent:${term.term}` : "send-failed" };
 }
@@ -1937,19 +2052,19 @@ async function sendFootballNewsInner(force = false, slot = 0): Promise<{ ok: boo
   const chatId = await publicChannelId();
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
-  // v18.3 — کلید استمپ per-slot (رفع پینگ‌پنگ ارسال تکراری خبرها — همان ریشه باگ آکادمی BET)
-  // v18.4 — claim اتمی: مسیر موازی هرگز دوبار نمی‌فرستد
-  const stamp = `${tehranDayKey()}:${slot}`;
-  const stampKey = `${KEY_NEWS_LAST}:${slot}`;
+  // v19.0 — ادعای اتمی اسلات خبر (INSERT-first): NEWS:<day>:<slot> — اتمیک در سطح SQLite،
+  // ایمن در برابر هر تعداد پردازه/ری‌استارت (ریشه ریشه‌ای ارسال تکراری خبرها)
+  const claimKey = dedupeKeyOf.news(tehranDayKey(), slot);
   if (!force) {
-    const claimed = await claimSetting(stampKey, stamp);
+    const claimed = await claimBroadcast(claimKey, null, "FOOTBALL_NEWS");
     if (!claimed) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
+    await setSetting(`${KEY_NEWS_LAST}:${slot}`, `${tehranDayKey()}:${slot}`).catch(() => undefined);
   }
 
   const items = await fetchSoccerNews(8);
   if (items.length === 0) {
-    // v18.4 — وایر خالی → claim را آزاد کن تا اسلات خبر در تیک بعدی دوباره تلاش شود
-    if (!force) await unclaimSetting(stampKey, stamp);
+    // وایر خالی → claim را آزاد کن تا اسلات خبر در تیک بعدی دوباره تلاش شود
+    if (!force) await releaseBroadcast(claimKey);
     return { ok: false, detail: "WIRE_EMPTY" };
   }
 
@@ -1980,9 +2095,9 @@ async function sendFootballNewsInner(force = false, slot = 0): Promise<{ ok: boo
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `news-board-${tehranDayKey()}-${slot}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
-    await logOutbox(null, "FOOTBALL_NEWS", true, `public:${chatId}:items=${Math.min(6, items.length)}:fa=1`);
+    await commitBroadcast(claimKey, true, `public:${chatId}:items=${Math.min(6, items.length)}:fa=1`);
   } else if (!force) {
-    await unclaimSetting(stampKey, stamp); // اسلات از دست نرود — ریتیپ تیک بعدی
+    await releaseBroadcast(claimKey); // اسلات از دست نرود — ریتیپ تیک بعدی
   }
   return { ok, detail: ok ? `news-sent:${items.length} headlines:fa-translated` : "send-failed" };
 }
@@ -1998,10 +2113,9 @@ async function sendWeeklyDigestInner(force = false): Promise<{ ok: boolean; deta
   if (!pub && !vip) return { ok: false, detail: "NO_CHANNEL" };
 
   const weekKey = tehranDayKey(); // یک‌بار در هفته جمعه — کلید = روز جمعه
-  if (!force) {
-    const last = await getSetting(KEY_WEEKLY_LAST);
-    if (last === weekKey) return { ok: false, detail: "ALREADY_SENT_THIS_WEEK" };
-  }
+  // v19.0 — ادعای اتمی هفتگی (INSERT-first): WEEKLY:<week>
+  const weeklyClaim = dedupeKeyOf.weekly(weekKey);
+  if (!force && !(await claimBroadcast(weeklyClaim, null, "WEEKLY_DIGEST"))) return { ok: false, detail: "ALREADY_SENT_THIS_WEEK" };
 
   const now = new Date();
   const weekAgo = new Date(now.getTime() - 7 * 86_400_000);
@@ -2065,7 +2179,9 @@ async function sendWeeklyDigestInner(force = false): Promise<{ ok: boolean; deta
   }
   if (okAny) {
     await setSetting(KEY_WEEKLY_LAST, weekKey);
-    await logOutbox(null, "WEEKLY_DIGEST", true, `targets:${targets.join("|")}:settled=${settled}`);
+    await commitBroadcast(weeklyClaim, true, `targets:${targets.join("|")}:settled=${settled}`);
+  } else {
+    await releaseBroadcast(weeklyClaim);
   }
   return { ok: okAny, detail: okAny ? `weekly-sent:settled=${settled}:net=${net.toFixed(1)}` : "send-failed" };
 }

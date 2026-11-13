@@ -1,0 +1,562 @@
+   944→  }
+   945→  if (!force && Date.now() - lastWinRateAt() < 10 * 60_000) return false;
+   946→  const status = await telegramStatus();
+   947→  if (!status.configured || !status.channelSet) return false;
+   948→  const chatId = await publicChannelId();
+   949→  if (!chatId) return false;
+   950→  const st = await channelWinRateStats();
+   951→
+   952→  // v10.0 — گزارش وین‌ریت با تصویر اختصاصی (گیج وین‌ریت + مبنای واحد برای حساب شخصی)
+   953→  const caption = buildWinRateReportMessage(st) +
+   954→    (st.silver.settled > 0
+   955→      ? `\n\n🥈 <b>حصاد آلفای سایه (تاج نقره‌ای سطح ۲ — استیک نصف ۵۰ واحدی):</b> ${st.silver.settled} کارت تسویه‌شده · وین‌ریت ${st.silver.winRatePct ?? 0}٪ · سود واقعی تزریق‌شده از دل دفتر سایه: ${st.silver.netProfit >= 0 ? "+" : ""}${st.silver.netProfit.toFixed(1)} واحد`
+   956→      : "") +
+   957→    (st.shadow.settled > 0
+   958→      ? `\n\n🛡️ <b>دفتر سایه (شفافیت وتوها):</b> ${st.shadow.settled} کارت وتوشده تسویه کاغذی شد — وین‌ریت ${st.shadow.winRatePct ?? 0}٪ · سود کاغذی ${st.shadow.netProfit >= 0 ? "+" : ""}${st.shadow.netProfit.toFixed(1)} واحد (هرگز پول واقعی نبوده)`
+   959→      : "") +
+   960→    (st.retro.settled > 0
+   961→      ? `\n📚 <b>دفتر بازخوانی (کارت‌های چندروزه):</b> ${st.retro.settled} بازی FT که هرگز پیش‌بازی کارت صادر نشده بود — فقط تحلیل کاغذی با همان موتور؛ وین‌ریت ${st.retro.winRatePct ?? 0}٪. این دسته <b>هرگز</b> در وین‌ریت واقعی کانال شمرده نمی‌شود.`
+   962→      : "") +
+   963→    `\n\n🧮 <b>مبنای واحد برای حساب شخصی شما:</b> هر کارت با مجموع استیک ۱۰۰ واحد ثبت می‌شود؛ ۱ واحد = ۱٪ بانک‌رول خودتان.` +
+   964→    `\nمثال با موجودی ۱۰ دلار: ۱ واحد = ۰٫۱ دلار → سود ${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)} واحد = ${st.netProfit >= 0 ? "+" : "−"}${Math.abs(st.netProfit * 0.1).toFixed(2)} دلار (مقیاس‌پذیر با هر موجودی).`;
+   965→
+   966→  let res: { ok: boolean; detail: string };
+   967→  try {
+   968→    const photo = await renderWinRateReportPNG({
+   969→      winRatePct: st.winRatePct,
+   970→      settled: st.settled,
+   971→      wonA: st.wonA,
+   972→      wonB: st.wonB,
+   973→      doubleWin: st.doubleWin,
+   974→      middleTrap: st.middleTrap,
+   975→      netProfit: st.netProfit,
+   976→      netPct: st.netPct,
+   977→      generatedAtIso: new Date().toISOString(),
+   978→    });
+   979→    res = await tgSendPhotoTo(chatId, photo, caption, `winrate-report-${Date.now()}.png`);
+   980→  } catch (err) {
+   981→    console.warn("winrate image render failed:", err);
+   982→    res = await tgCall("sendMessage", {
+   983→      chat_id: chatId,
+   984→      text: caption,
+   985→      parse_mode: "HTML",
+   986→      disable_web_page_preview: true,
+   987→    });
+   988→  }
+   989→  if (res.ok) {
+   990→    setLastWinRateAt(Date.now());
+   991→    await logOutbox(null, "WINRATE", true, "sent");
+   992→  }
+   993→  return res.ok;
+   994→}
+   995→
+   996→// ═══════════════════════════════════════════════════════════════
+   997→// v12.0 — گزارش برآیند روزانه روی قالب استادیومی DAILY_REPORT
+   998→// (۱۰۸۰×۱۴۴۰ — ۴ KPI + ۴ ردیف بازی تسویه‌شده — فقط نتیجه واقعی ESPN)
+   999→// ═══════════════════════════════════════════════════════════════
+  1000→
+  1001→/** کلید روز تهران برای Dedupe گزارش روزانه */
+  1002→function tehranDayKey(d = new Date()): string {
+  1003→  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(d);
+  1004→}
+  1005→
+  1006→/** v13.5 — ساعت فعلی تهران (برای پنجره بنر بازاریابی ساعتی) */
+  1007→function tehranHour(d = new Date()): number {
+  1008→  return Number(new Intl.DateTimeFormat("en-GB", { hour: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d));
+  1009→}
+  1010→
+  1011→const KEY_LAST_DIGEST_DAY = "last_daily_digest_day";
+  1012→
+  1013→/**
+  1014→ * پوستر برآیند روزانه @aineobet — یک‌بار در هر روز تهران (از زمان‌بند سرور).
+  1015→ * v13.5 — «کارت نتیجه برایند روزانه» به هر دو کانال می‌رود: عمومی @aineobet + کانال VIP
+  1016→ * (دستور کارفرما: VIP فقط فلش‌کارت بازی + برآیند روزانه؛ عمومی فقط نتایج + برآیند).
+  1017→ * KPIها: تعداد تسویه · وین‌ریت · جکپات · سود خالص واحدِ همان روز.
+  1018→ * v18.4 — قفل funnel (اجرای موازی زمان‌بند + مسیر دستی = ریشه تکرار برآیند).
+  1019→ */
+  1020→async function sendDailyDigestInner(force = false): Promise<boolean> {
+  1021→  const status = await telegramStatus();
+  1022→  if (!status.configured || !status.channelSet) return false;
+  1023→
+  1024→  const today = tehranDayKey();
+  1025→  if (!force) {
+  1026→    const last = await getSetting(KEY_LAST_DIGEST_DAY);
+  1027→    if (last === today) return false;
+  1028→  }
+  1029→
+  1030→  // بازی‌های تسویه‌شده «امروز تهران» — فقط کارت‌های واقعی تاییدشده (بدون بازخوانی)
+  1031→  const rows = await db.issuedSlip.findMany({
+  1032→    where: {
+  1033→      supervisorApproved: true,
+  1034→      retroIssued: false,
+  1035→      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+  1036→      settledAt: { not: null },
+  1037→    },
+  1038→    orderBy: { settledAt: "desc" },
+  1039→    take: 60,
+  1040→  });
+  1041→  const todayRows = rows.filter((r) => tehranDayKey(r.settledAt as Date) === today);
+  1042→
+  1043→  const settled = todayRows.length;
+  1044→  const wins = todayRows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+  1045→  const jackpots = todayRows.filter((r) => r.status === "DOUBLE_WIN").length;
+  1046→  const net = todayRows.reduce((a, r) => a + (r.netProfit ?? 0), 0);
+  1047→  const staked = todayRows.reduce((a, r) => a + r.stakeA + r.stakeB, 0);
+  1048→  const winRate = settled > 0 ? (wins / settled) * 100 : 0;
+  1049→
+  1050→  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Tehran" }).format(new Date());
+  1051→  const timeEn = (d: Date) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(d);
+  1052→
+  1053→  let res: { ok: boolean; detail: string } = { ok: false, detail: "NO_CHANNEL" };
+  1054→  try {
+  1055→    const photo = await renderDailyReportPNG({
+  1056→      dateLabelEn,
+  1057→      kpis: [
+  1058→        { label: "TICKETS SETTLED", value: String(settled), color: C_cyan },
+  1059→        { label: "CHANNEL WIN-RATE", value: `${winRate.toFixed(0)}%`, color: C_emerald },
+  1060→        { label: "GOLDEN JACKPOTS", value: String(jackpots), color: C_gold },
+  1061→        { label: "NET UNITS TODAY", value: `${net >= 0 ? "+" : "−"}${Math.abs(net).toFixed(1)}`, color: net >= 0 ? C_emerald : C_rose },
+  1062→      ],
+  1063→      matches: todayRows.slice(0, 4).map((r) => ({
+  1064→        teams: `${r.homeTeam} vs ${r.awayTeam}`,
+  1065→        score: `${r.homeGoals ?? 0}-${r.awayGoals ?? 0}`,
+  1066→        verdict: `${r.status.replace("_", " ")} · settled ${r.settledAt ? timeEn(r.settledAt) : ""} Tehran`,
+  1067→        profit: r.netProfit ?? 0,
+  1068→      })),
+  1069→      dayNetProfit: Math.round(net * 100) / 100,
+  1070→      daySettled: settled,
+  1071→      dayStaked: Math.round(staked),
+  1072→    });
+  1073→
+  1074→    const caption =
+  1075→      `📊 <b>NEOBET QUANT PRO • @AINEOBET — Daily Settlement Digest</b>\n` +
+  1076→      `${settled} کارت امروز روی اسکوربورد رسمی ESPN تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد\n` +
+  1077→      `🔒 هیچ شبیه‌سازی و هیچ کارت کاغذی در این گزارش نیست.`;
+  1078→
+  1079→    // v13.5 — ارسال به هر دو کانال (عمومی + VIP) با همان بافر تصویر
+  1080→    const [pub, vip] = await Promise.all([publicChannelId(), channelId()]);
+  1081→    const targets = [...new Set([pub, vip].filter((x): x is string => Boolean(x)))];
+  1082→    for (const chatId of targets) {
+  1083→      let ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-digest-${today}.png`)).ok;
+  1084→      if (!ok) {
+  1085→        ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  1086→      }
+  1087→      if (ok) res = { ok: true, detail: `sent:${chatId}` };
+  1088→    }
+  1089→  } catch (err) {
+  1090→    console.warn("daily digest render failed:", err);
+  1091→    res = await tgCall("sendMessage", { chat_id: await channelId(), text: captionFallback(settled, winRate, net), parse_mode: "HTML", disable_web_page_preview: true });
+  1092→  }
+  1093→  if (res.ok) {
+  1094→    await setSetting(KEY_LAST_DIGEST_DAY, today);
+  1095→    await logOutbox(null, "DAILY_DIGEST", true, res.detail);
+  1096→  }
+  1097→  return res.ok;
+  1098→}
+  1099→
+  1100→export const sendDailyDigest = withFunnelLock(sendDailyDigestInner);
+  1101→
+  1102→/** فالبک متنی برآیند روزانه (وقتی رندر تصویر شکست خورد) */
+  1103→function captionFallback(settled: number, winRate: number, net: number): string {
+  1104→  return (
+  1105→    `📊 <b>NEOBET QUANT PRO • @AINEOBET — Daily Settlement Digest</b>\n` +
+  1106→    `${settled} کارت امروز تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد`
+  1107→  );
+  1108→}
+  1109→
+  1110→// پالت hex برای KPIهای گزارش روزانه (مستقل از ثابت‌های card-render)
+  1111→const C_cyan = "#38d6f5";
+  1112→const C_emerald = "#3ddc97";
+  1113→const C_gold = "#f5c542";
+  1114→const C_rose = "#ff6b7a";
+  1115→
+  1116→// ═══════════════════════════════════════════════════════════════
+  1117→// v13.0 — ایجنت مدیر کانال عمومی و VIP (@aineobet Channel Director Agent)
+  1118→// قیف تبدیل مخاطب عمومی به VIP — کاملاً سمت سرور:
+  1119→//   پست ۱ (۱۱:۰۰ تهران): رادار شفافیت روزانه → کانال عمومی
+  1120→//   پست ۲ (T-60m): ۱ کارت رایگان کامل + تیزرهای قفل‌شده → کانال عمومی
+  1121→//   پست ۳ (FT+5m): بازگشایی قفل همان کارت + پوستر WIN CONFIRMED → کانال عمومی
+  1122→//   پست ۴ (۲۳:۳۰ تهران): برآیند واقعی روز با افراز مجزا → کانال عمومی
+  1123→// Dedupe کامل با TelegramOutbox (kind = FUNNEL_*) و Setting روزانه.
+  1124→// ═══════════════════════════════════════════════════════════════
+  1125→
+  1126→const KEY_FUNNEL_RADAR_DAY = "funnel_last_radar_day";
+  1127→const KEY_FUNNEL_PNL_DAY = "funnel_last_pnl_day";
+  1128→const KEY_FUNNEL_GIFT_DAY = "funnel_last_gift_day";
+  1129→/** v13.5 — کلید dedupe بنر بازاریابی ساعتی: مقدار = «dayKey:hour» */
+  1130→const KEY_MARKETING_LAST_AD = "marketing_last_ad_hour";
+  1131→
+  1132→// ═══════════════════════════════════════════════════════════════
+  1133→// v13.5 — خط لوله جدید کانال‌ها (دستور صریح کارفرما):
+  1134→//   · کانال عمومی @aineobet: فقط نتایج (کارت نتیجه FT + وین‌ریت + برآیند)
+  1135→//     + روزانه ۱ کارت VIP رایگان تاییدشده سوپروایزر (یا کارت دژ نفوذناپذیر)
+  1136→//     + پیام‌های بازاریابی ساعتی با بنر تصویری
+  1137→//   · کانال VIP اعضا: فقط فلش‌کارت‌های بازی + کارت نتیجه برایند روزانه
+  1138→// ═══════════════════════════════════════════════════════════════
+  1139→
+  1140→/**
+  1141→ * v13.5 — پست روزانه «۱ کارت VIP رایگان» به کانال عمومی (۱۲:۰۰ تهران):
+  1142→ * از کارت‌های تاییدشده بازی‌های امروز، اولویت با کارت‌های «دژ نفوذناپذیر»
+  1143→ * (ریسک باخت همزمان زیر ۷٪) است؛ در نبود دژ، بالاترین امتیاز سوپروایزر انتخاب می‌شود.
+  1144→ * Dedupe روزانه با KEY_FUNNEL_GIFT_DAY.
+  1145→ */
+  1146→async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; detail: string }> {
+  1147→  const token = await botToken();
+  1148→  if (!token) return { ok: false, detail: "NO_TOKEN" };
+  1149→  const chatId = await publicChannelId();
+  1150→  if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
+  1151→
+  1152→  const today = tehranDayKey();
+  1153→  if (!force) {
+  1154→    const last = await getSetting(KEY_FUNNEL_GIFT_DAY);
+  1155→    if (last === today) return { ok: false, detail: "ALREADY_SENT_TODAY" };
+  1156→  }
+  1157→
+  1158→  const day = tehranDayRange();
+  1159→  const candidates = await db.issuedSlip.findMany({
+  1160→    where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: day.start, lt: day.end } },
+  1161→    orderBy: { kickoff: "asc" },
+  1162→    take: 24,
+  1163→  });
+  1164→  if (candidates.length === 0) return { ok: false, detail: "NO_TODAY_CARD" };
+  1165→
+  1166→  // اولویت ۱: دژ نفوذناپذیر (ریسک < ۷٪) با بالاترین امتیاز؛ اولویت ۲: بالاترین امتیاز سوپروایزر
+  1167→  const scoreOf = (s: IssuedSlip) => s.supervisorScore ?? -999;
+  1168→  const fortress = candidates.filter((s) => (s.jointLossRiskPct ?? 99) < 7);
+  1169→  const pick = fortress.length > 0 ? fortress.sort((a, b) => scoreOf(b) - scoreOf(a))[0] : candidates.sort((a, b) => scoreOf(b) - scoreOf(a))[0];
+  1170→  const isFortress = (pick.jointLossRiskPct ?? 99) < 7;
+  1171→
+  1172→  const photo = await renderSlipCardPNG(pick);
+  1173→  const kickoffEn = new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(new Date(pick.kickoff));
+  1174→  const caption =
+  1175→    `${isFortress ? "🏰 <b>FREE VIP CARD OF THE DAY — FORTRESS MODE (joint-loss risk &lt; 7%)</b>" : "🎁 <b>FREE VIP CARD OF THE DAY — Supervisor-Approved</b>"}\n` +
+  1176→    `🏆 <b>${esc(pick.homeTeam)}</b> × <b>${esc(pick.awayTeam)}</b> · ${esc(pick.league)} · ⏰ ${kickoffEn} Tehran\n` +
+  1177→    `🔹 Tip A @${pick.oddsA.toFixed(2)}: ${esc(pick.labelA)} · stake ${pick.stakeA.toFixed(1)}u\n` +
+  1178→    `🟢 Tip B @${pick.oddsB.toFixed(2)}: ${esc(pick.labelB)} · stake ${pick.stakeB.toFixed(1)}u\n` +
+  1179→    `💰 Guaranteed dutch cover: <b>+${pick.marginPct.toFixed(1)}%</b> on a 100-unit ticket\n` +
+  1180→    `🔐 Pre-match SHA-256: <code>${pick.hash.slice(0, 24)}</code>\n` +
+  1181→    `———————\n` +
+  1182→    `🎁 <b>کارت رایگان امروز — تایید سوپروایزر${isFortress ? " · دژ نفوذناپذیر (ریسک زیر ۷٪)" : ""}</b>\n` +
+  1183→    `هر روز فقط ۱ کارت کامل و باز در کانال عمومی منتشر می‌شود؛ بقیه کارت‌ها مخصوص اعضای VIP است.\n` +
+  1184→    `👑 عضویت VIP: @Aineobet_bot`;
+  1185→
+  1186→  let ok = false;
+  1187→  if (photo) {
+  1188→    ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-gift-${pick.hash.slice(0, 10)}.png`)).ok;
+  1189→    if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  1190→  } else {
+  1191→    ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  1192→  }
+  1193→  if (ok) {
+  1194→    await setSetting(KEY_FUNNEL_GIFT_DAY, today);
+  1195→    await logOutbox(pick.id, "FUNNEL_GIFT", true, `public:${chatId}${isFortress ? ":fortress" : ""}`);
+  1196→  }
+  1197→  return { ok, detail: ok ? (isFortress ? "fortress-gift-sent" : "gift-sent") : "send-failed" };
+  1198→}
+  1199→
+  1200→export const sendDailyGiftCard = withFunnelLock(sendDailyGiftCardInner);
+  1201→
+  1202→// ─── v13.5 — موضوعات بنر بازاریابی ساعتی (چرخشی، با کپشن فارسی — تصویر کاملاً انگلیسی) ───
+  1203→
+  1204→interface MarketingAd {
+  1205→  key: string;
+  1206→  headline: string;
+  1207→  sub: string;
+  1208→  hashtag: string;
+  1209→  bullets: { icon: "shield" | "crown" | "target" | "vault" | "clock" | "bolt"; title: string; line: string }[];
+  1210→  faCaption: string;
+  1211→}
+  1212→
+  1213→export const MARKETING_ADS: MarketingAd[] = [
+  1214→  {
+  1215→    key: "DUTCH_COVER",
+  1216→    headline: "GUARANTEED DUTCH COVER",
+  1217→    sub: "Two complementary tips split one 100-unit ticket — either winning outcome pays the same fixed profit.",
+  1218→    hashtag: "#GUARANTEED_COVER",
+  1219→    bullets: [
+  1220→      { icon: "shield", title: "FULL SCOREBOARD COVER", line: "Both tips own disjoint score corridors — no double exposure." },
+  1221→      { icon: "target", title: "FIXED PROFIT PER TICKET", line: "The margin is locked at issue time and printed on the card." },
+  1222→      { icon: "vault", title: "100-UNIT STANDARD", line: "1 unit = 1% of your own bankroll — fully scalable." },
+  1223→      { icon: "clock", title: "AUTO ESPN GRADING", line: "Every ticket settles itself on the official final score." },
+  1224→    ],
+  1225→    faCaption: "💰 <b>پوشش داچینگ تضمینی — امضای NeoBet</b>\nدو تیپ مکمل یک بلیت ۱۰۰ واحدی را پوشش می‌دهند؛ هر نتیجه‌ای دربیاید سود ثابت همان است.\n👑 عضویت VIP: @Aineobet_bot",
+  1226→  },
+  1227→  {
+  1228→    key: "SUPERVISOR_GATE",
+  1229→    headline: "AI SUPERVISOR VETO GATE",
+  1230→    sub: "Every match is scanned and scored — high-risk patterns are vetoed before a card is ever issued.",
+  1231→    hashtag: "#AI_SUPERVISOR",
+  1232→    bullets: [
+  1233→      { icon: "shield", title: "V15 ATOMIC RISK GATE", line: "Degenerate pairs above the 45% joint-loss corridor are vetoed before a card is ever issued." },
+  1234→      { icon: "target", title: "SIX-FACTOR SCORING", line: "Odds movement, λ model, form, variance and market value." },
+  1235→      { icon: "vault", title: "SHADOW LEDGER", line: "Vetoed cards are paper-settled publicly for full transparency." },
+  1236→      { icon: "crown", title: "HUMAN-GRADE DISCIPLINE", line: "No chasing, no tilt, no revenge tickets — pure process." },
+  1237→    ],
+  1238→    faCaption: "🛡️ <b>دروازه وتوی سوپروایزر هوشمند v16.0</b>\nفقط بازی‌های تراز اول تایید می‌شوند: ریسک باخت همزمان بالای ۱۰.۵٪ وتو و به دفتر سایه منتقل می‌شود؛ فاوریت بدون برتری واضح (λ &lt; ۱.۵۰) وتو می‌شود؛ لیگ‌های سمّی (لالیگا ۲ و MLS و دوستانه) بلک‌لیست رسمی‌اند. ریسک هر کارت روی خودش شفاف چاپ می‌شود.\n👑 عضویت VIP: @Aineobet_bot",
+  1239→  },
+  1240→  {
+  1241→    key: "ESPN_SETTLEMENT",
+  1242→    headline: "100% AUTO ESPN SETTLEMENT",
+  1243→    sub: "Zero manual grading. Every card is auto-settled on the official ESPN scoreboard within minutes of FT.",
+  1244→    hashtag: "#ESPN_AUTO_SETTLED",
+  1245→    bullets: [
+  1246→      { icon: "bolt", title: "MINUTES AFTER FT", line: "Server loop scans ESPN day+night — no human in the loop." },
+  1247→      { icon: "shield", title: "OFFICIAL SCOREBOARD ONLY", line: "If ESPN has no result, the ticket is voided honestly." },
+  1248→      { icon: "vault", title: "SHA-256 ON EVERY CARD", line: "Pre-match hash proves the tip was never edited." },
+  1249→      { icon: "target", title: "WIN / LOSS POSTED ALIKE", line: "Losses are published too — full transparency policy." },
+  1250→    ],
+  1251→    faCaption: "⚡ <b>تسویه ۱۰۰٪ خودکار با اسکوربورد رسمی ESPN</b>\nچند دقیقه پس از سوت پایان، نتیجه هر کارت خودکار اعلام می‌شود — بدون هیچ دخالت انسانی.\n👑 عضویت VIP: @Aineobet_bot",
+  1252→  },
+  1253→  {
+  1254→    key: "FORTRESS_MODE",
+  1255→    headline: "FORTRESS MODE CARDS",
+  1256→    sub: "The safest product line: joint-loss risk under 7% — slower, calmer, built for stress-free tickets.",
+  1257→    hashtag: "#FORTRESS_MODE",
+  1258→    bullets: [
+  1259→      { icon: "vault", title: "RISK < 7% ONLY", line: "Only ultra-low joint-loss patterns earn the fortress badge." },
+  1260→      { icon: "shield", title: "SUPERVISOR APPROVED", line: "Every fortress card passes the full AI veto gate." },
+  1261→      { icon: "clock", title: "BANK-FRIENDLY PACE", line: "Designed for steady compounding, not adrenaline." },
+  1262→      { icon: "crown", title: "DAILY FORTRESS PICK", line: "The daily free card prefers fortress patterns first." },
+  1263→    ],
+  1264→    faCaption: "🏰 <b>دژ نفوذناپذیر — امن‌ترین خط تولید NeoBet</b>\nفقط کارت‌هایی با ریسک باخت همزمان زیر ۷٪ نشان دژ می‌گیرند؛ کارت رایگان روزانه اولویت با دژهاست.\n👑 عضویت VIP: @Aineobet_bot",
+  1265→  },
+  1266→  {
+  1267→    key: "SHA_PROOF",
+  1268→    headline: "SHA-256 PRE-MATCH PROOF",
+  1269→    sub: "Every tip is hashed before kickoff — the hash is published first, the result can never rewrite history.",
+  1270→    hashtag: "#SHA256_PROOF",
+  1271→    bullets: [
+  1272→      { icon: "vault", title: "HASHED BEFORE KICKOFF", line: "The card content is committed before the match starts." },
+  1273→      { icon: "target", title: "VERIFY AFTER FT", line: "Same hash, same tip — zero edits, zero deletions." },
+  1274→      { icon: "shield", title: "ESPN VERIFICATION LINK", line: "Each card carries its official ESPN match link." },
+  1275→      { icon: "crown", title: "AUDIT-FRIENDLY", line: "Anyone can re-verify the full track record." },
+  1276→    ],
+  1277→    faCaption: "🔐 <b>اثبات SHA-256 پیش از بازی</b>\nهش هر کارت قبل از شروع مسابقه منتشر می‌شود؛ بعد از بازی هم همان است — صفر ادیت، صفر حذف.\n👑 عضویت VIP: @Aineobet_bot",
+  1278→  },
+  1279→  {
+  1280→    key: "BANK_STRATEGY",
+  1281→    headline: "1000-UNIT BANK BLUEPRINT",
+  1282→    sub: "A flat 100-unit dutch ticket per card on a 1000-unit bank — simple, honest, measurable growth.",
+  1283→    hashtag: "#BANK_BLUEPRINT",
+  1284→    bullets: [
+  1285→      { icon: "crown", title: "FLAT STAKING DISCIPLINE", line: "No martingale, no doubling — pure flat 100u tickets." },
+  1286→      { icon: "target", title: "+X% PER TICKET LOCKED", line: "The cover margin is fixed at issue time." },
+  1287→      { icon: "shield", title: "DRAWDOWN CONTROLLED", line: "Veto gate keeps the loss-corridor rare and small." },
+  1288→      { icon: "vault", title: "TRACKED IN PUBLIC", line: "The bank growth curve is computed from real settled cards." },
+  1289→    ],
+  1290→    faCaption: "📈 <b>نقشه رشد بانک ۱۰۰۰ واحدی</b>\nهر کارت ۱۰۰ واحد ثابت روی بانک ۱۰۰۰ واحدی — رشد قابل اندازه‌گیری و شفاف، بدون مارتینگل.\n👑 عضویت VIP: @Aineobet_bot",
+  1291→  },
+  1292→  {
+  1293→    key: "TIMING_WINDOWS",
+  1294→    headline: "BEST EXECUTION WINDOWS",
+  1295→    sub: "Each card prints its own optimal odds-entry window — early favorite, lineup shock or late underdog peak.",
+  1296→    hashtag: "#TIMING_WINDOWS",
+  1297→    bullets: [
+  1298→      { icon: "clock", title: "T-60 LINEUP SHOCK", line: "Odds swing hardest when official XIs drop." },
+  1299→      { icon: "bolt", title: "EARLY FAVORITE WINDOW", line: "Sharp money moves the favorite line early — be there first." },
+  1300→      { icon: "target", title: "LATE UNDERDOG PEAK", line: "The best underdog price often lands in the last 30 minutes." },
+  1301→      { icon: "vault", title: "PRINTED ON THE CARD", line: "The exact Tehran-time window is on every poster." },
+  1302→    ],
+  1303→    faCaption: "⏱️ <b>بهترین ساعت ثبت ضریب — روی خود کارت</b>\nهر پوستر پنجره دقیق ثبت (به وقت تهران) را چاپ می‌کند؛ در پنجره درست وارد شوید.\n👑 عضویت VIP: @Aineobet_bot",
+  1304→  },
+  1305→  {
+  1306→    key: "COMBO_LINE",
+  1307→    headline: "SMART COMBO ENGINE",
+  1308→    sub: "Independent anchor legs joined into 2/3-leg combos with Monte-Carlo joint confidence printed on the poster.",
+  1309→    hashtag: "#SMART_COMBOS",
+  1310→    bullets: [
+  1311→      { icon: "bolt", title: "2-LEG SAFE DOUBLE", line: "Two uncorrelated anchors — the calm multiplier line." },
+  1312→      { icon: "crown", title: "3-LEG GOLDEN TREBLE", line: "Higher odds with joint-confidence disclosure." },
+  1313→      { icon: "target", title: "MONTE-CARLO 10K RUNS", line: "Joint probability is simulated, not guessed." },
+  1314→      { icon: "shield", title: "DISJOINT ACCOUNTING", line: "A combo ticket never counts in two product lines." },
+  1315→    ],
+  1316→    faCaption: "🧩 <b>موتور میکس هوشمند — اعتماد مونت‌کارلو</b>\nپایه‌های مستقل با احتمال مشترک شبیه‌سازی‌شده روی پوستر چاپ می‌شود؛ هیچ عدد ساختگی وجود ندارد.\n👑 عضویت VIP: @Aineobet_bot",
+  1317→  },
+  1318→  {
+  1319→    key: "SNIPER_LINE",
+  1320→    headline: "HIGH-ODDS SNIPER SHOTS",
+  1321→    sub: "Reverse-Poisson value hunts at big prices — small capped stakes, EV-protected single shots.",
+  1322→    hashtag: "#ODDS_SNIPER",
+  1323→    bullets: [
+  1324→      { icon: "target", title: "REVERSE-POISSON EDGE", line: "We price the longshot; the book prices the crowd." },
+  1325→      { icon: "vault", title: "0.5-1.0% BANKROLL CAP", line: "Snipers stay small — the bank is never hostage." },
+  1326→      { icon: "bolt", title: "FRACTIONAL KELLY 0.15x", line: "Quarter-Kelly discipline on every shot." },
+  1327→      { icon: "crown", title: "SINGLE SHOT ONLY", line: "One sniper per match — no parlays of longshots." },
+  1328→    ],
+  1329→    faCaption: "🎯 <b>تک‌تیرانداز ضریب بالا — ارزش پنهان بازار</b>\nشات‌های تک با استیک کپ‌شده و لبه ریورس‌پواسون؛ بانک شما هرگز گروگان شات بلند نیست.\n👑 عضویت VIP: @Aineobet_bot",
+  1330→  },
+  1331→  {
+  1332→    key: "LIFETIME_PLAN",
+  1333→    headline: "LIFETIME VIP — ONE PAYMENT",
+  1334→    sub: "Pay once, receive every VIP flashcard, the daily digest and the full quant pipeline forever.",
+  1335→    hashtag: "#LIFETIME_VIP",
+  1336→    bullets: [
+  1337→      { icon: "crown", title: "LIFETIME ACCESS 50 USDT", line: "The flagship plan — never expires." },
+  1338→      { icon: "vault", title: "ALL PRODUCT LINES", line: "Dual-hedge cards, combos, snipers, fortress picks." },
+  1339→      { icon: "bolt", title: "INSTANT USDT AUTO-VERIFY", line: "TRC-20 / SOL / BSC / Polygon — 10-second activation." },
+  1340→      { icon: "shield", title: "CARD-TO-CARD IN TOMAN", line: "Iranian bank transfer accepted inside the bot." },
+  1341→    ],
+  1342→    faCaption: "♾️ <b>اشتراک مادام‌العمر — فقط یک پرداخت</b>\nهمه فلش‌کارت‌ها، برآیند روزانه و کل خط تولید کوانتوم، برای همیشه.\nپرداخت: USDT (TRC20/SOL/BSC/Polygon) یا کارت‌به‌کارت تومانی داخل ربات.\n👑 عضویت: @Aineobet_bot",
+  1343→  },
+  1344→];
+  1345→
+  1346→/**
+  1347→ * v13.5 — پیام بازاریابی هوشمند ساعتی به کانال عمومی (۰۹ تا ۲۳ تهران):
+  1348→ * بنر تصویری کاملاً انگلیسی + کپشن فارسی حرفه‌ای + KPI واقعی کانال.
+  1349→ * موضوع‌ها چرخشی‌اند (hour % 10) و با KEY_MARKETING_LAST_AD در هر ساعت فقط یک‌بار ارسال می‌شوند.
+  1350→ */
+  1351→async function sendHourlyVipAdInner(force = false): Promise<{ ok: boolean; detail: string; topic: string }> {
+  1352→  const token = await botToken();
+  1353→  if (!token) return { ok: false, detail: "NO_TOKEN", topic: "—" };
+  1354→  const chatId = await publicChannelId();
+  1355→  if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL", topic: "—" };
+  1356→
+  1357→  const th = tehranHour();
+  1358→  if (!force && (th < 9 || th > 23)) return { ok: false, detail: "OUT_OF_MARKETING_HOURS", topic: "—" };
+  1359→
+  1360→  const stamp = `${tehranDayKey()}:${th}`;
+  1361→  if (!force) {
+  1362→    const last = await getSetting(KEY_MARKETING_LAST_AD);
+  1363→    if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_HOUR", topic: "—" };
+  1364→  }
+  1365→
+  1366→  const ad = MARKETING_ADS[th % MARKETING_ADS.length];
+  1367→  try {
+  1368→    const photo = await renderVipAdBannerPNG({
+  1369→      topicKey: ad.key,
+  1370→      headline: ad.headline,
+  1371→      sub: ad.sub,
+  1372→      hashtag: ad.hashtag,
+  1373→      bullets: ad.bullets,
+  1374→      generatedAtIso: new Date().toISOString(),
+  1375→    });
+  1376→    let ok = (await tgSendPhotoTo(chatId, photo, ad.faCaption, `vip-ad-${ad.key.toLowerCase()}.png`)).ok;
+  1377→    if (!ok) {
+  1378→      ok = (await tgCall("sendMessage", { chat_id: chatId, text: ad.faCaption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
+  1379→    }
+  1380→    if (ok) {
+  1381→      await setSetting(KEY_MARKETING_LAST_AD, stamp);
+  1382→      await logOutbox(null, "MARKETING_AD", true, `public:${chatId}:${ad.key}`);
+  1383→    }
+  1384→    return { ok, detail: ok ? "ad-sent" : "send-failed", topic: ad.key };
+  1385→  } catch (err) {
+  1386→    console.warn("hourly vip ad failed:", err instanceof Error ? err.message : err);
+  1387→    return { ok: false, detail: "RENDER_FAILED", topic: ad.key };
+  1388→  }
+  1389→}
+  1390→
+  1391→export const sendHourlyVipAd = withFunnelLock(sendHourlyVipAdInner);
+  1392→
+  1393→/** آمار رادار شفافیت — از دیتابیس کارنامه (بدون هیچ عدد جعلی) */
+  1394→export async function funnelRadarStats(): Promise<{ scanned: number; vetoed: number; golden: number }> {
+  1395→  const [all, vetoed] = await Promise.all([
+  1396→    db.issuedSlip.findMany({ select: { id: true, externalId: true, supervisorApproved: true } }),
+  1397→    db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false } }),
+  1398→  ]);
+  1399→  const scanned = new Set(all.map((s) => s.externalId ?? s.id)).size;
+  1400→  const golden = await db.issuedSlip.count({ where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } } });
+  1401→  return { scanned, vetoed, golden };
+  1402→}
+  1403→
+  1404→/** پست ۱ — رادار شفافیت روزانه به کانال عمومی (ساعت ۱۱:۰۰ تهران، یک‌بار در روز) */
+  1405→export async function sendPublicRadar(force = false): Promise<boolean> {
+  1406→  const token = await botToken();
+  1407→  if (!token) return false;
+  1408→  const chatId = await publicChannelId();
+  1409→  if (!chatId) return false;
+  1410→
+  1411→  const today = tehranDayKey();
+  1412→  if (!force) {
+  1413→    const last = await getSetting(KEY_FUNNEL_RADAR_DAY);
+  1414→    if (last === today) return false;
+  1415→  }
+  1416→
+  1417→  const st = await funnelRadarStats();
+  1418→  const next = await db.issuedSlip.findFirst({
+  1419→    where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } },
+  1420→    orderBy: { kickoff: "asc" },
+  1421→  });
+  1422→  const topLine = next
+  1423→    ? `${next.homeTeam} vs ${next.awayTeam} · guaranteed +${next.marginPct.toFixed(1)}% dutch cover`
+  1424→    : "Scanner is waiting for the next ESPN matchday window";
+  1425→
+  1426→  const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", timeZone: "Asia/Tehran" }).format(new Date());
+  1427→  const photo = await renderDailyRadarPNG({
+  1428→    dateLabelEn,
+  1429→    scanned: st.scanned,
+  1430→    vetoed: st.vetoed,
+  1431→    goldenSignals: st.golden,
+  1432→    topPickLine: topLine,
+  1433→  });
+  1434→
+  1435→  const caption =
+  1436→    `📡 <b>NEOBET QUANT PRO • ${esc(DEFAULT_PUBLIC_CHANNEL.replace("@", "@"))} — Daily Matchday Radar</b>\n` +
+  1437→    `🔍 ${st.scanned} matches scanned · 🛡️ ${st.vetoed} high-risk vetoed by the Supervisor · 👑 ${st.golden} golden signals issued for VIP.\n` +
+  1438→    `Free gift card + locked VIP teasers drop at T-60 before kickoff. Same SHA-256, unblurred after FT.`;
+  1439→
+  1440→  let res = await tgSendPhotoTo(chatId, photo, caption, `daily-radar-${today}.png`);
+  1441→  if (!res.ok) {
+  1442→    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
+  1443→  }
+  1444→  if (res.ok) {
+  1445→    await setSetting(KEY_FUNNEL_RADAR_DAY, today);
+  1446→    await logOutbox(null, "FUNNEL_RADAR", true, `public:${chatId}`);
+  1447→  }
+  1448→  return res.ok;
+  1449→}
+  1450→
+  1451→/** پست ۲ — قیف T-60m: ۱ کارت رایگان کامل + تیزرهای قفل‌شده به کانال عمومی */
+  1452→export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean; teasers: number }> {
+  1453→  const token = await botToken();
+  1454→  if (!token) return { gift: false, teasers: 0 };
+  1455→  const chatId = await publicChannelId();
+  1456→  if (!chatId) return { gift: false, teasers: 0 };
+  1457→
+  1458→  const now = Date.now();
+  1459→  const window = await db.issuedSlip.findMany({
+  1460→    where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: new Date(now + 25 * 60_000), lte: new Date(now + 95 * 60_000) } },
+  1461→    orderBy: { kickoff: "asc" },
+  1462→    take: 6,
+  1463→  });
+  1464→
+  1465→  const alreadySent = new Set(
+  1466→    (await db.telegramOutbox.findMany({ where: { kind: { in: ["FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null } }, select: { slipId: true } })).map((r) => r.slipId)
+  1467→  );
+  1468→  const candidates = window.filter((s) => !alreadySent.has(s.id));
+  1469→  if (candidates.length === 0 && !force) return { gift: false, teasers: 0 };
+  1470→
+  1471→  const today = tehranDayKey();
+  1472→  const giftDay = await getSetting(KEY_FUNNEL_GIFT_DAY);
+  1473→
+  1474→  let gift = false;
+  1475→  let teasers = 0;
+  1476→
+  1477→  for (const slip of candidates) {
+  1478→    const isGift = giftDay !== today; // هر روز فقط ۱ کارت کامل رایگان
+  1479→    try {
+  1480→      if (isGift) {
+  1481→        const photo = await renderSlipCardPNG(slip);
+  1482→        const caption =
+  1483→          `🎁 <b>FREE GIFT CARD — 100% OPEN, NO LOCK</b>\n` +
+  1484→          `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
+  1485→          `🔹 Tip A @${slip.oddsA.toFixed(2)}: ${esc(slip.labelA)} · stake ${slip.stakeA.toFixed(1)}u\n` +
+  1486→          `🟢 Tip B @${slip.oddsB.toFixed(2)}: ${esc(slip.labelB)} · stake ${slip.stakeB.toFixed(1)}u\n` +
+  1487→          `💰 Guaranteed dutch profit: <b>+${slip.marginPct.toFixed(1)}%</b>\n` +
+  1488→          `🔐 SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
+  1489→          `Every settlement is auto-graded on the official ESPN final score.`;
+  1490→        const ok = (await tgSendPhotoTo(chatId, photo, caption, `gift-${slip.hash.slice(0, 10)}.png`)).ok;
+  1491→        if (ok) {
+  1492→          gift = true;
+  1493→          await setSetting(KEY_FUNNEL_GIFT_DAY, today);
+  1494→          await logOutbox(slip.id, "FUNNEL_GIFT", true, `public:${chatId}`);
+  1495→        }
+  1496→      } else {
+  1497→        // v13.5 — رفع باگ ورودی: renderLockedTeaserPNG قبلاً با IssuedSlip خام صدا زده می‌شد
+  1498→        // (kickoffEn/labelAEn/hashShort وجود نداشت → پوستر «undefined» چاپ می‌کرد).
+  1499→        // اکنون از رندر تیزر رسمی (کارت کامل با تیپ B قفل) استفاده می‌شود.
+  1500→        const photo = await renderSlipTeaserPNG(slip);
+  1501→        const caption =
+  1502→          `🔒 <b>VIP TEASER — UNBLURRED AFTER FT</b>\n` +
+  1503→          `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
+
+[showing lines 944-1503 of 2118; use offset=1504 with limit to continue reading]

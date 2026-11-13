@@ -5,7 +5,7 @@ import { computeMatchEngine } from "@/lib/engine/matchEngine";
 import { runMonteCarlo, jointStates, MC_SELECTIONS, type SelectionKey, type MonteCarloResult } from "@/lib/engine/montecarlo";
 import { simultaneousKelly } from "@/lib/engine/kelly";
 import { checkMiddleTrap, type SelectionKind, type TrapLeg } from "@/lib/engine/dutching";
-import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair } from "@/lib/engine/orthogonal";
+import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair, asymmetricAlphaStakes } from "@/lib/engine/orthogonal";
 import { routeBetTypes, type MarketPrices } from "@/lib/engine/betrouter";
 import { buildScoreMatrix } from "@/lib/engine/poisson";
 import { getActiveRuleFor } from "@/lib/server/calibration-rules";
@@ -289,11 +289,12 @@ export async function POST(req: NextRequest) {
       const trap = checkMiddleTrap([baseTrap, varATrap], [baseTrap, varBTrap]);
       if (trap.verdict === "CRITICAL") continue;
 
-      // داچینگ سود برابر
+      // v19.0 — تخصیص نامتقارن آلفا (پیش‌فرض فعال ۶۵/۳۵) — جایگزین داچینگ سود برابر
       const impliedSum = 1 / oddsA + 1 / oddsB;
-      const stakeA = bankroll * (1 / oddsA) / impliedSum;
-      const stakeB = bankroll * (1 / oddsB) / impliedSum;
-      const profit = bankroll * (oddsA * oddsB) / (oddsA + oddsB) - bankroll;
+      const alphaStakes = asymmetricAlphaStakes(oddsA, oddsB);
+      const stakeA = alphaStakes.stakeA;
+      const stakeB = alphaStakes.stakeB;
+      const profit = alphaStakes.guaranteed;
 
       // کلِی همزمان روی توزیع همزمان واقعی
       const kelly = simultaneousKelly(
@@ -307,7 +308,8 @@ export async function POST(req: NextRequest) {
         oddsB
       );
 
-      const guaranteedMarginPct = (1 - impliedSum) * 100;
+      // v19.0 — مارجین کارت با استیک نامتقارن = کمینه سود دو بال (واحد = درصد روی ۱۰۰u)
+      const guaranteedMarginPct = alphaStakes.guaranteed;
       const pA = joint.bothWin + joint.aOnly;
       const pB = joint.bothWin + joint.bOnly;
 
@@ -379,6 +381,17 @@ export async function POST(req: NextRequest) {
         impliedSum,
         guaranteedMarginPct,
         equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
+        // v19.0 — accelerator همیشه فعال با ۶۵/۳۵
+        accelerator: {
+          active: true,
+          stakeA: alphaStakes.stakeA,
+          stakeB: alphaStakes.stakeB,
+          profitOnA: alphaStakes.profitOnA,
+          profitOnB: alphaStakes.profitOnB,
+          guaranteed: alphaStakes.guaranteed,
+          profitOnDoubleWin: alphaStakes.profitOnDoubleWin,
+          note: alphaStakes.note,
+        },
         kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
         sharpEdgePct,
         trap,
