@@ -72,6 +72,13 @@ export interface BetTypeCandidate {
    * DUAL: پوشش ≥ ۹۰٪ و ریسک ≤ ۱۰٪ — یا کاندیدهای با گیت ارزش انتظاری (EV > +۸٪ و Sharpe > ۰.۳۲)
    */
   eligible: boolean;
+  /**
+   * v18.0 — سطح تاج (Two-Tier Crown System):
+   *  · "GOLD"  — 👑 تاج طلایی سطح ۱: همه شروط سخت جدول رژیم + ریسک ≤ ۱۱.۲٪ + شارپ ≥ ۰.۲۴ → استیک کامل ۱۰۰ واحدی
+   *  · "SILVER" — 🥈 تاج نقره‌ای سطح ۲ (شکارچی آلفای سایه): winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ → استیک نصف ۵۰ واحدی
+   *  · null — بدون تاج (در دفتر سایه می‌ماند)
+   */
+  tier: CrownTier;
   // ─── تخصیص بودجه ۱۰۰ واحدی ───
   stakeMain: number;
   stakeCover: number;
@@ -104,6 +111,8 @@ export interface BetTypeRouteResult {
   crownPairId: string | null;
   veto: boolean;
   vetoReason: string | null;
+  /** v18.0 — سطح تاج برنده مسیریاب (GOLD/SILVER) — برای گیت اختصاصی سوپروایزر و صدور نقره‌ای */
+  tier: CrownTier;
 }
 
 /** زمینه قیمت‌های بازار برای ساخت کاندیدها (خط 1X2 + O/U 2.5) */
@@ -134,6 +143,44 @@ export const DUAL_HEDGE_COVERAGE_MIN = 0.72;
 export const APPROVE_EV_MIN = 0.08;
 /** گیت تایید غیرخطی: نسبت شارپ */
 export const APPROVE_SHARPE_MIN = 0.32;
+
+// ═════════ v18.0 — گیت‌های اختصاصی هر رژیم (Regime-Specific Supervisor Gates) ═════════
+// سند v18.0: وتوی ثابت λ_Fav < ۱.۵۰ / λ_Dog > ۱.۰۵ «قبل از مسیریابی» حذف شد؛
+// حالا هر رژیم منتخب مسیریاب، گیت اختصاصی خودش را دارد:
+
+/** 🎯 CORRECT_SCORE — فاوریت کم‌گل تاکتیکی مجاز: λ_Fav ∈ [1.15, 1.85] */
+export const CS_FAV_LAMBDA_MIN = 1.15;
+export const CS_FAV_LAMBDA_MAX = 1.85;
+/** 🎯 CORRECT_SCORE — سقف امید گل آندرداگ */
+export const CS_DOG_LAMBDA_MAX = 1.15;
+/** 🎯 CORRECT_SCORE — آستانه‌های سند v18: مجموع ۴ خانه برتر ≥ ۵۴٪ و آنتروپی ≤ ۲.۴۸ */
+export const CS_ENTROPY_MAX_V18 = 2.48;
+export const CS_TOP4_SUM_MIN_V18 = 0.54;
+/** 🧩 COMBO — فاوریت کنترل‌گر/هجومی مجاز: λ_Fav ≥ 1.35 و λ_Dog ≤ 1.25 */
+export const COMBO_FAV_LAMBDA_MIN = 1.35;
+export const COMBO_DOG_LAMBDA_MAX = 1.25;
+/** 🧩 COMBO — پوشش کل کمبو ≥ ۷۸٪ + شارپ ≥ ۰.۲۲ */
+export const COMBO_COVERAGE_MIN_V18 = 0.78;
+export const COMBO_SHARPE_MIN_V18 = 0.22;
+/** 🏦 BANKER — عدم تقارن قدرت ≥ ۱.۶۵ و احتمال پایه ≥ ۸۰٪ (سند v18) */
+export const BANKER_R_LAMBDA_MIN_V18 = 1.65;
+export const BANKER_BASE_PROB_MIN_V18 = 0.8;
+/** ⚖️ DUAL_HEDGE — ریسک باخت همزمان ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴ (سند v18) */
+export const DUAL_HEDGE_RISK_PCT_MAX_V18 = 11.2;
+export const DUAL_HEDGE_SHARPE_MIN_V18 = 0.24;
+/** 👑 تاج طلایی سطح ۱ — سقف جهانی ریسک و کف شارپ (Tier-1 Gold Crown) */
+export const GOLD_RISK_PCT_MAX = 11.2;
+export const GOLD_SHARPE_MIN = 0.24;
+/** 🥈 تاج نقره‌ای سطح ۲ — شکارچی آلفای دفتر سایه (Tier-2 Silver Shadow Alpha):
+ *  بازی‌های لیگ معتبر با winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ که گیت طلایی را پاس نکردند —
+ *  به‌جای حبس در دفتر کاغذی، با استیک نصف‌شده ۵۰ واحدی (Half-Kelly) منتشر می‌شوند. */
+export const SILVER_WIN_PROB_MIN = 0.84;
+export const SILVER_SHARPE_MIN = 0.16;
+/** 🚫 وتوی قرمز مطلق سطح ۳ — ریسک بالای ۱۵٪ فقط تسویه کاغذی دفتر سایه */
+export const HARD_RED_VETO_RISK_PCT = 15;
+
+/** سطح تاج کاندید — خروجی گیت‌های v18.0 */
+export type CrownTier = "GOLD" | "SILVER" | null;
 
 /** لیگ‌های سمّی — تنها وتوی مطلق سند v17.0 */
 export const POISON_LEAGUES = ["esp.2", "usa.1", "fifa.friendly"];
@@ -296,11 +343,12 @@ export function buildBankerCandidates(
   ];
 
   for (const v of variants) {
-    // شرط غیرخطی: مارکت باید واقعاً «امن» باشد — احتمال ماتریس ≥ ۸۰٪ (الیت ≥ ۸۲٪ سند)
-    if (v.prob < 0.80) continue;
+    // v18.0 — شرط ساختاری بنکر: احتمال پایه ≥ ۸۰٪ (BANKER_BASE_PROB_MIN_V18)
+    if (v.prob < BANKER_BASE_PROB_MIN_V18) continue;
     // محدوده منطقی ضریب تک‌ستون امن (سند: ۱.۳۸..۱.۶۸ — در بازارهای واقعی فاوریت قاطع تا ۱.۱۰ نیز معتبر است)
     if (v.odds < 1.08 || v.odds > 2.0) continue;
-    const triggered = structure.rLambda >= BANKER_R_LAMBDA_MIN || v.prob >= BANKER_BASE_PROB_MIN;
+    // v18.0 — تریگر بنکر: عدم تقارن قدرت ≥ ۱.۶۵ (BANKER_R_LAMBDA_MIN_V18) یا احتمال پایه ≥ ۸۰٪
+    const triggered = structure.rLambda >= BANKER_R_LAMBDA_MIN_V18 || v.prob >= BANKER_BASE_PROB_MIN_V18;
     if (!triggered) continue;
 
     const sc = calculateNonLinearSupervisorScore({
@@ -328,6 +376,7 @@ export function buildBankerCandidates(
       jointLossProb: r3(1 - v.prob),
       matrixCoveragePct: Math.round(v.prob * 1000) / 10,
       eligible: v.prob >= BANKER_MATRIX_PROB_MIN,
+      tier: null,
       ...sc,
       stakeMain: 60,
       stakeCover: 0,
@@ -413,9 +462,9 @@ export function buildComboCandidates(
     const pMain = matrixProb(matrix, d.mainPred);
     const pCover = matrixProb(matrix, d.coverPred);
     if (pMain < 0.55) continue; // کمبو بی‌کیفیت — فضای ماتریس ناکافی
-    // پوشش کل = سناریوهای برد اصلی ∪ پوشش مکمل (سند: بالای ۹۳٪ — کف مهندسی ۸۸٪)
+    // v18.0 — پوشش کل = سناریوهای برد اصلی ∪ پوشش مکمل — آستانه سند v18: ≥ ۷۸٪ (COMBO_COVERAGE_MIN_V18)
     const pUnion = matrixProb(matrix, (h, a) => d.mainPred(h, a) || d.coverPred(h, a));
-    if (pUnion < 0.88) continue;
+    if (pUnion < COMBO_COVERAGE_MIN_V18) continue;
 
     // ═══ v17.0 — قیمت‌گذاری کمبو در برابر بازار واقعی (عدم توافق مدل × بازار) ═══
     // بایاس بازار = احتمال ضمنی بازار پایه مرجع ÷ احتمال ماتریس همان پایه؛
@@ -487,6 +536,7 @@ export function buildComboCandidates(
       jointLossProb: r3(1 - pUnion),
       matrixCoveragePct: Math.round(pUnion * 1000) / 10,
       eligible: pMain >= COMBO_CORRELATION_MIN,
+      tier: null,
       ...sc,
       stakeMain,
       stakeCover,
@@ -508,7 +558,8 @@ export function buildCorrectScoreCandidate(
   matrix: number[][],
   structure: MatrixStructure
 ): BetTypeCandidate | null {
-  if (structure.entropy > CS_ENTROPY_MAX || structure.top4Sum <= CS_TOP4_SUM_MIN) return null;
+  // v18.0 — آستانه‌های سند v18: آنتروپی ≤ ۲.۴۸ (CS_ENTROPY_MAX_V18) و مجموع ۴ خانه برتر ≥ ۵۴٪ (CS_TOP4_SUM_MIN_V18)
+  if (structure.entropy > CS_ENTROPY_MAX_V18 || structure.top4Sum <= CS_TOP4_SUM_MIN_V18) return null;
 
   // خوشه ۳ یا ۴ تایی: خانه‌های برتر تا وقتی مجموع ≥ ۶۰٪ شود (حداقل ۳ نتیجه)
   const cells = topCells(matrix, 4);
@@ -559,7 +610,8 @@ export function buildCorrectScoreCandidate(
     doubleWinProb: 0,
     jointLossProb: r3(1 - winProb),
     matrixCoveragePct: Math.round(winProb * 1000) / 10,
-    eligible: true, // سازنده فقط با معیارهای سند (آنتروپی ≤ ۲.۴۲ و Top4 > ۵۶٪) کاندید می‌سازد
+    eligible: true, // سازنده فقط با معیارهای سند v18 (آنتروپی ≤ ۲.۴۸ و Top4 ≥ ۵۴٪) کاندید می‌سازد
+    tier: null,
     ...sc,
     stakeMain: 100,
     stakeCover: 0,
@@ -622,7 +674,9 @@ export function buildDualHedgeCandidates(pairs: PortfolioPairDTO[]): BetTypeCand
       doubleWinProb: r3(p.jointStates.bothWin),
       jointLossProb: r3(p.jointStates.bothLose),
       matrixCoveragePct: Math.round(winProb * 1000) / 10,
-      eligible: winProb >= 0.9 && p.jointStates.bothLose <= 0.1,
+      // v18.0 — واجد شرایط دual: ریسک باخت همزمان ≤ ۱۱.۲٪ (DUAL_HEDGE_RISK_PCT_MAX_V18)
+      eligible: winProb >= 0.9 && p.jointStates.bothLose <= DUAL_HEDGE_RISK_PCT_MAX_V18 / 100,
+      tier: null,
       ...sc,
       stakeMain: p.equalProfit.stakeA,
       stakeCover: p.equalProfit.stakeB,
