@@ -74,6 +74,13 @@ export interface AutopilotConfig {
   executionMode: ExecutionMode;
   /** v8.0 — شبیه‌ساز سطح اشتراک: Free تار می‌کند / Pro و VIP کاملاً باز */
   tier: "FREE" | "PRO" | "VIP";
+  /**
+   * v18.0 — 🥈 تاج نقره‌ای (شکارچی آلفای دفتر سایه):
+   * روشن = کارت‌های سطح ۲ (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶) با استیک نصف ۵۰ واحدی
+   * Half-Kelly در دک فلش‌کارت و منحنی بانک نمایش داده می‌شوند (+۶۵۰ واحد تزریق
+   * سود از دل دفتر سایه). خاموش = فقط تاج‌های طلایی سطح ۱ (استیک کامل ۱۰۰u).
+   */
+  shadowHarvestOn: boolean;
 }
 
 export const DEFAULT_CONFIG: AutopilotConfig = {
@@ -92,6 +99,7 @@ export const DEFAULT_CONFIG: AutopilotConfig = {
   telegramPublicChannelId: "@aineobet",
   executionMode: "DUAL_BOOK",
   tier: "FREE",
+  shadowHarvestOn: true,
 };
 
 /** نمای آماده فلش‌کارت — از تلاقی مناظره + پرتفوی + T-60 ساخته می‌شود */
@@ -150,6 +158,12 @@ export interface FlashcardView {
   }) | null;
   /** v17.0 — کارت از بازی وتوشده مسیریاب است؟ (هیچ روشی آستانه کیفیت را پاس نکرد) */
   routerVeto: boolean;
+  /**
+   * v18.0 — سطح تاج کارت (Two-Tier Crown System):
+   * "GOLD" = 👑 تاج طلایی سطح ۱ (استیک کامل ۱۰۰u) | "SILVER" = 🥈 تاج نقره‌ای سطح ۲
+   * (شکارچی آلفای سایه — استیک نصف ۵۰u Half-Kelly) | null = وتوشده/بدون سطح‌بندی
+   */
+  crownTier: "GOLD" | "SILVER" | null;
 }
 
 /** رویداد زنده برای توست پوشش In-Play — v6.1: منبع واقعی ESPN یا تست دستی موتور */

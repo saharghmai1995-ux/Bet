@@ -215,8 +215,62 @@ export async function sendBroadcastPhoto(
 async function logOutbox(slipId: string | null, kind: string, ok: boolean, detail: string): Promise<void> {
   try {
     await db.telegramOutbox.create({ data: { slipId, kind, ok, detail: detail.slice(0, 400) } });
+  } catch (err) {
+    // v18.4 — لاگ اختیاری اما مشاهده‌پذیر: شکست نوشتن outbox پرچم repair را خراب می‌کند
+    // (ریشه تکرار ارسال در v18.3) — باید در لاگ سرور دیده شود.
+    console.warn("[telegram] outbox log failed:", kind, err instanceof Error ? err.message : err);
+  }
+}
+
+// ═══ v18.4 — ضد تکرار ارسال (Anti-Duplicate Broadcast Infrastructure) ═══
+// ریشه باگ «ارسال پیام‌های تکراری به کانال عمومی»: چهار مسیر ورود مستقل
+// (زمان‌بند سرور، runSync فید زنده، POST autodispatch، POST config dispatchNow)
+// هم‌زمان صف انتشار را اجرا می‌کردند؛ هر دو اسنپ‌شات stale می‌خواندند و همان
+// پیام را دو بار می‌فرستادند. سه سپر:
+//   ۱) قفل in-flight سراسری برای هر جریان ارسال (dispatch / funnel / winrate)
+//   ۲) claim اتمی پرچم‌های telegramCard/telegramResult قبل از ارسال (updateMany شرطی)
+//   ۳) آزادسازی claim در شکست ارسال تا ریتیپ بعدی از دست نرود
+
+const gBroadcast = globalThis as unknown as {
+  __fqDispatchInFlight?: boolean;
+  __fqFunnelLock?: Promise<unknown> | null;
+};
+
+/** قفل رشته‌ای funnel — اجرای هم‌زمان دو پست فانل (دو مسیر ورود) را سریال می‌کند */
+function withFunnelLock<T>(fn: () => Promise<T>): () => Promise<T> {
+  return async () => {
+    const prev = gBroadcast.__fqFunnelLock ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    gBroadcast.__fqFunnelLock = prev.then(() => gate);
+    await prev.catch(() => undefined);
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (gBroadcast.__fqFunnelLock === gate) gBroadcast.__fqFunnelLock = null;
+    }
+  };
+}
+
+/**
+ * claim اتمی پرچم تلگرام اسلیپ — فقط یک فراخوان برنده می‌شود (SQLite تک‌نویسنده).
+ * خروجی true = مالکیت ارسال با ماست؛ false = مسیر موازی قبلاً مالک شده (بدون ارسال).
+ */
+async function claimSlipFlag(slipId: string, field: "telegramCard" | "telegramResult"): Promise<boolean> {
+  const res = await db.issuedSlip.updateMany({
+    where: { id: slipId, [field]: false },
+    data: { [field]: true },
+  });
+  return res.count === 1;
+}
+
+/** آزادسازی claim در شکست ارسال — مسیر بعدی دوباره تلاش می‌کند */
+async function releaseSlipFlag(slipId: string, field: "telegramCard" | "telegramResult"): Promise<void> {
+  try {
+    await db.issuedSlip.update({ where: { id: slipId }, data: { [field]: false } });
   } catch {
-    // لاگ اختیاری
+    // آزادسازی بهترین‌تلاش
   }
 }
 
@@ -243,7 +297,12 @@ export function buildCardMessage(slip: IssuedSlip): string {
   const marketAEn = marketEnLabel(legKeys(slip.legsA)[0] ?? "");
   const marketBEn = marketEnLabel(legKeys(slip.legsB)[0] ?? "");
   const lines: string[] = [];
-  lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت الگوی طلایی اتمیک v16.0</b>`);
+  // v18.0 — نشان سطح تاج کارت (Two-Tier Crown System)
+  if (slip.crownTier === "SILVER_SHADOW") {
+    lines.push(`🥈 <b>فوتبال‌کوانت — تاج نقره‌ای سطح ۲ · شکارچی آلفای سایه (استیک نصف ۵۰ واحدی Half-Kelly)</b>`);
+  } else {
+    lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت الگوی طلایی اتمیک v18.0</b>`);
+  }
   lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
   lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
   if (slip.archetype) lines.push(`📐 الگو: ${esc(slip.archetype)}`);

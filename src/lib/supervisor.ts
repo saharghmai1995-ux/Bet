@@ -1,48 +1,51 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v16.0
-// «Hard 10.5% True-Union Risk Gate — 93% Matrix-Partition Atomic Pairs»
+// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v18.0
+// «Regime-Specific Supervisor Gates & Tier-2 Shadow Alpha Harvester»
 //
-// بازطراحی کامل بر اساس کالبدشکافی ۱۰۵ کارت تسویه‌شده نسخه ۱۵.۰ (سند ارتقا v16.0):
-//   · وین‌ریت نسخه ۱۵ به ۷۷.۱٪ افت کرد و بانک به −۴۷۸.۳ واحد رسید
-//   · ۴ باگ ریاضی شناسایی شد: شکاف ۰-۰/۰-۱ الگوهای A1/A2، سمّ لیگ‌های esp.2 و usa.1،
-//     شل شدن گیت سوپروایزر به میانگین ریسک ۲۴.۸٪ و سقف مصنوعی ضرایب min(2.35)
+// بازطراحی v18.0 (سند ارتقا): سه شرط ثابت نسخه ۱۶ (λ_Fav < ۱.۵۰ / λ_Dog > ۱.۰۵ /
+// ریسک ۱۰.۵٪) که «قبل از مسیریاب ۵ رژیم» اعمال می‌شدند، ۱۵۰ کارت ۹۰.۷٪-برد را
+// در دفتر سایه حبس کرده بودند. v18.0 ترتیب اجرا را معکوس می‌کند:
 //
-// فرمول v16.0 (حفظ ساختار + سخت‌گیری گیت):
+//   ۱) ابتدا betrouter هر ۵ رژیم (BANKER / COMBO / CORRECT_SCORE / DUAL_HEDGE /
+//      ACCUMULATOR) را برای مسابقه محاسبه می‌کند؛
+//   ۲) سپس سوپروایزر بر اساس رژیمی که بالاترین شارپ را آورده، «گیت اختصاصی همان
+//      رژیم» را اعمال می‌کند (جدول سند v18.0):
 //
-//   SupervisorScore = (CoveragePct × 3.0)
-//                   + (GuaranteedProfitPct × 1.0)
-//                   − Math.pow(JointLossRiskPct, 1.75)
+//      🎯 CORRECT_SCORE → λ_Fav ∈ [1.15, 1.85] و λ_Dog ≤ 1.15 | Top4 ≥ ۵۴٪ و H ≤ ۲.۴۸
+//      🧩 COMBO         → λ_Fav ≥ 1.35 و λ_Dog ≤ 1.25 | پوشش ≥ ۷۸٪ و شارپ ≥ ۰.۲۲
+//      🏦 BANKER        → Rλ ≥ 1.65 و احتمال پایه ≥ ۸۰٪
+//      ⚖️ DUAL_HEDGE    → ریسک ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴ (شتاب‌دهنده نامتقارن معاف از گیت سود)
 //
-// قانون طلایی تایید (Hard Safety Gate v16.0):
-//   · trueJointLossRiskPct > 10.5٪ (اجتماع دقیق خانه‌های ماتریس ۶×۶) → وتو خودکار
-//   · فاوریت برتری واضح ندارد (λ_Fav < 1.50 یا λ_Dog > 1.05) → وتو خودکار
-//   · لیگ سمّی (esp.2 / usa.1 / fifa.friendly) یا خارج لیگ‌های ساختاریافته → وتو خودکار
-//   · سود تضمینی < ۱.۵٪ → وتو
+//   ۳) سیستم دو‌سطحی تاج (Two-Tier Crown System):
+//      👑 سطح ۱ — تاج طلایی: همه شروط سخت جدول + ریسک < ۱۱.۲٪ + شارپ ≥ ۰.۲۴ → استیک کامل ۱۰۰u
+//      🥈 سطح ۲ — تاج نقره‌ای (شکارچی آلفای سایه): winProb ≥ ۸۴٪ + شارپ ≥ ۰.۱۶
+//         در لیگ معتبر → استیک نصف ۵۰u به روش Half-Kelly
+//      🚫 سطح ۳ — وتوی قرمز مطلق: لیگ سمّی یا ریسک > ۱۵٪ → فقط تسویه کاغذی دفتر سایه
 //
-// هدف سند: فقط ۲۵ تا ۳۵ بازی تراز اول که واقعاً ریسک زیر ۱۰.۵٪ دارند تایید شوند؛
-// بقیه به «دفتر سایه» (Shadow Office) منتقل می‌شوند — 🛡️ وتوشده.
-//
-// انطباق ضد گوبینگ (Anti-Gubbing):
-//   DUAL_BOOK   → استخر کاندید = زوج‌های تک‌بازی (هر تیپ در یک سایت مجزا)
-//   SINGLE_BOOK → استخر کاندید = میکس امن دو بازی (پایه بازی ۱ + متغیر بازی ۲)
+// بلک‌لیست لیگ‌های سمّی (esp.2 / usa.1 / fifa.friendly) همچنان ۱۰۰٪ برقرار است.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PortfolioPairDTO } from "./types";
 import type { ActiveLeagueRule } from "./engine/calibration";
+import type { BetTypeKey } from "./engine/betrouter";
 
 /** v8.0 — حالت اجرایی ثبت شرط (سوییچ انطباق با قوانین سایت‌های شرط‌بندی) */
 export type ExecutionMode = "DUAL_BOOK" | "SINGLE_BOOK";
 
 /**
- * v16.0 — گیت سخت وتوی سوپروایزر (Hard Risk Ceiling):
- * ریسک باخت همزمان دقیق از اجتماع خانه‌های ماتریس ۶×۶ بالاتر از ۱۰.۵٪ = وتو خودکار.
- * (نسخه ۱۵ با آستانه افسرنده ۴۵٪، ۱۰۵ بازی پرریسک با میانگین ریسک ۲۴.۸٪ را تایید فله‌ای کرد
- * و بانک را به −۴۷۸.۳ واحد رساند — سند v16.0 گیت را به ۱۰.۵٪ بازگرداند.)
+ * v18.0 — گیت‌های رژیم‌محور سوپروایزر:
+ *  · ریسک باخت همزمان برای رژیم DUAL_HEDGE تا ۱۱.۲٪ مجاز است (سند v18 — آزادسازی
+ *    کارت‌های برنده ریسک ۱۱-۱۳٪)؛ سایر رژیم‌ها روی ۱۰.۵٪ می‌مانند.
+ *  · وتوی قرمز مطلق سطح ۳: ریسک بالای ۱۵٪ همیشه وتو است (فقط دفتر کاغذی).
  */
 export const VETO_JOINT_LOSS_PCT_ATOMIC = 10.5;
+/** v18.0 — سقف ریسک رژیم DUAL_HEDGE (سند: ۱۱.۲٪) */
+export const VETO_JOINT_LOSS_PCT_DUAL_HEDGE = 11.2;
+/** v18.0 — وتوی قرمز مطلق سطح ۳ (Hard Red Veto — ریسک > ۱۵٪ فقط تسویه کاغذی) */
+export const VETO_JOINT_LOSS_PCT_HARD_RED = 15;
 /**
- * v16.0 — گیت برتری واضح فاوریت (Clear Favorite Advantage):
- * λ_Fav < 1.50 یا λ_Dog > 1.05 → بازی فاقد فاوریت قاطع = وتو خودکار.
+ * v18.0 — گیت ثابت فاوریت فقط برای رژیم‌های بدون پنجره λ اختصاصی (BANKER و کارت بدون
+ * زمینه رژیم) برقرار است؛ CORRECT_SCORE/COMBO/DUAL_HEDGE پنجره λ خودشان را دارند.
  */
 export const VETO_FAV_LAMBDA_MIN = 1.5;
 export const VETO_DOG_LAMBDA_MAX = 1.05;
@@ -73,6 +76,8 @@ export interface SupervisorScore {
   fortress: boolean;
   veto: boolean;
   vetoReason: string | null;
+  /** v18.0 — سطح تاج: GOLD (استیک کامل ۱۰۰u) / SILVER (استیک نصف ۵۰u Half-Kelly) / null */
+  tier: "GOLD" | "SILVER" | null;
 }
 
 /** جریمه توانی v11.0 — دقیقاً Math.pow(risk, 1.75) طبق سند ارتقا */
@@ -105,12 +110,30 @@ export interface SupervisorLambdaContext {
   lambdaAway: number;
 }
 
-/** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — فرمول v16.0 + گیت‌های سند + پاداش دسته */
+/**
+ * v18.0 — زمینه رژیم منتخب مسیریاب Bet-Type (خروجی routeBetTypes):
+ * سوپروایزر بر اساس همین رژیم، گیت اختصاصی همان رژیم را به‌جای گیت ثابت λ اعمال می‌کند.
+ */
+export interface SupervisorRegimeContext {
+  /** رژیم برنده مسیریاب با بالاترین شارپ (null = بدون زمینه → گیت ثابت v16) */
+  regime: BetTypeKey | null;
+  /** شارپ کاندید برنده مسیریاب (برای سطح‌بندی تاج طلایی/نقره‌ای) */
+  sharpe?: number | null;
+  /** احتمال برد کل استراتژی منتخب مسیریاب (برای سطح‌بندی نقره‌ای) */
+  winProb?: number | null;
+  /** ریسک باخت همزمان استراتژی منتخب (٪) */
+  jointLossRiskPct?: number | null;
+  /** سطح تاج اعلام‌شده مسیریاب (GOLD/SILVER/null) */
+  tier?: "GOLD" | "SILVER" | null;
+}
+
+/** امتیاز کیفیت سوپروایزر برای یک زوج کاندید — فرمول v16 + گیت‌های رژیم‌محور v18.0 */
 export function scorePair(
   p: PortfolioPairDTO,
   rule?: ActiveLeagueRule | null,
   categoryBoost?: CategoryBoost | null,
-  lambdaCtx?: SupervisorLambdaContext | null
+  lambdaCtx?: SupervisorLambdaContext | null,
+  regimeCtx?: SupervisorRegimeContext | null
 ): SupervisorScore {
   const guaranteedProfitPct = p.guaranteedMarginPct; // ٪ سود تضمینی داچینگ
   const doubleWinProbPct = p.jointStates.bothWin * 100; // ٪ برد طلایی همزمان (فقط نمایش — بدون پاداش)
@@ -131,32 +154,66 @@ export function scorePair(
   // نرمال‌سازی نمایش v16.0 — بازه خام واقعی الگوهای طلایی [−۴۸۰..+۱۲۰] → [۰..۱۰۰]
   const score100 = score100Of(raw);
 
-  // ═══ گیت سخت ایمنی v16.0 — قفل آهنین سوپروایزر (سه گیت مستقل سند) ═══
-  //  ۱) ریسک باخت همزمان دقیق ≤ ۱۰.۵٪  ۲) برتری واضح فاوریت  ۳) حاشیه داچینگ (فقط حالت سود-برابر)
+  // ═══ گیت سخت ایمنی v18.0 — گیت‌های رژیم‌محور (به‌جای گیت ثابت v16) ═══
+  //  ۱) سقف ریسک: DUAL_HEDGE → ۱۱.۲٪ | سایر رژیم‌ها → ۱۰.۵٪ | وتوی قرمز مطلق → > ۱۵٪
+  //  ۲) پنجره λ اختصاصی رژیم (CORRECT_SCORE / COMBO) یا گیت ثابت فاوریت برای BANKER/بدون زمینه
+  //  ۳) حاشیه داچینگ (فقط حالت سود-برابر — شتاب‌دهنده نامتقارن معاف)
+  const regime = regimeCtx?.regime ?? null;
+  const riskCapPct = regime === "DUAL_HEDGE" ? VETO_JOINT_LOSS_PCT_DUAL_HEDGE : VETO_JOINT_LOSS_PCT_ATOMIC;
   let veto = false;
   let vetoReason: string | null = null;
-  if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_ATOMIC) {
+  let tier: "GOLD" | "SILVER" | null = null;
+  if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_HARD_RED) {
     veto = true;
-    vetoReason = `🛡️ گیت سخت v16.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه ۱۰.۵٪ — وتو خودکار و انتقال به دفتر سایه (فقط بازی‌های تراز اول با پوشش ماتریس بالای ۹۲٪ تایید می‌شوند)`;
+    vetoReason = `🚫 وتوی قرمز مطلق v18.0 (سطح ۳): ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۵٪ — بازی واقعاً خطرناک؛ فقط تسویه کاغذی دفتر سایه`;
+  } else if (jointLossRiskPct > riskCapPct) {
+    veto = true;
+    vetoReason =
+      regime === "DUAL_HEDGE"
+        ? `🛡️ گیت رژیم‌محور v18.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۱.۲٪ رژیم DUAL_HEDGE — وتو و انتقال به دفتر سایه`
+        : `🛡️ گیت سخت v18.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه ۱۰.۵٪ — وتو خودکار و انتقال به دفتر سایه`;
   }
   if (!veto && lambdaCtx) {
-    // v16.0 — گیت برتری واضح فاوریت: λ_Fav < 1.50 یا λ_Dog > 1.05 → وتو
     const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
     const dog = Math.min(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
-    if (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX) {
+    // v18.0 — پنجره λ اختصاصی هر رژیم (جدول سند)؛ گیت ثابت فقط برای BANKER/بدون زمینه
+    if (regime === "CORRECT_SCORE") {
+      if (fav < 1.15 || fav > 1.85 || dog > 1.15) {
+        veto = true;
+        vetoReason = `🛡️ گیت خوشه نتیجه دقیق v18.0: λ_Fav=${fav.toFixed(2)} باید ∈ [1.15, 1.85] و λ_Dog=${dog.toFixed(2)} ≤ 1.15 — خوشه ۱-۰/۲-۰/۱-۱/۰-۰ فقط روی بازی‌های کم‌گل تاکتیکی صادر می‌شود`;
+      }
+    } else if (regime === "COMBO") {
+      if (fav < 1.35 || dog > 1.25) {
+        veto = true;
+        vetoReason = `🛡️ گیت کمبو v18.0: λ_Fav=${fav.toFixed(2)} باید ≥ 1.35 و λ_Dog=${dog.toFixed(2)} ≤ 1.25 — کمبو 1X&U3.5 / 1&O1.5 فقط روی فاوریت کنترل‌گر/هجومی صادر می‌شود`;
+      }
+    } else if (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX) {
       veto = true;
-      vetoReason = `🛡️ گیت فاوریت قاطع v16.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۵۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۰۵) — الگوهای طلایی فقط روی فاوریت‌های قاطع صادر می‌شوند — وتو و انتقال به دفتر سایه`;
+      vetoReason = `🛡️ گیت فاوریت قاطع v18.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۵۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۰۵) — رژیم ${regime ?? "پیش‌فرض"} فقط روی فاوریت‌های قاطع صادر می‌شود — وتو و انتقال به دفتر سایه`;
     }
   }
   if (!veto && guaranteedProfitPct < VETO_WEAK_PROFIT_PCT && !p.accelerator?.active) {
     // حاشیه داچینگ ضعیف — فقط در حالت سود-برابر کلاسیک وتو می‌شود؛
-    // v16.0 — زوج‌های شتاب‌دهنده نامتقارن از این گیت معاف‌اند (سود از تجمیس تیپ A +
-    // پاداش Double-Win می‌آید و اصل سرمایه با قفل تیپ B محافظت می‌شود — بخش ۲ سند v16.0)
+    // زوج‌های شتاب‌دهنده نامتقارن از این گیت معاف‌اند (سود از تجمیس تیپ A +
+    // پاداش Double-Win می‌آید و اصل سرمایه با قفل تیپ B محافظت می‌شود)
     veto = true;
     vetoReason =
       guaranteedProfitPct <= 0
         ? "بازار فاقد حاشیه تضمینی (S ≥ 1) — حالت بیمه سرمایه؛ سود ضعیف"
         : `سود تضمینی ${guaranteedProfitPct.toFixed(1)}٪ ضعیف‌تر از آستانه ۱.۵٪`;
+  }
+
+  // ═══ v18.0 — سطح‌بندی تاج (Two-Tier Crown System) ═══
+  if (!veto) {
+    const goldOK =
+      jointLossRiskPct < VETO_JOINT_LOSS_PCT_DUAL_HEDGE &&
+      (regimeCtx?.sharpe == null || regimeCtx.sharpe >= 0.24);
+    const silverOK =
+      !goldOK &&
+      (regimeCtx?.winProb != null
+        ? regimeCtx.winProb >= 0.84 && (regimeCtx.sharpe ?? 0) >= 0.16
+        : coveragePct / 100 >= 0.84 && (regimeCtx?.sharpe ?? 0) >= 0.16);
+    tier = goldOK ? "GOLD" : silverOK ? "SILVER" : null;
   }
 
   const fortress = !veto && jointLossRiskPct < FORTRESS_RISK_PCT;
@@ -172,6 +229,7 @@ export function scorePair(
     fortress,
     veto,
     vetoReason,
+    tier,
   };
 }
 
@@ -216,13 +274,16 @@ function shortOf(p: PortfolioPairDTO): string {
  * امتیاز الگوها اعمال می‌شود: rule.archetypeBoosts[code].
  * v11.0 — تساوئی‌ها با ریسک کمتر حل می‌شوند (اولویت کمینه‌سازی ریسک).
  * v16.0 — زمینه λ بازی برای گیت برتری واضح فاوریت (پارامتر lambdaCtx).
+ * v18.0 — زمینه رژیم منتخب مسیریاب Bet-Type (پارامتر regimeCtx): گیت اختصاصی
+ * همان رژیم جایگزین گیت ثابت λ می‌شود + سطح‌بندی تاج طلایی/نقره‌ای.
  */
 export function pickCrownPair(
   pairs: PortfolioPairDTO[],
   executionMode: ExecutionMode,
   rule?: ActiveLeagueRule | null,
   categoryBoost?: CategoryBoost | null,
-  lambdaCtx?: SupervisorLambdaContext | null
+  lambdaCtx?: SupervisorLambdaContext | null,
+  regimeCtx?: SupervisorRegimeContext | null
 ): SupervisorDecision | null {
   if (!pairs || pairs.length === 0) return null;
 
@@ -231,7 +292,10 @@ export function pickCrownPair(
   );
   const pool = modePool.length > 0 ? modePool : pairs;
 
-  const scored: ScoredCandidate[] = pool.map((pair) => ({ pair, score: scorePair(pair, rule, categoryBoost, lambdaCtx) }));
+  const scored: ScoredCandidate[] = pool.map((pair) => ({
+    pair,
+    score: scorePair(pair, rule, categoryBoost, lambdaCtx, regimeCtx),
+  }));
 
   // برنده = بالاترین امتیاز خام میان «غیر وتو شده»؛ تساوئی → ریسک کمتر.
   // اگر همه وتو شدند → کم‌ریسک‌ترین (بالاترین امتیاز) به‌عنوان کارت وتو شده نمایش داده می‌شود

@@ -236,8 +236,22 @@ function settlementProfit(
 
 /**
  * قلب موتور: بررسی همه کارت‌های در انتظار با فید FT واقعی ESPN و تسویه خودکار.
+ * v18.4 — قفل in-flight سراسری (globalThis): همه مسیرهای ورود (زمان‌بند سرور،
+ * runSync فید زنده، POST /api/settlement/sync) این تابع را صدا می‌زنند؛ بدون قفل
+ * مشترک، دو اجرای هم‌زمان هر دو اسنپ‌شات stale می‌خواندند و همان کارت را دو بار
+ * تسویه/اعلام می‌کردند — ریشه ارسال تکراری نتایج به کانال عمومی.
  */
-export async function settleFinishedSlips(options?: { notify?: boolean; /** v15.0 — پنجره جستجوی نتیجه (پیش‌فرض ۳ روز؛ بازمحاسبه Clean-Slate: ۷ روز) */ windowDays?: number }): Promise<SettlementSyncResultDTO> {
+const gSettle = globalThis as unknown as { __fqSettleInFlight?: Promise<SettlementSyncResultDTO> | null };
+
+export function settleFinishedSlips(options?: { notify?: boolean; /** v15.0 — پنجره جستجوی نتیجه (پیش‌فرض ۳ روز؛ بازمحاسبه Clean-Slate: ۷ روز) */ windowDays?: number }): Promise<SettlementSyncResultDTO> {
+  if (gSettle.__fqSettleInFlight) return gSettle.__fqSettleInFlight;
+  gSettle.__fqSettleInFlight = settleFinishedSlipsInner(options).finally(() => {
+    gSettle.__fqSettleInFlight = null;
+  });
+  return gSettle.__fqSettleInFlight;
+}
+
+async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays?: number }): Promise<SettlementSyncResultDTO> {
   const t0 = Date.now();
   const notify = options?.notify !== false;
   const windowDays = options?.windowDays ?? RESULT_WINDOW_DAYS;
@@ -639,6 +653,8 @@ export async function issueSlip(
       supervisorApproved: item.supervisorApproved !== false,
       autoIssued: opts?.autoIssued === true,
       retroIssued: item.retroIssued === true,
+      // v18.0 — سطح تاج کارت (GOLD / SILVER_SHADOW) برای حصاد آلفای دفتر سایه
+      crownTier: item.crownTier ?? null,
       supervisorScore: item.supervisorScore ?? null,
       vetoReason: item.vetoReason ?? null,
       jointLossRiskPct: item.jointLossRiskPct ?? null,
@@ -845,6 +861,7 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
     vetoReason: s.vetoReason,
     jointLossRiskPct: s.jointLossRiskPct,
     doubleWinProbPct: s.doubleWinProbPct,
+    crownTier: s.crownTier,
     espnUrl: s.espnUrl,
     status: s.status as SlipStatus,
     homeGoals: s.homeGoals,
@@ -891,7 +908,11 @@ export async function getLedger(): Promise<LedgerDTO> {
   const slipsView = slips.slice(0, 120); // سقف نمایش جدول کارنامه
   // ─── v11.0 — آمار تیتر کارنامه فقط از کارت‌های تایید سوپروایزر؛ وتوها به «دفتر سایه» می‌روند ───
   // v13.2 — کارت‌های بازخوانی (retroIssued — بازی FT پیش از صدور) از آمار اصلی حذف و به دسته ه می‌روند
-  const approvedSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued);
+  // v18.0 — کارت‌های تاج نقره‌ای (crownTier=SILVER_SHADOW) از کتاب طلایی جدا شده‌اند
+  // (افراز مجزای Two-Tier Crown — استیک ۵۰u Half-Kelly) و در silverHarvest شمرده می‌شوند.
+  const goldSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued && s.crownTier !== "SILVER_SHADOW");
+  const silverSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued && s.crownTier === "SILVER_SHADOW");
+  const approvedSlips = goldSlips;
   const retroSlips = slips.filter((s) => s.retroIssued);
   const stats: SettlementStatsDTO = {
     total: approvedSlips.length,
@@ -954,6 +975,32 @@ export async function getLedger(): Promise<LedgerDTO> {
     byStatus: shadowByStatus,
   };
 
+  // ─── v18.0 — 🥈 حصاد آلفای سایه (Tier-2 Shadow Alpha Harvester) ───
+  // کارت‌های تاج نقره‌ای سطح ۲ (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ در لیگ معتبر) که به‌جای
+  // حبس در دفتر کاغذی با استیک نصف ۵۰ واحدی Half-Kelly منتشر و تسویه واقعی شدند.
+  const silverSettledSlips = silverSlips.filter((s) => ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status));
+  const silverWins = silverSettledSlips.filter((s) => s.status !== "MIDDLE_TRAP").length;
+  const silverLosses = silverSettledSlips.length - silverWins;
+  const silverNet = silverSettledSlips.reduce((a, s) => a + (s.netProfit ?? 0), 0);
+  const SILVER_START_BANK = 1000;
+  let silverAcc = SILVER_START_BANK;
+  const silverEquityPoints = [silverAcc];
+  for (const s of [...silverSettledSlips].sort((a, b) => new Date(a.settledAt ?? 0).getTime() - new Date(b.settledAt ?? 0).getTime())) {
+    silverAcc += s.netProfit ?? 0;
+    silverEquityPoints.push(Math.round(silverAcc * 100) / 100);
+  }
+  const silverHarvest = {
+    total: silverSlips.length,
+    settled: silverSettledSlips.length,
+    wins: silverWins,
+    losses: silverLosses,
+    winRate: silverSettledSlips.length > 0 ? Math.round((silverWins / silverSettledSlips.length) * 1000) / 10 : null,
+    netProfit: Math.round(silverNet * 100) / 100,
+    equityPoints: silverEquityPoints,
+    finalBank: Math.round(silverAcc * 100) / 100,
+    roiPct: Math.round(((silverAcc - SILVER_START_BANK) / SILVER_START_BANK) * 1000) / 10,
+  };
+
   // ─── v13.2 — دفتر بازخوانی: کارت‌های چندروزه (هرگز پیش‌بازی صادر نشده) — جدا از آمار واقعی ───
   // v13.5.1 — بازخوانی با پرچم retroIssued شناسایی می‌شود (مستقل از تایید)؛ کارت بازخوانی
   // هرگز «تاییدشده» نیست — صدور پس از FT صرفاً تحلیل کاغذی است.
@@ -987,10 +1034,12 @@ export async function getLedger(): Promise<LedgerDTO> {
   // ─── v13.5 — منحنی رشد بانک ۱۰۰۰ واحدی از «تمام تاریخ» (بدون سقف take:120) ───
   // فقط کارت‌های تاییدشده غیربازخوانی تسویه‌شده — هم‌مبنا با stats؛ انتهای منحنی
   // دقیقاً با «سود خالص مجموع» تیتر برابر است (رفع باگ نمایش/محاسبه).
+  // v18.0 — کارت‌های تاج نقره‌ای از منحنی طلایی خارج شدند (منحنی مجزای silverHarvest).
   const curveRows = await db.issuedSlip.findMany({
     where: {
       supervisorApproved: true,
       retroIssued: false,
+      crownTier: { not: "SILVER_SHADOW" },
       status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
       settledAt: { not: null },
     },
@@ -1045,6 +1094,7 @@ export async function getLedger(): Promise<LedgerDTO> {
     stats,
     shadow,
     retroBook,
+    silverHarvest,
     outbox: outboxRows.map((o) => ({
       id: o.id,
       kind: o.kind,

@@ -714,6 +714,8 @@ export interface IssuedSlipDTO {
   vetoReason: string | null;
   jointLossRiskPct: number | null;
   doubleWinProbPct: number | null;
+  /** v18.0 — سطح تاج: GOLD (استیک کامل ۱۰۰u) | SILVER_SHADOW (استیک نصف ۵۰u) | null */
+  crownTier: string | null;
   espnUrl: string | null;
   status: SlipStatus;
   homeGoals: number | null;
@@ -801,6 +803,23 @@ export interface LedgerDTO {
     losses: number;
     winRate: number | null;
     netProfit: number;
+  };
+  /**
+   * v18.0 — 🥈 حصاد آلفای سایه (Tier-2 Shadow Alpha Harvester):
+   * آمار کارت‌های تاج نقره‌ای سطح ۲ که به‌جای حبس در دفتر کاغذی با استیک نصف
+   * ۵۰ واحدی Half-Kelly منتشر و تسویه واقعی شدند + منحنی بانک جداگانه.
+   */
+  silverHarvest: {
+    total: number;
+    settled: number;
+    wins: number;
+    losses: number;
+    winRate: number | null;
+    netProfit: number;
+    /** منحنی رشد بانک جداگانه کارت‌های نقره‌ای (استیک ۵۰u) — همان START_BANK=1000 */
+    equityPoints: number[];
+    finalBank: number;
+    roiPct: number;
   };
   outbox: { id: string; kind: string; ok: boolean; detail: string | null; slipHash: string | null; createdAt: string }[];
   telegram: { configured: boolean; channelSet: boolean };
@@ -925,6 +944,12 @@ export interface IssueSlipItemDTO {
   vetoReason?: string | null;
   jointLossRiskPct?: number | null;
   doubleWinProbPct?: number | null;
+  /**
+   * v18.0 — سطح تاج کارت (Two-Tier Crown System):
+   * "GOLD" = تاج طلایی سطح ۱ (استیک کامل ۱۰۰u) | "SILVER_SHADOW" = تاج نقره‌ای سطح ۲
+   * (شکارچی آلفای سایه — استیک نصف ۵۰u به روش Half-Kelly) | null = بدون سطح‌بندی
+   */
+  crownTier?: string | null;
 }
 
 /** v11.0 — آمار عملکرد یک دسته فلش‌کارت (تایید/وتو/سود۱۵/ریسک۱۰/دوبل‌وین) */
@@ -932,7 +957,7 @@ export interface CategoryPerformanceDTO {
   // v13.4 — کلیدهای فیلتر دک فلش‌کارت (RISK10/BOOSTER/PROFIT15/FORTRESS) برای «پوشش کامل عملکرد هر فیلتر» اضافه شدند
   // v13.2 — RETRO: دسته پنجم افراز مجزا — کارت‌های بازخوانی (بازی FT پیش از صدور؛ تسویه کاغذی تحلیلی)
   // v17.0 — کلیدهای عملکرد ۵ روش Bet-Type (BANKER / CS_CLUSTER) به افراز مجزا اضافه شدند
-  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER" | "RETRO" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "BANKER" | "CS_CLUSTER" | "TOTAL";
+  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER" | "RETRO" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "BANKER" | "CS_CLUSTER" | "SHADOW_ALPHA" | "TOTAL";
   label: string;
   description: string;
   total: number;
@@ -962,6 +987,15 @@ export interface CategoryPerformanceResponseDTO {
     approvedSlips: number;
     shadowSlips: number;
     note: string;
+  };
+  /** v18.0 — حصاد آلفای سایه: آمار کارت‌های تاج نقره‌ای سطح ۲ (استیک ۵۰u Half-Kelly) */
+  silverHarvest?: {
+    total: number;
+    settled: number;
+    wins: number;
+    losses: number;
+    winRate: number | null;
+    netProfit: number;
   };
   generatedAt: string;
 }

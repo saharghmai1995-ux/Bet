@@ -25,6 +25,9 @@ import {
   type OrthoContext,
 } from "@/lib/engine/orthogonal";
 import { pickCrownPair } from "@/lib/supervisor";
+// v18.0 — مسیریاب غیرخطی ۵ رژیمی: ابتدا همه رژیم‌ها محاسبه می‌شوند، سپس سوپروایزر
+// بر اساس رژیمِ بالاترین شارپ، گیت اختصاصی همان رژیم را اعمال می‌کند (جدول سند v18.0).
+import { routeBetTypes, type MarketPrices } from "@/lib/engine/betrouter";
 import { leagueGate } from "@/lib/leagues-catalog";
 import { issueSlip, settleFinishedSlips } from "./liveDataService";
 import { getActiveRules, invalidateRulesCache } from "./calibration-rules";
@@ -84,11 +87,19 @@ async function enforceDailyBroadcastQuorum(): Promise<number> {
   let promoted = 0;
   for (const c of candidates) {
     try {
+      // v18.0 — ترویج به «تاج نقره‌ای سطح ۲» (شکارچی آلفای سایه) نه تاج طلایی قلابی:
+      // استیک نصف ۵۰ واحدی Half-Kelly + نشان crownTier=SILVER_SHADOW — صادقانه‌تر و
+      // هم‌مبنا با سیستم دو‌سطحی تاج سند v18.0.
+      const halfStake = (v: number): number => Math.round(v * 0.5 * 10) / 10;
       await db.issuedSlip.update({
         where: { id: c.id },
         data: {
           supervisorApproved: true,
-          vetoReason: `⭐ ترویج سهمیه پخش روزانه v18.3: بهترین کاندیدای باقی‌مانده امروز (امتیاز ${(c.supervisorScore ?? 0).toFixed(1)}، ریسک باخت همزمان ${(c.jointLossRiskPct ?? 0).toFixed(1)}٪) — حفظ تقویم پخش در روز فاقد کارت تراز اول`,
+          crownTier: "SILVER_SHADOW",
+          stakeA: halfStake(c.stakeA),
+          stakeB: halfStake(c.stakeB),
+          guaranteedProfit: Math.max(0, halfStake(c.guaranteedProfit)),
+          vetoReason: `🥈 ترویج سطح ۲ v18.0 (شکارچی آلفای سایه): بهترین کاندیدای باقی‌مانده امروز (امتیاز ${(c.supervisorScore ?? 0).toFixed(1)}، ریسک باخت همزمان ${(c.jointLossRiskPct ?? 0).toFixed(1)}٪) با استیک ایمن ۵۰ واحدی Half-Kelly منتشر می‌شود — حفظ تقویم پخش در روز فاقد کارت تراز اول`,
         },
       });
       promoted += 1;
@@ -310,11 +321,55 @@ export async function autoSyncPastAndPresentMatches(options?: {
         // ─── v16.0 — گیت لیگ‌های سوپروایزر (بلک‌لیست لیگ‌های سمّی + وایت‌لیست ساختاریافته) ───
         const gate = leagueGate(ev.leagueSlug, ev.leagueName);
 
-        // ─── انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر (با درس کالیبراسیون + گیت λ فاوریت قاطع v16.0) ───
-        const decision = pickCrownPair(pairs, "DUAL_BOOK", rule, null, {
+        // ═══ v18.0 — گام ۱: مسیریاب غیرخطی ۵ رژیمی «قبل از» گیت سوپروایزر ═══
+        // هر ۴ روش تک‌بازی (BANKER/COMBO/CS/DUAL) با تابع مطلوبیت غیرخطی امتیاز می‌گیرند؛
+        // رژیمِ با بالاترین شارپ، گیت اختصاصی خودش را برای سوپروایزر تعیین می‌کند.
+        const routePrices: MarketPrices = priceRow
+          ? {
+              oddsHome: priceRow.oddsHome,
+              oddsDraw: priceRow.oddsDraw,
+              oddsAway: priceRow.oddsAway,
+              oddsOver25: priceRow.oddsOver25,
+              oddsUnder25: priceRow.oddsUnder25,
+            }
+          : {
+              oddsHome: match.oddsHome,
+              oddsDraw: match.oddsDraw,
+              oddsAway: match.oddsAway,
+              oddsOver25: match.oddsOver25,
+              oddsUnder25: match.oddsUnder25,
+            };
+        const router = routeBetTypes({
+          matrix: engine.dc.matrix,
           lambdaHome: engine.dc.lambdaHome,
           lambdaAway: engine.dc.lambdaAway,
+          prices: routePrices,
+          pairs,
+          league: ev.leagueName,
         });
+
+        // ─── گام ۲: انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر با گیت رژیم‌محور v18.0 ───
+        // (به‌جای گیت ثابت λ_Fav<1.50/λ_Dog>1.05 که ۱۵۰ کارت ۹۰.۷٪-برد را حبس کرده بود)
+        const regimeCtx = router.winner
+          ? {
+              regime: router.winner.key,
+              sharpe: router.winner.sharpe,
+              winProb: router.winner.winProb,
+              jointLossRiskPct: router.winner.jointLossProb * 100,
+              tier: router.tier,
+            }
+          : null;
+        const decision = pickCrownPair(
+          pairs,
+          "DUAL_BOOK",
+          rule,
+          null,
+          {
+            lambdaHome: engine.dc.lambdaHome,
+            lambdaAway: engine.dc.lambdaAway,
+          },
+          regimeCtx
+        );
         if (!decision) continue;
 
         // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
@@ -325,6 +380,14 @@ export async function autoSyncPastAndPresentMatches(options?: {
         const shadow = decision.veto || gate.veto;
 
         const crown = decision.crown;
+
+        // ═══ v18.0 — سطح‌بندی تاج کارت (Two-Tier Crown System) ═══
+        // 👑 GOLD = استیک کامل ۱۰۰u | 🥈 SILVER_SHADOW = تاج نقره‌ای سطح ۲ (استیک نصف ۵۰u
+        // به روش Half-Kelly) — به‌جای حبس در دفتر کاغذی، منتشر و تسویه واقعی می‌شود.
+        const isSilver = !shadow && (router.tier === "SILVER" || decision.score.tier === "SILVER");
+        const crownTier = shadow ? null : isSilver ? "SILVER_SHADOW" : "GOLD";
+        const silverStakeScale = 0.5;
+        const silverStakeOf = (v: number): number => Math.round(v * silverStakeScale * 10) / 10;
 
         const legsOf = (legs: string[] | undefined): SettlementLegDTO[] =>
           (legs ?? []).map((key) => ({
@@ -350,12 +413,25 @@ export async function autoSyncPastAndPresentMatches(options?: {
           oddsA: crown.totalOddsA,
           oddsB: crown.totalOddsB,
           // v16.0 — شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ → قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A
-          stakeA: crown.accelerator?.stakeA,
-          stakeB: crown.accelerator?.stakeB,
-          guaranteedProfit: crown.accelerator?.active ? (crown.accelerator.profitOnA > 0 ? crown.accelerator.profitOnA : 0) : crown.equalProfit.profit,
+          // v18.0 — تاج نقره‌ای: استیک نصف‌شده ۵۰ واحدی به روش Half-Kelly
+          stakeA: isSilver
+            ? silverStakeOf(crown.accelerator?.stakeA ?? crown.equalProfit.stakeA)
+            : crown.accelerator?.stakeA,
+          stakeB: isSilver
+            ? silverStakeOf(crown.accelerator?.stakeB ?? crown.equalProfit.stakeB)
+            : crown.accelerator?.stakeB,
+          guaranteedProfit: isSilver
+            ? silverStakeOf(crown.accelerator?.active ? (crown.accelerator.profitOnA > 0 ? crown.accelerator.profitOnA : 0) : crown.equalProfit.profit)
+            : crown.accelerator?.active
+              ? crown.accelerator.profitOnA > 0
+                ? crown.accelerator.profitOnA
+                : 0
+              : crown.equalProfit.profit,
           marginPct: crown.guaranteedMarginPct,
           archetype: crown.archetype?.short ?? null,
           archetypeCode: crown.archetype?.code ?? null,
+          // v18.0 — خط تولید Bet-Type از رژیم منتخب مسیریاب (افراز مجزای کارنامه)
+          productLine: !shadow && router.winner && router.winner.key !== "DUAL_HEDGE" ? router.winner.key : undefined,
           lambdaHome: engine.dc.lambdaHome,
           lambdaAway: engine.dc.lambdaAway,
           /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
@@ -373,6 +449,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           vetoReason: shadow ? (gate.veto ? gate.reason : decision.vetoReason) : null,
           jointLossRiskPct: decision.score.jointLossRiskPct,
           doubleWinProbPct: decision.score.doubleWinProbPct,
+          /** v18.0 — سطح تاج کارت برای حصاد آلفای دفتر سایه (GOLD / SILVER_SHADOW) */
+          crownTier,
         };
 
         const issued = await issueSlip(item, { autoIssued: true });

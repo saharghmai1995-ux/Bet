@@ -291,6 +291,11 @@ model IssuedSlip {
   jointLossRiskPct  Float?  // ٪ ریسک باخت همزمان (jointStates.bothLose × ۱۰۰) در لحظه صدور
   doubleWinProbPct  Float?  // ٪ برد طلایی همزمان (jointStates.bothWin × ۱۰۰) در لحظه صدور
 
+  // ─── v18.0 — سطح تاج (Two-Tier Crown System) ───
+  // GOLD = تاج طلایی سطح ۱ (استیک کامل ۱۰۰u) | SILVER_SHADOW = تاج نقره‌ای سطح ۲
+  // (شکارچی آلفای دفتر سایه — استیک نصف ۵۰u Half-Kelly) | null = نسخه‌های قدیمی/بدون سطح‌بندی
+  crownTier String?
+
   // ─── v10.0 — ارزش عددی نسبت به خط پیناکل (همیشه عدد دارد) ───
   pinnacleOddsA Float?   // خط شارپ واقعی پیناکل برای تیپ A (وقتی فید در دسترس باشد)
   pinnacleOddsB Float?

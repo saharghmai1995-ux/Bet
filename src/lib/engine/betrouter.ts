@@ -720,7 +720,8 @@ export function routeBetTypes(input: {
       winner: null,
       crownPairId: null,
       veto: true,
-      vetoReason: `🛡️ گیت v17.0: لیگ سمّی (${input.league}) — نوسان ساختاری بالا و غیرقابل مدل‌سازی؛ همه ۴ روش تک‌بازی وتو می‌شوند — انتقال به دفتر سایه`,
+      vetoReason: `🚫 وتوی قرمز مطلق v18.0: لیگ سمّی (${input.league}) — نوسان ساختاری بالا و غیرقابل مدل‌سازی؛ همه ۴ روش تک‌بازی وتو می‌شوند — انتقال به دفتر سایه (سطح ۳)`,
+      tier: null,
     };
   }
 
@@ -744,33 +745,125 @@ export function routeBetTypes(input: {
     c.score = rescored.score;
   }
 
-  // ═══ گیت تایید غیرخطی v17.0 (قانون تایید هوشمند سند) ═══
-  //  · کاندیدهای با شارپ واضحاً منفی (EV سوخت) کنار گذاشته می‌شوند
-  //  · تایید مبنای سند: معیار اختصاصی هر Bet-Type (eligible)
-  //  · تایید ارزش: EV > +۸٪ و Sharpe > ۰.۳۲ (قانون بازبینی مسابقات ریسک ۱۱-۱۳٪ سند)
-  const qualifying = candidates.filter(
-    (c) => c.sharpe >= -0.05 && (c.eligible || (c.ev > APPROVE_EV_MIN && c.sharpe > APPROVE_SHARPE_MIN))
-  );
+  // ═══ v18.0 — گیت اختصاصی هر رژیم (Regime-Specific Supervisor Gate) ═══
+  // وتوی ثابت λ_Fav/λ_Dog نسخه ۱۶ «قبل از مسیریابی» حذف شد؛ حالا رژیمِ برنده
+  // گیت اختصاصی خودش را دارد (جدول سند v18.0) + سقف جهانی تاج طلایی:
+  // ریسک ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴.
+  const fav = Math.max(input.lambdaHome, input.lambdaAway);
+  const dog = Math.min(input.lambdaHome, input.lambdaAway);
+  const riskPctOf = (c: BetTypeCandidate): number => c.jointLossProb * 100;
 
-  if (candidates.length === 0 || qualifying.length === 0) {
+  /** گیت اختصاصی رژیم هر کاندید — جدول سند v18.0 */
+  const regimeGatePass = (c: BetTypeCandidate): { pass: boolean; why: string } => {
+    const riskPct = riskPctOf(c);
+    switch (c.key) {
+      case "CORRECT_SCORE":
+        // مجاز برای λ_Fav ∈ [1.15, 1.85] و λ_Dog ≤ 1.15 | شرط: Top4 ≥ ۵۴٪ و آنتروپی ≤ ۲.۴۸
+        if (fav < CS_FAV_LAMBDA_MIN || fav > CS_FAV_LAMBDA_MAX || dog > CS_DOG_LAMBDA_MAX) {
+          return { pass: false, why: `λ خارج پنجره خوشه نتیجه دقیق (λ_Fav=${fav.toFixed(2)} ∈ [1.15, 1.85]؟ λ_Dog=${dog.toFixed(2)} ≤ 1.15؟)` };
+        }
+        if (structure.top4Sum < CS_TOP4_SUM_MIN_V18 || structure.entropy > CS_ENTROPY_MAX_V18) {
+          return { pass: false, why: `ساختار ماتریس برای خوشه نتیجه دقیق نامناسب (Top4=${(structure.top4Sum * 100).toFixed(0)}٪ ≥ ۵۴٪؟ H=${structure.entropy.toFixed(2)} ≤ 2.48؟)` };
+        }
+        return { pass: true, why: "خوشه نتیجه دقیق — بازی کم‌گل تاکتیکی با توزیع متمرکز" };
+      case "COMBO":
+        // مجاز برای λ_Fav ≥ 1.35 و λ_Dog ≤ 1.25 | شرط: پوشش کمبو ≥ ۷۸٪ و شارپ ≥ ۰.۲۲
+        if (fav < COMBO_FAV_LAMBDA_MIN || dog > COMBO_DOG_LAMBDA_MAX) {
+          return { pass: false, why: `λ خارج پنجره کمبو (λ_Fav=${fav.toFixed(2)} ≥ 1.35؟ λ_Dog=${dog.toFixed(2)} ≤ 1.25؟)` };
+        }
+        if (c.winProb < COMBO_COVERAGE_MIN_V18 || c.sharpe < COMBO_SHARPE_MIN_V18) {
+          return { pass: false, why: `پوشش/شارپ کمبو کافی نیست (پوشش=${(c.winProb * 100).toFixed(0)}٪ ≥ ۷۸٪؟ شارپ=${c.sharpe.toFixed(2)} ≥ 0.22؟)` };
+        }
+        return { pass: true, why: "کمبوی رسمی — فاوریت کنترل‌گر با پوشش ≥ ۷۸٪" };
+      case "BANKER":
+        // مجاز برای rLambda ≥ 1.65 و احتمال پایه ≥ ۸۰٪
+        if (structure.rLambda < BANKER_R_LAMBDA_MIN_V18 || c.mainProb < BANKER_BASE_PROB_MIN_V18) {
+          return { pass: false, why: `عدم تقارن/احتمال پایه کافی نیست (Rλ=${structure.rLambda.toFixed(2)} ≥ 1.65؟ P=${(c.mainProb * 100).toFixed(0)}٪ ≥ ۸۰٪؟)` };
+        }
+        return { pass: true, why: "بنکر امن — فاوریت قاطع با عدم تقارن بالا" };
+      case "DUAL_HEDGE":
+        // شرط: ریسک باخت همزمان ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴ (شتاب‌دهنده نامتقارن از گیت سود معاف است)
+        if (riskPct > DUAL_HEDGE_RISK_PCT_MAX_V18 || c.sharpe < DUAL_HEDGE_SHARPE_MIN_V18) {
+          return { pass: false, why: `ریسک/شارپ زوج‌تیپ کافی نیست (ریسک=${riskPct.toFixed(1)}٪ ≤ ۱۱.۲٪؟ شارپ=${c.sharpe.toFixed(2)} ≥ 0.24؟)` };
+        }
+        return { pass: true, why: "زوج‌تیپ متعامد — ریسک ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴" };
+      default:
+        return { pass: false, why: "رژیم نامشخص" };
+    }
+  };
+
+  const riskCap = (c: BetTypeCandidate): boolean => riskPctOf(c) <= GOLD_RISK_PCT_MAX;
+  const eliteValue = (c: BetTypeCandidate): boolean => c.ev > APPROVE_EV_MIN && c.sharpe > APPROVE_SHARPE_MIN;
+
+  /** 👑 سطح ۱ — تاج طلایی: گیت اختصاصی رژیم + سقف جهانی ریسک + کف شارپ ۰.۲۴ */
+  const goldPass = (c: BetTypeCandidate): boolean =>
+    riskCap(c) && c.sharpe >= GOLD_SHARPE_MIN && (regimeGatePass(c).pass || eliteValue(c));
+
+  /** 🥈 سطح ۲ — شکارچی آلفای سایه: winProb ≥ ۸۴٪ + شارپ ≥ ۰.۱۶ + ریسک ≤ ۱۵٪ (لیگ معتبر) */
+  const silverPass = (c: BetTypeCandidate): boolean =>
+    riskPctOf(c) <= HARD_RED_VETO_RISK_PCT &&
+    c.winProb >= SILVER_WIN_PROB_MIN &&
+    c.sharpe >= SILVER_SHARPE_MIN;
+
+  // برچسب‌گذاری تاج همه کاندیدها (شفافیت کامل تصمیم سطح‌بندی‌شده)
+  for (const c of candidates) {
+    c.tier = goldPass(c) ? "GOLD" : silverPass(c) ? "SILVER" : null;
+  }
+
+  const gold = candidates.filter((c) => c.tier === "GOLD");
+  const silver = candidates.filter((c) => c.tier === "SILVER");
+
+  // 🚫 وتوی قرمز مطلق سطح ۳ — همه کاندیدها ریسک بالای ۱۵٪ دارند → فقط دفتر کاغذی
+  if (candidates.length === 0 || (gold.length === 0 && silver.length === 0)) {
+    const worstRisk = candidates.length > 0 ? Math.max(...candidates.map(riskPctOf)) : 0;
+    const reason =
+      candidates.length === 0
+        ? "🛡️ گیت v18.0: هیچ‌یک از ۴ روش تک‌بازی (Banker / Combo / Correct Score / Dual-Hedge) کاندید ساختاری معتبری ساخت — بازی پرنوسان؛ انتقال به دفتر سایه"
+        : worstRisk > HARD_RED_VETO_RISK_PCT
+          ? `🚫 وتوی قرمز مطلق v18.0: کمترین سناریوی کیفیت ریسک ${worstRisk.toFixed(1)}٪ بالای سقف ۱۵٪ دارد — سطح ۳ (فقط تسویه کاغذی دفتر سایه)`
+          : "🛡️ گیت v18.0: هیچ رژیمی گیت اختصاصی خود (جدول سند) و هیچ کاندیدی آستانه تاج نقره‌ای (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶) را پاس نکرد — انتقال به دفتر سایه";
     return {
       structure,
-      candidates: [],
+      candidates,
       winnerVariantId: null,
       winner: null,
       crownPairId: null,
       veto: true,
-      vetoReason: "🛡️ گیت v17.0: هیچ‌یک از ۴ روش تک‌بازی (Banker / Combo / Correct Score / Dual-Hedge) آستانه کیفیت غیرخطی را پاس نکرد — بازی پرنوسان؛ انتقال به دفتر سایه",
+      vetoReason: reason,
+      tier: null,
     };
   }
 
-  const best = qualifying.reduce((a, b) => (b.score > a.score ? b : a));
+  // ═══ سطح‌بندی نهایی: تاج طلایی اولویت مطلق دارد؛ در نبود طلایی، بهترین نقره‌ای
+  // به‌جای حبس در دفتر سایه با استیک نصف ۵۰ واحدی (Half-Kelly) منتشر می‌شود ═══
+  const useSilver = gold.length === 0 && silver.length > 0;
+  const pool = useSilver ? silver : gold;
+  const best = pool.reduce((a, b) => (b.score > a.score ? b : a));
 
-  // قانون تایید هوشمند: شارپ ضعیف در بهترین روش → بررسی امکان تایید با روش دیگر
+  if (useSilver) {
+    // 🥈 تاج نقره‌ای — استیک نصف‌شده ۵۰ واحدی به روش Half-Kelly
+    const scale = 0.5;
+    best.stakeMain = Math.round(best.stakeMain * scale * 10) / 10;
+    best.stakeCover = Math.round(best.stakeCover * scale * 10) / 10;
+    best.guaranteedProfitUnits = Math.round(best.guaranteedProfitUnits * scale * 10) / 10;
+    best.rationale = `${best.rationale} — 🥈 تایید سطح ۲ (شکارچی آلفای سایه — استیک ایمن ۵۰ واحدی به روش Half-Kelly): winProb ${(best.winProb * 100).toFixed(1)}٪ و شارپ ${best.sharpe.toFixed(2)} در لیگ معتبر؛ به‌جای حبس در دفتر سایه با استیک نیم‌مقیاس منتشر می‌شود`;
+    return {
+      structure,
+      candidates,
+      winnerVariantId: best.variantId,
+      winner: best,
+      crownPairId: best.pairId ?? null,
+      veto: false,
+      vetoReason: null,
+      tier: "SILVER",
+    };
+  }
+
+  // قانون تایید هوشمند v17 (حفظ‌شده): شارپ ضعیف در بهترین روش → بررسی امکان تایید با روش دیگر
   if (best.sharpe < APPROVE_SHARPE_MIN || best.ev < APPROVE_EV_MIN) {
-    const eliteEligible = qualifying.filter((c) => c.ev > APPROVE_EV_MIN && c.sharpe > APPROVE_SHARPE_MIN);
+    const eliteEligible = gold.filter((c) => eliteValue(c));
     if (eliteEligible.length === 0) {
-      // تایید مبنای سند — معیار اختصاصی Bet-Type (پوشش/آنتروپی/همبستگی) برنده است
+      // تایید مبنای سند — گیت اختصاصی رژیم برنده است
       return {
         structure,
         candidates,
@@ -779,6 +872,7 @@ export function routeBetTypes(input: {
         crownPairId: best.pairId ?? null,
         veto: false,
         vetoReason: null,
+        tier: "GOLD",
       };
     }
     const bestEligible = eliteEligible.reduce((a, b) => (b.score > a.score ? b : a));
@@ -790,6 +884,7 @@ export function routeBetTypes(input: {
       crownPairId: bestEligible.pairId ?? null,
       veto: false,
       vetoReason: null,
+      tier: "GOLD",
     };
   }
 
@@ -801,6 +896,7 @@ export function routeBetTypes(input: {
     crownPairId: best.pairId ?? null,
     veto: false,
     vetoReason: null,
+    tier: "GOLD",
   };
 }
 

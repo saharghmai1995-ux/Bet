@@ -53,7 +53,18 @@ export function supervisorFor(
     portfolio.primary?.lambdaHome && portfolio.primary?.lambdaAway
       ? { lambdaHome: portfolio.primary.lambdaHome, lambdaAway: portfolio.primary.lambdaAway }
       : null;
-  return pickCrownPair(portfolio.pairs, executionMode, rule, categoryBoost, lambdaCtx);
+  // v18.0 — زمینه رژیم منتخب مسیریاب: گیت اختصاصی همان رژیم جایگزین گیت ثابت λ می‌شود
+  const router = routerFor(portfolio);
+  const regimeCtx = router?.winner
+    ? {
+        regime: router.winner.key,
+        sharpe: router.winner.sharpe,
+        winProb: router.winner.winProb,
+        jointLossRiskPct: router.winner.jointLossProb * 100,
+        tier: router.tier,
+      }
+    : null;
+  return pickCrownPair(portfolio.pairs, executionMode, rule, categoryBoost, lambdaCtx, regimeCtx);
 }
 
 /**
@@ -164,8 +175,13 @@ export function buildFlashcard(
   const routerVeto = router ? router.veto : (supervisor?.veto ?? false);
   const vetoReason = router ? router.vetoReason : (supervisor?.vetoReason ?? null);
 
+  // ═══ v18.0 — سطح‌بندی تاج کارت (Two-Tier Crown System) ═══
+  const crownTier = routerVeto ? null : ((router?.tier ?? supervisor?.score.tier ?? null) as "GOLD" | "SILVER" | null);
+
   let trust: FlashcardView["trust"] = { kind: "SILVER", label: "پوشش استاندارد" };
-  if (!routerVeto && winner) {
+  if (!routerVeto && winner && crownTier === "SILVER") {
+    trust = { kind: "SILVER", label: `🥈 تاج نقره‌ای سطح ۲ — شکارچی آلفای سایه · استیک نصف ۵۰ واحدی Half-Kelly` };
+  } else if (!routerVeto && winner) {
     const sc = winner.score;
     trust =
       sc >= 60
@@ -222,15 +238,19 @@ export function buildFlashcard(
         }
       : null,
     routerVeto,
+    crownTier,
   };
 }
 
-/** همه فلش‌کارت‌های آماده — هر بازی با «استراتژی منتخب سوپروایزر (Bet-Type برنده غیرخطی)» */
+/** همه فلش‌کارت‌های آماده — هر بازی با «استراتژی منتخب سوپروایزر (Bet-Type برنده غیرخطی)»
+ *  v18.0 — سوییچ تاج نقره‌ای: وقتی shadowHarvestOn خاموش باشد، کارت‌های سطح ۲ (نقره‌ای)
+ *  از دک حذف می‌شوند و فقط تاج‌های طلایی سطح ۱ نمایش داده می‌شوند. */
 export function useFlashcards(): FlashcardView[] {
   const matches = useQuantStore((s) => s.matches);
   const autopilot = useQuantStore((s) => s.autopilot);
   const executionMode = useQuantStore((s) => s.config.executionMode);
   const activeRules = useQuantStore((s) => s.activeRules);
+  const shadowHarvestOn = useQuantStore((s) => s.config.shadowHarvestOn);
   return useMemo(() => {
     const out: FlashcardView[] = [];
     for (const m of matches) {
@@ -238,10 +258,13 @@ export function useFlashcards(): FlashcardView[] {
       if (!st?.portfolio?.pairs?.length) continue;
       const sup = supervisorFor(st.portfolio, executionMode, activeRules.find((r) => r.league === m.league) ?? null, m.league);
       if (!sup) continue;
-      out.push(buildFlashcard(m, sup.crown, st.debate, st.lineup, st.portfolio, sup));
+      const card = buildFlashcard(m, sup.crown, st.debate, st.lineup, st.portfolio, sup);
+      // v18.0 — فیلتر تاج نقره‌ای: خاموشی سوییچ = فقط تاج‌های طلایی
+      if (!shadowHarvestOn && card.crownTier === "SILVER") continue;
+      out.push(card);
     }
     return out;
-  }, [matches, autopilot, executionMode, activeRules]);
+  }, [matches, autopilot, executionMode, activeRules, shadowHarvestOn]);
 }
 
 /** آمار کارایی سوپروایزر برای ویجت هیرو (تایید / وتو) — v17.0 با گیت غیرخطی */
