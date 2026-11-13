@@ -625,32 +625,31 @@ async function repairPrematureCardFlags(): Promise<number> {
       take: 40,
     });
     if (flagged.length === 0) return 0;
-    const sends = await db.telegramOutbox.findMany({
-      where: { kind: { in: ["CARD", "FUNNEL_GIFT", "FUNNEL_TEASER"] }, slipId: { not: null }, ok: true },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-      select: { slipId: true, createdAt: true },
-    });
-    const lastSend = new Map<string, Date>();
-    for (const s of sends) {
-      if (s.slipId && !lastSend.has(s.slipId)) lastSend.set(s.slipId, s.createdAt);
-    }
     let repaired = 0;
     for (const slip of flagged) {
-      const sentAt = lastSend.get(slip.id);
-      if (!sentAt) {
+      // v18.3 — جست‌وجوی هدفمند per-slip به‌جای پنجره ۲۰۰ رکوردی سراسری:
+      // در روزهای شلوغ (تبلیغات ساعتی + خبرها + درس‌ها) رکورد ارسال موفق کارت از
+      // پنجره ۲۰۰تایی خارج می‌شد → lastSend تهی → پرچم بی‌دلیل ریست → کارت دوباره
+      // به کانال می‌رفت (ریشه ارسال تکراری فلش‌کارت). حالا رکورد واقعی آخرین ارسال
+      // همان اسلیپ مستقیم پرس‌وجو می‌شود — دقیق و ضدتکرار.
+      const lastSend = await db.telegramOutbox.findFirst({
+        where: { slipId: slip.id, kind: { in: ["CARD", "FUNNEL_GIFT", "FUNNEL_TEASER"] }, ok: true },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+      if (!lastSend) {
         // پرچم خورده ولی هیچ ارسال موفقی ثبت نشده — قطعاً پیش‌ماتره یا خطای نیمه‌کاره
         await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: false } });
         repaired += 1;
         continue;
       }
       const day = tehranDayRange(slip.kickoff);
-      if (sentAt.getTime() < day.start.getTime() || sentAt.getTime() >= day.end.getTime()) {
+      if (lastSend.createdAt.getTime() < day.start.getTime() || lastSend.createdAt.getTime() >= day.end.getTime()) {
         await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: false } });
         repaired += 1;
       }
     }
-    if (repaired > 0) console.log(`[telegram] v16 premature-card repair: ${repaired} flags reset for match-day re-broadcast`);
+    if (repaired > 0) console.log(`[telegram] v18.3 premature-card repair: ${repaired} flags reset for match-day re-broadcast`);
     return repaired;
   } catch (err) {
     console.warn("premature card repair failed:", err instanceof Error ? err.message : err);
@@ -1694,9 +1693,14 @@ export async function sendBetTermLesson(force = false, slot = 0): Promise<{ ok: 
   const chatId = await publicChannelId();
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
+  // v18.3 — کلید استمپ per-slot: ریشه باگ «ارسال تکراری هر ۹۰ ثانیه در کانال عمومی»
+  // قبلاً هر دو اسلات روی یک کلید مشترک می‌نوشتند؛ اسلات ۱ استمپ اسلات ۰ را بازنویسی
+  // می‌کرد و برعکس → پینگ‌پنگ بی‌پایان هر تیک. حالا هر اسلات کلید اختصاصی دارد
+  // (با فالبک به کلید قدیمی برای مهاجرت نرم — اسلاتی که امروز ارسال شده دوباره نمی‌رود).
   const stamp = `${tehranDayKey()}:${slot}`;
+  const stampKey = `${KEY_EDU_LAST}:${slot}`;
   if (!force) {
-    const last = await getSetting(KEY_EDU_LAST);
+    const last = (await getSetting(stampKey)) ?? (await getSetting(KEY_EDU_LAST));
     if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
   }
 
@@ -1723,7 +1727,7 @@ export async function sendBetTermLesson(force = false, slot = 0): Promise<{ ok: 
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `bet-lesson-${(dayIndex + slot) % BET_TERMS.length}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
-    await setSetting(KEY_EDU_LAST, stamp);
+    await setSetting(stampKey, stamp);
     await logOutbox(null, "BET_TERM", true, `public:${chatId}:${term.term}`);
   }
   return { ok, detail: ok ? `lesson-sent:${term.term}` : "send-failed" };
@@ -1740,9 +1744,11 @@ export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: b
   const chatId = await publicChannelId();
   if (!chatId) return { ok: false, detail: "NO_PUBLIC_CHANNEL" };
 
+  // v18.3 — کلید استمپ per-slot (رفع پینگ‌پنگ ارسال تکراری خبرها — همان ریشه باگ آکادمی BET)
   const stamp = `${tehranDayKey()}:${slot}`;
+  const stampKey = `${KEY_NEWS_LAST}:${slot}`;
   if (!force) {
-    const last = await getSetting(KEY_NEWS_LAST);
+    const last = (await getSetting(stampKey)) ?? (await getSetting(KEY_NEWS_LAST));
     if (last === stamp) return { ok: false, detail: "ALREADY_SENT_THIS_SLOT" };
   }
 
@@ -1776,7 +1782,7 @@ export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: b
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `news-board-${tehranDayKey()}-${slot}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
-    await setSetting(KEY_NEWS_LAST, stamp);
+    await setSetting(stampKey, stamp);
     await logOutbox(null, "FOOTBALL_NEWS", true, `public:${chatId}:items=${Math.min(6, items.length)}:fa=1`);
   }
   return { ok, detail: ok ? `news-sent:${items.length} headlines:fa-translated` : "send-failed" };
@@ -1863,9 +1869,9 @@ export async function sendWeeklyDigest(force = false): Promise<{ ok: boolean; de
   return { ok: okAny, detail: okAny ? `weekly-sent:settled=${settled}:net=${net.toFixed(1)}` : "send-failed" };
 }
 
-/** وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5 + v18.0) */
+/** وضعیت خط لوله کانال‌ها برای کنسول ایجنت مدیر کانال (v13.5 + v18.0 + v18.3 per-slot) */
 export async function funnelStatus() {
-  const [pub, vip, radarDay, pnlDay, giftDay, lastAd, digestDay, briefDay, eduStamp, newsStamp, weeklyWeek, stats] = await Promise.all([
+  const [pub, vip, radarDay, pnlDay, giftDay, lastAd, digestDay, briefDay, eduStamp0, eduStamp1, newsStamp0, newsStamp1, weeklyWeek, stats] = await Promise.all([
     publicChannelId(),
     channelId(),
     getSetting(KEY_FUNNEL_RADAR_DAY),
@@ -1874,8 +1880,10 @@ export async function funnelStatus() {
     getSetting(KEY_MARKETING_LAST_AD),
     getSetting(KEY_LAST_DIGEST_DAY),
     getSetting(KEY_VIP_BRIEF_DAY),
-    getSetting(KEY_EDU_LAST),
-    getSetting(KEY_NEWS_LAST),
+    getSetting(`${KEY_EDU_LAST}:0`),
+    getSetting(`${KEY_EDU_LAST}:1`),
+    getSetting(`${KEY_NEWS_LAST}:0`),
+    getSetting(`${KEY_NEWS_LAST}:1`),
     getSetting(KEY_WEEKLY_LAST),
     funnelRadarStats(),
   ]);
@@ -1891,10 +1899,10 @@ export async function funnelStatus() {
     giftSentToday: giftDay === tehranDayKey(),
     digestSentToday: digestDay === tehranDayKey(),
     briefSentToday: briefDay === tehranDayKey(),
-    lastEduStamp: eduStamp,
-    eduSentThisSlot: eduStamp != null && eduStamp.startsWith(`${tehranDayKey()}:`),
-    lastNewsStamp: newsStamp,
-    newsSentThisSlot: newsStamp != null && newsStamp.startsWith(`${tehranDayKey()}:`),
+    lastEduStamps: [eduStamp0, eduStamp1],
+    eduSentThisSlot: [eduStamp0, eduStamp1].some((s) => s != null && s.startsWith(`${tehranDayKey()}:`)),
+    lastNewsStamps: [newsStamp0, newsStamp1],
+    newsSentThisSlot: [newsStamp0, newsStamp1].some((s) => s != null && s.startsWith(`${tehranDayKey()}:`)),
     weeklySentThisWeek: weeklyWeek != null && weeklyWeek.length > 0,
     lastWeeklyWeek: weeklyWeek,
     lastAdStamp: lastAd,

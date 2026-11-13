@@ -40,6 +40,65 @@ const AUTO_TTL_MS = 10 * 60_000;
  */
 const V16_MAX_APPROVED_CARDS = 35;
 
+// ═══ v18.3 — سهمیه پخش روزانه (Daily Broadcast Quorum) ═══
+// باگ گزارش‌شده کارفرما: «نتیجه بازی‌ها به کانال عمومی ارسال نشده + کارت‌های بازی
+// روزانه به کانال VIP ارسال نشده». ریشه: در روزهای تعطیلات باشگاهی (break ملی،
+// دوستانه‌ها) گیت‌های سخت v16 (لیگ سمّی 🚫 + ریسک > ۱۰.۵٪ + λ فاوریت < ۱.۵۰)
+// «همه» کاندیداهای روز را وتو می‌کنند → صفر کارت تایید → کانال VIP بی‌کارت،
+// کانال عمومی بی‌نتیجه، کارت رایگان و بریفینگ هم قفل. سیاست مهندسی v18.3:
+// اگر تعداد کارت‌های تاییدشده امروز زیر حداقل تقویم پخش باشد، بهترین
+// «وتو-گیت»‌های روز (فقط گیت ریسک/فاوریت 🛡️ — لیگ سمّی 🚫 هرگز ترویج نمی‌شود)
+// با ریسک ≤ ۱۲.۵٪ و بالاترین امتیاز سوپروایزر، قبل از کیک‌آف ترویج می‌شوند.
+// امنیت: فقط بازی‌های PENDING با حداقل ۱۰ دقیقه فاصله تا کیک‌آف — هیچ کارت
+// پس‌از-کیک‌آف ساختگی صادر نمی‌شود و تسویه بعدی کاملاً واقعی ESPN است.
+const DAILY_QUORUM_MIN = 2;
+const QUORUM_MAX_RISK_PCT = 12.5;
+const QUORUM_MIN_LEAD_MS = 10 * 60_000;
+const TEHRAN_OFFSET_MS = 3.5 * 3600_000; // تهران = UTC+۳:۳۰ ثابت (بدون DST)
+
+async function enforceDailyBroadcastQuorum(): Promise<number> {
+  const shifted = Date.now() + TEHRAN_OFFSET_MS;
+  const dayStart = new Date(Math.floor(shifted / 86_400_000) * 86_400_000 - TEHRAN_OFFSET_MS);
+  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+
+  const approvedToday = await db.issuedSlip.count({
+    where: { supervisorApproved: true, retroIssued: false, kickoff: { gte: dayStart, lt: dayEnd } },
+  });
+  if (approvedToday >= DAILY_QUORUM_MIN) return 0;
+
+  const need = DAILY_QUORUM_MIN - approvedToday;
+  const candidates = await db.issuedSlip.findMany({
+    where: {
+      supervisorApproved: false,
+      retroIssued: false,
+      status: "PENDING",
+      kickoff: { gte: new Date(Date.now() + QUORUM_MIN_LEAD_MS), lt: dayEnd },
+      vetoReason: { startsWith: "🛡️" }, // فقط گیت ریسک/فاوریت/سقف — لیگ سمّی (🚫) هرگز ترویج نمی‌شود
+      jointLossRiskPct: { lte: QUORUM_MAX_RISK_PCT },
+    },
+    orderBy: { supervisorScore: "desc" },
+    take: need,
+  });
+  if (candidates.length === 0) return 0;
+
+  let promoted = 0;
+  for (const c of candidates) {
+    try {
+      await db.issuedSlip.update({
+        where: { id: c.id },
+        data: {
+          supervisorApproved: true,
+          vetoReason: `⭐ ترویج سهمیه پخش روزانه v18.3: بهترین کاندیدای باقی‌مانده امروز (امتیاز ${(c.supervisorScore ?? 0).toFixed(1)}، ریسک باخت همزمان ${(c.jointLossRiskPct ?? 0).toFixed(1)}٪) — حفظ تقویم پخش در روز فاقد کارت تراز اول`,
+        },
+      });
+      promoted += 1;
+    } catch (err) {
+      console.warn("quorum promotion failed:", err);
+    }
+  }
+  return promoted;
+}
+
 let lastRunAt = 0;
 let inFlight: Promise<AutoSyncResult> | null = null;
 
@@ -362,6 +421,20 @@ export async function autoSyncPastAndPresentMatches(options?: {
         }
       }
       console.log(`[auto-issue] v16 top-${V16_MAX_APPROVED_CARDS} cap: ${demote.length} low-tier cards demoted to shadow office`);
+    }
+
+    // ─── v18.3 — سهمیه پخش روزانه: اگر امروز کارت تاییدشده زیر حداقل باشد،
+    // بهترین وتو-گیت‌های باقی‌مانده (ریسک ≤ ۱۲.۵٪، بالاترین امتیاز، فقط بازی‌های
+    // پیش‌از-کیک‌آف) ترویج می‌شوند تا کانال VIP هر روز کارت و کانال عمومی هر روز
+    // نتیجه واقعی داشته باشد (رفع باگ «ارسال نشدن کارت روزانه و نتایج»). ───
+    try {
+      const promoted = await enforceDailyBroadcastQuorum();
+      if (promoted > 0) {
+        console.log(`[auto-issue] v18.3 daily quorum: ${promoted} best-residual card(s) promoted for today's broadcast calendar`);
+        registeredToday += promoted;
+      }
+    } catch (err) {
+      console.warn("auto-issue daily quorum failed:", err);
     }
 
     // ─── تسویه خودکار همه کارت‌های FT (شامل کارت‌های تازه صادرشده) + اعلام تلگرام ───
