@@ -44,11 +44,18 @@ const MARKETING_END_HOUR = 23;
 interface SchedulerState {
   timer: ReturnType<typeof setInterval> | null;
   busy: boolean;
+  /** v18.1 — آخرین تیک موفق؛ نگهبان همیشه‌گرم روی این نگه می‌شود */
+  lastTickAt: number;
+  /** v18.1 — تایمر نگهبان: اگر حلقه اصلی بمیرد، خودکار ری‌استارت می‌کند */
+  watchdog: ReturnType<typeof setInterval> | null;
 }
 
 const g = globalThis as unknown as { __fqSchedulerState?: SchedulerState };
-g.__fqSchedulerState = g.__fqSchedulerState ?? { timer: null, busy: false };
+g.__fqSchedulerState = g.__fqSchedulerState ?? { timer: null, busy: false, lastTickAt: 0, watchdog: null };
 const state = g.__fqSchedulerState;
+
+const WATCHDOG_INTERVAL_MS = 60_000;
+const STALE_TICK_MS = 6 * 60_000; // بیش از ۵ تیک جاافتاده = حلقه مرده → ری‌استارت خودکار
 
 /** ساعت، دقیقه و روز هفته فعلی به وقت تهران (weekday: 0=یکشنبه … 6=شنبه) */
 function tehranNow(): { hour: number; minute: number; dateKey: string; weekday: number } {
@@ -75,8 +82,21 @@ function tehranNow(): { hour: number; minute: number; dateKey: string; weekday: 
 async function runTick(): Promise<void> {
   if (state.busy) return;
   state.busy = true;
-  const st = getSchedulerStatus();
   try {
+    try {
+      await tickBody();
+    } catch (err) {
+      // v18.1 — هیچ خطایی حلقه را نمی‌کشد؛ نگهبان همیشه‌گرم ادامه می‌دهد
+      console.warn("[scheduler] tick error (loop kept alive):", err instanceof Error ? err.message : err);
+    }
+    state.lastTickAt = Date.now();
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function tickBody(): Promise<void> {
+  const st = getSchedulerStatus();
     // ─── ۱) خط لوله کامل بدون مرورگر: اسکن → صدور → تسویه → یادگیری → اعلام ───
     const { autoSyncPastAndPresentMatches } = await import("./auto-issue");
     try {
@@ -180,9 +200,6 @@ async function runTick(): Promise<void> {
 
     patchSchedulerStatus({ lastTickAt: Date.now(), tickCount: st.tickCount + 1 });
     await setSetting("scheduler_last_tick", new Date().toISOString()).catch(() => undefined);
-  } finally {
-    state.busy = false;
-  }
 }
 
 function tehranNowKey(ms: number): string {
@@ -201,6 +218,7 @@ export function startScheduler(): void {
   if (state.timer) return;
   const st = getSchedulerStatus();
   patchSchedulerStatus({ active: true, startedAt: st.startedAt ?? Date.now() });
+  state.lastTickAt = Date.now();
 
   // نخستین پاس با تأخیر کوتاه (اجازه دهیم DB و شبکه آماده شوند)
   setTimeout(() => {
@@ -211,13 +229,32 @@ export function startScheduler(): void {
     void runTick();
   }, TICK_INTERVAL_MS);
 
-  console.log(`[scheduler] v10.0 server automation active — tick every ${TICK_INTERVAL_MS / 1000}s (browser-independent)`);
+  // v18.1 — نگهبان همیشه‌گرم: موتور هسته هرگز مرده نمی‌ماند و به مرورگر وابسته نیست
+  if (!state.watchdog) {
+    state.watchdog = setInterval(() => {
+      const idle = Date.now() - state.lastTickAt;
+      if (idle > STALE_TICK_MS && !state.busy) {
+        console.warn(`[scheduler] watchdog: automation loop stale ${Math.round(idle / 1000)}s — self-restart (always-warm guarantee)`);
+        if (state.timer) clearInterval(state.timer);
+        state.timer = setInterval(() => {
+          void runTick();
+        }, TICK_INTERVAL_MS);
+        void runTick();
+      }
+    }, WATCHDOG_INTERVAL_MS);
+  }
+
+  console.log(`[scheduler] v18.1 server automation active — tick every ${TICK_INTERVAL_MS / 1000}s (browser-independent + always-warm watchdog)`);
 }
 
 export function stopScheduler(): void {
   if (state.timer) {
     clearInterval(state.timer);
     state.timer = null;
+  }
+  if (state.watchdog) {
+    clearInterval(state.watchdog);
+    state.watchdog = null;
   }
   patchSchedulerStatus({ active: false });
 }

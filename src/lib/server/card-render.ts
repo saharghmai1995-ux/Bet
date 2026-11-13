@@ -188,8 +188,396 @@ function seeded(seed: number): () => number {
  *   · چمن با نوارهای تخت (flat stripes) و خطوط ۹۰ درجه — پرسپکتیو حذف شد
  *   · فایرورک پیکسلی (WIN/DOUBLE_WIN) · باران پیکسلی (LOSS)
  *   · لایه CRT: scanline + vignette روی کل پوستر (احساس مانیتور آرکید)
- * تمام متن‌ها انگلیسی خالص (منع متن فارسی در تصویر).
+ * v18.1 — موتور نمادهای ورزشی موضوع‌محور (Sports Symbol Topic Engine):
+ *   · پس‌زمینه هر پوستر با نمادهای ورزشی مرتبط با «موضوع همان پست» تزئین می‌شود
+ *     (توپ، تور دروازه، پرچم کرنر، سوت، کفش، پیراهن، تابلو امتیاز، جام، دسته بازی،...)
+ *   · نشان بزرگ موضوع (Topic Emblem) در آسمان + پراکندگی نمادهای کوچک روی سکو/چمن
+ *   · توضیح کامل انگلیسی موضوع (Topic Brief) روی خود پوستر چاپ می‌شود
+ * تمام متن‌ها انگلیسی خالص (منع مطلق متن فارسی در تصویر).
  */
+
+/** v18.1 — موضوع هر پست برای انتخاب نمادهای پس‌زمینه */
+export type PosterTopic =
+  | "MATCH"
+  | "RESULT_WIN"
+  | "RESULT_LOSS"
+  | "RESULT_JACKPOT"
+  | "DAILY"
+  | "LADDER"
+  | "WINRATE"
+  | "COMBO"
+  | "SNIPER"
+  | "TEASER"
+  | "RADAR"
+  | "AD"
+  | "LESSON"
+  | "NEWS"
+  | "BRIEF"
+  | "WEEKLY";
+
+// ═════════ v18.1 — کتابخانه نمادهای پیکسلی ورزشی (کاملاً rect — بدون path) ═════════
+
+function px(x: number, y: number, w: number, h: number, fill: string, op = 1): string {
+  return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}"${op < 1 ? ` opacity="${op.toFixed(2)}"` : ""}/>`;
+}
+
+/** توپ فوتبال پیکسلی — هسته + حلقه ۸تایی + وصله‌های تیره */
+function pixelBall(cx: number, cy: number, r: number, color: string): string {
+  const u = Math.max(2, r / 5);
+  const p = (dx: number, dy: number, mul = 1) =>
+    px(cx + dx * u - u * mul * 0.5, cy + dy * u - u * mul * 0.5, u * mul, u * mul, color);
+  return [
+    p(0, 0, 3),
+    p(1, 0, 2), p(-1, 0, 2), p(0, 1, 2), p(0, -1, 2),
+    p(2, 0), p(-2, 0), p(0, 2), p(0, -2),
+    p(1, 1), p(-1, -1), p(1, -1), p(-1, 1),
+    px(cx - u * 0.5, cy - u * 0.5, u, u, "rgba(6,12,22,0.55)"),
+    px(cx - u * 2.5, cy + u, u * 0.7, u * 0.7, "rgba(6,12,22,0.4)"),
+    px(cx + u * 1.8, cy - u * 1.8, u * 0.7, u * 0.7, "rgba(6,12,22,0.4)"),
+  ].join("");
+}
+
+/** دروازه با تور پیکسلی */
+function pixelGoal(x: number, y: number, w: number, h: number, color: string, op = 1): string {
+  const u = Math.max(2, w / 56);
+  const net: string[] = [];
+  for (let gx = x + u; gx <= x + w - u; gx += u * 4) net.push(px(gx, y + u, u * 0.8, h - u, color, op * 0.45));
+  for (let gy = y + u * 4; gy <= y + h - u; gy += u * 4) net.push(px(x + u, gy, w - u * 2, u * 0.8, color, op * 0.45));
+  return [
+    px(x, y, w, u, color, op), // crossbar
+    px(x, y, u, h, color, op), // left post
+    px(x + w - u, y, u, h, color, op), // right post
+    net.join(""),
+  ].join("");
+}
+
+/** پرچم کرنر پیکسلی */
+function pixelFlag(x: number, y: number, h: number, color: string, op = 1): string {
+  const u = Math.max(2, h / 10);
+  return [
+    px(x, y, u, h, color, op),
+    px(x + u, y, u * 3, u, color, op),
+    px(x + u, y + u, u * 2, u, color, op * 0.9),
+    px(x + u, y + u * 2, u, u, color, op * 0.8),
+  ].join("");
+}
+
+/** سوت داور پیکسلی */
+function pixelWhistle(cx: number, cy: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 8);
+  return [
+    px(cx - u * 3, cy - u, u * 5, u * 2.4, color, op),
+    px(cx + u * 2, cy - u * 0.6, u * 1.6, u * 1.6, color, op * 0.85),
+    px(cx - u * 4, cy - u * 1.8, u, u * 1.2, color, op),
+    px(cx - u * 0.6, cy - u * 0.4, u, u, "rgba(4,8,16,0.65)", op),
+    px(cx - u * 4.6, cy - u * 3, u, u, color, op * 0.8),
+  ].join("");
+}
+
+/** کفش فوتبال پیکسلی با میخ‌ها */
+function pixelBoot(x: number, y: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 8);
+  return [
+    px(x, y + u * 4, u * 7, u, color, op), // sole
+    px(x, y + u * 1.4, u * 2.4, u * 2.6, color, op), // ankle
+    px(x + u * 2, y + u * 2.8, u * 3.6, u * 1.2, color, op * 0.88), // toe upper
+    px(x + u * 0.8, y + u * 5, u, u * 0.8, color, op * 0.75), // studs
+    px(x + u * 3, y + u * 5, u, u * 0.8, color, op * 0.75),
+    px(x + u * 5.2, y + u * 5, u, u * 0.8, color, op * 0.75),
+  ].join("");
+}
+
+/** پیراهن فوتبال پیکسلی با شماره */
+function pixelJersey(cx: number, cy: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 9);
+  return [
+    px(cx - u * 2, cy - u * 2.5, u * 4, u * 5, color, op), // torso
+    px(cx - u * 3.4, cy - u * 2.5, u * 1.4, u * 2.2, color, op * 0.85), // sleeves
+    px(cx + u * 2, cy - u * 2.5, u * 1.4, u * 2.2, color, op * 0.85),
+    px(cx - u, cy - u * 2.9, u * 2, u * 0.7, "rgba(4,8,16,0.6)", op), // collar
+    px(cx - u * 0.5, cy - u * 1.4, u, u * 1.6, "rgba(255,255,255,0.85)", op), // number 1
+    px(cx + u * 0.5, cy - u * 1.4, u * 0.4, u * 0.7, "rgba(255,255,255,0.85)", op),
+  ].join("");
+}
+
+/** تابلوی امتیاز پیکسلی */
+function pixelScoreboard(x: number, y: number, w: number, h: number, color: string, op = 1): string {
+  const u = Math.max(2, w / 26);
+  const cell = (cx: number, cy: number) => px(cx, cy, u * 1.4, u * 2, "rgba(255,255,255,0.75)", op * 0.9);
+  return [
+    px(x, y, w, h, "rgba(4,8,18,0.9)", op),
+    px(x, y, w, u * 0.6, color, op),
+    px(x, y + h - u * 0.6, w, u * 0.6, color, op * 0.8),
+    cell(x + u * 3, y + u * 2.4), cell(x + u * 5.2, y + u * 2.4),
+    cell(x + w - u * 6.6, y + u * 2.4), cell(x + w - u * 4.4, y + u * 2.4),
+    px(x + w / 2 - u * 0.8, y + u * 2.4, u * 0.5, u * 2, color, op * 0.9),
+    px(x + w / 2 + u * 0.8, y + u * 2.4, u * 0.5, u * 2, color, op * 0.9),
+  ].join("");
+}
+
+/** دسته بازی آرکید پیکسلی */
+function pixelController(cx: number, cy: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 9);
+  return [
+    px(cx - u * 4, cy - u * 1.5, u * 8, u * 3, color, op),
+    px(cx - u * 3.6, cy - u * 2.3, u * 7.2, u * 0.8, color, op * 0.85),
+    px(cx - u * 3.6, cy + u * 1.5, u * 7.2, u * 0.8, color, op * 0.85),
+    px(cx - u * 2.6, cy - u * 0.9, u, u * 1.8, "rgba(4,8,16,0.7)", op), // dpad
+    px(cx - u * 3, cy - u * 0.5, u * 1.8, u, "rgba(4,8,16,0.7)", op),
+    px(cx + u * 2.6, cy - u * 0.9, u, u, C.rose, op), // buttons
+    px(cx + u * 3.3, cy - u * 0.2, u, u, C.emerald, op),
+    px(cx - u * 0.6, cy + u * 0.6, u * 1.4, u * 0.5, "rgba(255,255,255,0.6)", op), // start
+  ].join("");
+}
+
+/** سکه پیکسلی (استک) */
+function pixelCoinStack(x: number, y: number, s: number, n: number, op = 1): string {
+  const u = Math.max(2, s / 6);
+  const coins: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const yy = y - i * u * 1.15;
+    coins.push(px(x, yy, u * 5, u * 0.9, i === n - 1 ? C.gold : "#caa53a", op));
+    coins.push(px(x + u * 0.6, yy + u * 0.15, u * 3.8, u * 0.35, "rgba(255,255,255,0.5)", op * 0.9));
+  }
+  return coins.join("");
+}
+
+/** بوق/مگافون خبر پیکسلی */
+function pixelMegaphone(x: number, y: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 9);
+  return [
+    px(x, y + u * 1.5, u * 2, u * 3, color, op),
+    px(x + u * 2, y + u * 1, u * 2, u * 4, color, op * 0.9),
+    px(x + u * 4, y + u * 0.2, u * 2.4, u * 5.6, color, op * 0.8),
+    px(x + u * 7, y + u * 0.4, u * 0.8, u * 5.2, color, op * 0.6),
+    px(x + u * 8.6, y + u * 1.4, u * 0.8, u * 3.2, color, op * 0.4),
+    px(x + u * 10, y + u * 2.2, u * 0.8, u * 1.6, color, op * 0.3),
+    px(x + u * 0.6, y + u * 4.5, u * 1.2, u * 1.8, color, op * 0.75), // handle
+  ].join("");
+}
+
+/** روزنامه پیکسلی */
+function pixelNews(x: number, y: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 10);
+  return [
+    px(x, y, u * 8, u * 10, "rgba(238,244,252,0.9)", op),
+    px(x, y, u * 8, u * 1.2, color, op),
+    px(x + u, y + u * 2, u * 6, u * 0.7, "rgba(10,16,30,0.75)", op),
+    px(x + u, y + u * 3.2, u * 6, u * 0.7, "rgba(10,16,30,0.55)", op),
+    px(x + u, y + u * 4.6, u * 3, u * 2.6, color, op * 0.75), // photo box
+    px(x + u * 4.4, y + u * 4.6, u * 2.6, u * 0.7, "rgba(10,16,30,0.45)", op),
+    px(x + u * 4.4, y + u * 5.8, u * 2.6, u * 0.7, "rgba(10,16,30,0.45)", op),
+    px(x + u, y + u * 7.8, u * 6, u * 0.7, "rgba(10,16,30,0.45)", op),
+  ].join("");
+}
+
+/** کلاه فارغ‌التحصیلی آکادمی */
+function pixelGradCap(cx: number, cy: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 10);
+  return [
+    px(cx - u * 4, cy - u * 1.6, u * 8, u * 2, color, op), // board
+    px(cx - u * 2.2, cy + u * 0.4, u * 4.4, u * 1.6, color, op * 0.8), // head band
+    px(cx + u * 3.4, cy - u * 1.2, u * 0.7, u * 2.6, color, op * 0.9), // tassel
+    px(cx + u * 3.2, cy + u * 1.4, u * 1.1, u * 1.1, C.gold, op), // tassel knot
+  ].join("");
+}
+
+/** نمودار رشد پیکسلی */
+function pixelChart(x: number, y: number, w: number, h: number, color: string, op = 1): string {
+  const u = Math.max(2, w / 14);
+  const bars = [0.35, 0.55, 0.75, 1].map((f, i) =>
+    px(x + u * (2 + i * 2.6), y + h - u * 0.8 - (h - u * 2) * f, u * 1.8, (h - u * 2) * f, i === 3 ? C.gold : color, op * (0.5 + i * 0.16))
+  ).join("");
+  return [
+    px(x, y + h - u * 0.8, w, u * 0.8, color, op * 0.9), // axis
+    px(x, y, u * 0.8, h, color, op * 0.9),
+    bars,
+  ].join("");
+}
+
+/** نشان هدف اسنایپر پیکسلی */
+function pixelTarget(cx: number, cy: number, r: number, color: string, op = 1): string {
+  const u = Math.max(2, r / 6);
+  return [
+    px(cx - r, cy - u * 0.4, r * 2, u * 0.8, color, op * 0.8),
+    px(cx - u * 0.4, cy - r, u * 0.8, r * 2, color, op * 0.8),
+    px(cx - r * 0.55, cy - r * 0.55, r * 1.1, r * 1.1, "none"),
+    px(cx - r * 0.55, cy - r * 0.55, r * 1.1, u * 0.7, color, op * 0.9),
+    px(cx - r * 0.55, cy + r * 0.55 - u * 0.7, r * 1.1, u * 0.7, color, op * 0.9),
+    px(cx - r * 0.55, cy - r * 0.55, u * 0.7, r * 1.1, color, op * 0.9),
+    px(cx + r * 0.55 - u * 0.7, cy - r * 0.55, u * 0.7, r * 1.1, color, op * 0.9),
+    px(cx - u, cy - u, u * 2, u * 2, C.rose, op),
+  ].join("");
+}
+
+/** رادار پیکسلی */
+function pixelRadar(cx: number, cy: number, r: number, color: string, op = 1): string {
+  const ring = (f: number) =>
+    px(cx - r * f, cy - r * f, r * 2 * f, u0, color, op * 0.7) +
+    px(cx - r * f, cy + r * f - u0, r * 2 * f, u0, color, op * 0.7) +
+    px(cx - r * f, cy - r * f, u0, r * 2 * f, color, op * 0.7) +
+    px(cx + r * f - u0, cy - r * f, u0, r * 2 * f, color, op * 0.7);
+  const u0 = Math.max(2, r / 9);
+  return [
+    ring(1), ring(0.62), ring(0.3),
+    px(cx - u0 * 0.5, cy - u0 * 0.5, u0, u0, C.emerald, op),
+    px(cx + r * 0.3, cy - r * 0.22, u0, u0, C.rose, op * 0.9),
+    px(cx - r * 0.42, cy + r * 0.28, u0, u0, C.gold, op * 0.9),
+    px(cx - u0 * 0.4, cy + r * 0.9, u0 * 0.8, r * 0.35, color, op * 0.8), // stand
+  ].join("");
+}
+
+/** ستاره/جرقه پیکسلی */
+function pixelStar(x: number, y: number, s: number, color: string, op = 1): string {
+  const u = Math.max(2, s / 5);
+  return [
+    px(x - u * 2.4, y - u * 0.5, u * 4.8, u, color, op),
+    px(x - u * 0.5, y - u * 2.4, u, u * 4.8, color, op),
+    px(x - u * 1.5, y - u * 1.5, u, u, color, op * 0.7),
+    px(x + u * 0.7, y + u * 0.7, u, u, color, op * 0.7),
+    px(x + u * 0.7, y - u * 1.5, u, u, color, op * 0.7),
+    px(x - u * 1.5, y + u * 0.7, u, u, color, op * 0.7),
+  ].join("");
+}
+
+/** بلیت پیکسلی VIP */
+function pixelTicket(x: number, y: number, w: number, h: number, color: string, op = 1): string {
+  const u = Math.max(2, h / 6);
+  return [
+    px(x, y, w, h, "rgba(245,197,66,0.16)", op),
+    px(x, y, w, u * 0.7, color, op * 0.9),
+    px(x, y + h - u * 0.7, w, u * 0.7, color, op * 0.9),
+    px(x, y, u * 0.7, h, color, op * 0.9),
+    px(x + w - u * 0.7, y, u * 0.7, h, color, op * 0.9),
+    px(x + w * 0.62, y + u * 0.7, u * 0.5, h - u * 1.4, color, op * 0.55), // perforation
+    px(x + w * 0.72, y + h * 0.32, u * 1.1, u * 1.1, C.gold, op),
+    px(x + w * 0.82, y + h * 0.32, u * 1.1, u * 1.1, C.gold, op * 0.85),
+  ].join("");
+}
+
+/** توضیح کامل انگلیسی موضوع هر پست — «تمام پوسترها انگلیسی با توضیحات کامل» */
+function topicBrief(topic: PosterTopic): string {
+  switch (topic) {
+    case "MATCH":
+      return "TODAY'S SUPERVISOR-APPROVED DUAL-TIP CARD — TWO COMPLEMENTARY MARKETS ON ONE FLAT 100-UNIT TICKET, PROFIT PRINTED AT ISSUE TIME.";
+    case "RESULT_WIN":
+      return "OFFICIAL FT SETTLEMENT — ONE TIP CASHED ON THE ESPN SCOREBOARD, PROFIT POSTED TO THE 1000-UNIT BANK LEDGER.";
+    case "RESULT_JACKPOT":
+      return "GOLDEN DOUBLE-WIN — BOTH COMPLEMENTARY TIPS CASHED IN THE SAME MATCH, THE RAREST AND LARGEST PAYOUT OF THE PIPELINE.";
+    case "RESULT_LOSS":
+      return "MIDDLE TRAP — BOTH TIPS LOST TOGETHER; THE JOINT-LOSS RISK PRINTED ON THE CARD IS THE HONEST COST OF THE COVERAGE.";
+    case "DAILY":
+      return "END-OF-DAY AUDIT — EVERY CARD SETTLED ON THE OFFICIAL ESPN SCOREBOARD, WIN-RATE AND NET UNITS ACCOUNTED WITH ZERO MANUAL EDITS.";
+    case "LADDER":
+      return "3-STEP COMPOUND ROLLOVER — PRINCIPAL PLUS PROFIT ROLLS INTO THE NEXT APPROVED MATCH, EACH STEP SETTLED BEFORE THE NEXT KICKOFF.";
+    case "WINRATE":
+      return "LIVE VERIFIED WIN-RATE — ONLY SUPERVISOR-APPROVED TICKETS COUNTED, GRADED BY THE OFFICIAL ESPN SCOREBOARD, SHADOW VETOES EXCLUDED.";
+    case "COMBO":
+      return "BANKER ACCUMULATOR — INDEPENDENT APPROVED BASES STACKED WITH SIMULATED JOINT PROBABILITY PRINTED ON THE POSTER.";
+    case "SNIPER":
+      return "HIGH-ODDS SINGLE SHOT — REVERSE-POISSON EDGE WITH A CAPPED STAKE, THE BANK IS NEVER A HOSTAGE TO A LONG SHOT.";
+    case "TEASER":
+      return "LOCKED PREVIEW — TIP B STAYS HIDDEN UNTIL KICKOFF FOR FREE VIEWERS; VIP MEMBERS SEE THE FULL DUAL-TIP CARD.";
+    case "RADAR":
+      return "MATCHDAY RADAR — EVERY FIXTURE SCANNED BY THE 5-REGIME BET-TYPE ROUTER, APPROVED CANDIDATES MARKED, HIGH RISK VETOED.";
+    case "AD":
+      return "NEOBET VIP MEMBERSHIP — THE FULL PIPELINE: FLASHCARDS, DAILY DIGEST, LIVE ESPN SETTLEMENT AND THE SHA-256 PUBLIC LEDGER.";
+    case "LESSON":
+      return "BET ACADEMY — LEARN THE EXACT LANGUAGE PROFESSIONAL BETTORS USE TO FIND VALUE, SIZE STAKES AND SURVIVE VARIANCE.";
+    case "NEWS":
+      return "LIVE ESPN WIRE — TEAM NEWS, INJURIES AND STORYLINES FEED THE ENGINE'S LAMBDA CONTEXT BEFORE KICKOFF; NEWS IS INPUT, NOT SIGNAL.";
+    case "BRIEF":
+      return "VIP MORNING BRIEF — TODAY'S APPROVED BOARD PLUS THE SUPERVISOR'S TOP RECOMMENDATION AND EXECUTION DISCIPLINE RULES.";
+    case "WEEKLY":
+      return "WEEKLY AUDIT — 7 DAYS OF OFFICIAL ESPN SETTLEMENTS SPLIT BY PRODUCT LINE, NO SIMULATION AND NO PAPER TICKETS.";
+  }
+}
+
+/** نشان بزرگ موضوع در آسمان پوستر — هر پست امضای بصری خودش را دارد (کم‌رنگ: بافت پس‌زمینه، نه مانع محتوا) */
+function topicEmblem(topic: PosterTopic, accent: string): string {
+  const ex = W - 165;
+  const ey = 215;
+  const body = (() => {
+    switch (topic) {
+    case "MATCH":
+      return pixelGoal(ex - 120, ey - 52, 210, 118, accent, 0.9) + pixelBall(ex + 90, ey + 92, 30, "rgba(240,246,255,0.95)");
+    case "RESULT_WIN":
+      return trophyVector(ex, ey, 0.78, C.gold) + pixelStar(ex - 120, ey - 60, 22, C.gold, 0.85) + pixelStar(ex + 110, ey + 40, 18, accent, 0.8);
+    case "RESULT_JACKPOT":
+      return trophyVector(ex, ey - 10, 0.72, C.gold) + pixelCoinStack(ex - 95, ey + 95, 26, 4, 0.95) + pixelStar(ex + 115, ey - 58, 20, C.gold, 0.9);
+    case "RESULT_LOSS":
+      return pixelWhistle(ex, ey, 64, "rgba(255,150,160,0.95)") + pixelFlag(ex - 110, ey - 40, 96, accent, 0.75);
+    case "DAILY":
+      return pixelScoreboard(ex - 130, ey - 62, 250, 110, accent, 0.95) + pixelBall(ex + 100, ey + 80, 24, "rgba(240,246,255,0.9)");
+    case "LADDER":
+      return pixelChart(ex - 110, ey - 64, 210, 130, accent, 0.95) + pixelCoinStack(ex + 80, ey + 92, 24, 3, 0.9);
+    case "WINRATE":
+      return pixelChart(ex - 110, ey - 64, 210, 130, C.emerald, 0.95) + pixelScoreboard(ex - 40, ey + 60, 150, 62, accent, 0.85);
+    case "COMBO":
+      return [
+        pixelBall(ex - 66, ey, 34, "rgba(240,246,255,0.95)"),
+        px(ex - 30, ey - 8, 44, 10, accent, 0.85),
+        px(ex - 30, ey + 4, 44, 10, accent, 0.7),
+        pixelBall(ex + 44, ey, 34, "rgba(240,246,255,0.95)"),
+        pixelStar(ex - 10, ey - 74, 20, C.gold, 0.9),
+      ].join("");
+    case "SNIPER":
+      return pixelTarget(ex, ey, 92, "rgba(255,120,135,0.95)") + pixelBall(ex, ey, 18, "rgba(240,246,255,0.9)");
+    case "TEASER":
+      return lockIcon(ex, ey, 62, accent) + pixelBall(ex - 108, ey + 60, 26, "rgba(240,246,255,0.85)") + pixelStar(ex + 96, ey - 70, 18, C.gold, 0.8);
+    case "RADAR":
+      return pixelRadar(ex, ey, 95, accent, 0.95) + pixelBall(ex - 118, ey + 62, 24, "rgba(240,246,255,0.85)");
+    case "AD":
+      return pixelController(ex - 20, ey + 62, 110, accent, 0.95) + pixelCoinStack(ex + 62, ey - 8, 26, 3, 0.95) + pixelStar(ex - 108, ey - 58, 20, C.gold, 0.85);
+    case "LESSON":
+      return pixelGradCap(ex - 10, ey, 120, accent, 0.95) + pixelBall(ex - 116, ey + 66, 26, "rgba(240,246,255,0.85)");
+    case "NEWS":
+      return pixelNews(ex - 70, ey - 66, 150, accent, 0.95) + pixelMegaphone(ex - 138, ey + 60, 78, C.gold, 0.9);
+    case "BRIEF":
+      return pixelMegaphone(ex - 60, ey, 100, C.gold, 0.95) + pixelTicket(ex - 148, ey - 58, 132, 58, accent, 0.9);
+    case "WEEKLY":
+      return trophyVector(ex, ey - 6, 0.6, C.gold) + pixelChart(ex - 138, ey - 20, 110, 90, accent, 0.85);
+  }
+  })();
+  return `<g opacity="0.62">${body}</g>`;
+}
+
+/** خانواده نمادهای کوچک — پراکندگی موضوعی روی سکوها و چمن */
+function topicScatter(topic: PosterTopic, rnd: () => number, w: number, h: number, accent: string): string {
+  const generic = (x: number, y: number, s: number, op: number) => {
+    const pick = Math.floor(rnd() * 4);
+    if (pick === 0) return pixelBall(x, y, s, `rgba(226,238,252,${op})`);
+    if (pick === 1) return pixelFlag(x - s / 2, y - s, s * 1.5, accent, op * 0.9);
+    if (pick === 2) return pixelBoot(x - s / 2, y - s / 2, s * 1.4, accent, op * 0.85);
+    return pixelWhistle(x, y, s * 1.1, `rgba(226,238,252,${op * 0.9})`);
+  };
+  const arcade = (x: number, y: number, s: number, op: number) => {
+    const pick = Math.floor(rnd() * 4);
+    if (pick === 0) return pixelController(x, y, s * 1.6, accent, op * 0.9);
+    if (pick === 1) return pixelCoinStack(x - s, y + s / 2, s * 1.2, 2, op);
+    if (pick === 2) return pixelStar(x, y, s * 1.2, C.gold, op);
+    return pixelTicket(x - s * 1.6, y - s * 0.6, s * 3.2, s * 1.2, accent, op * 0.9);
+  };
+  const media = (x: number, y: number, s: number, op: number) => {
+    const pick = Math.floor(rnd() * 3);
+    if (pick === 0) return pixelNews(x - s * 0.8, y - s, s * 1.6, accent, op);
+    if (pick === 1) return pixelMegaphone(x - s * 1.5, y - s * 0.5, s * 1.6, C.gold, op * 0.95);
+    return pixelStar(x, y, s, accent, op * 0.9);
+  };
+  const family = topic === "AD" || topic === "LESSON" || topic === "TEASER" || topic === "SNIPER" ? arcade : topic === "NEWS" ? media : generic;
+  const out: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const x = 130 + rnd() * (w - 260);
+    const y = h * 0.30 + rnd() * (h * 0.17);
+    out.push(family(x, y, 14 + rnd() * 10, 0.13 + rnd() * 0.08));
+  }
+  for (let i = 0; i < 4; i++) {
+    const x = 110 + rnd() * (w - 220);
+    const y = h * 0.60 + rnd() * (h * 0.30);
+    out.push(family(x, y, 15 + rnd() * 11, 0.16 + rnd() * 0.09));
+  }
+  return out.join("");
+}
 const A = {
   sky0: "#04060f",
   sky1: "#0a1030",
@@ -206,7 +594,7 @@ const A = {
 };
 
 /** پیکسل‌های ثابت — هر پوستر همیشه با همان چیدمان رندر می‌شود (Deterministic) */
-function arcadeBackdrop(w: number, h: number, kind: StadiumKind, accent: string): string {
+function arcadeBackdrop(w: number, h: number, kind: StadiumKind, accent: string, topic: PosterTopic = "MATCH"): string {
   const rnd = seeded(kind.length * 6151 + 97);
   const theme =
     kind === "DOUBLE_WIN" ? "gold" : kind === "LOSS" ? "rain" : kind === "SNIPER" ? "sniper" : kind === "DAILY_REPORT" ? "aerial" : kind === "WIN" ? "win" : kind === "TEASER" ? "teaser" : kind === "RADAR" ? "radar" : "night";
@@ -321,7 +709,9 @@ function arcadeBackdrop(w: number, h: number, kind: StadiumKind, accent: string)
   ${markings}
   ${fireworks}
   ${rain}
-  <rect width="${w}" height="${h}" fill="rgba(2,6,14,0.32)"/>`;
+  <rect width="${w}" height="${h}" fill="rgba(2,6,14,0.32)"/>
+  ${topicScatter(topic, rnd, w, h, accent)}
+  ${topicEmblem(topic, accent)}`;
 }
 
 /** لایه CRT روی کل پوستر — scanline + vignette (احساس مانیتور آرکید ۱۶ بیتی) */
@@ -451,9 +841,9 @@ function crestInitials(name: string): string {
   return name.slice(0, 2).toUpperCase();
 }
 
-/** کامپوز نهایی v18.0: پس‌زمینه آرکید پیکسلی + لایه برداری + لایه CRT — خروجی PNG 1080×1440 (صفر آپلود) */
-function compose(kind: StadiumKind, overlaySvg: string, accent: string): Promise<Buffer> {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${arcadeBackdrop(W, H, kind, accent)}${overlaySvg}${crtOverlay(W, H)}</svg>`;
+/** کامپوز نهایی v18.1: پس‌زمینه آرکید پیکسلی موضوع‌محور + لایه برداری + لایه CRT — خروجی PNG 1080×1440 (صفر آپلود) */
+function compose(kind: StadiumKind, overlaySvg: string, accent: string, topic: PosterTopic = "MATCH"): Promise<Buffer> {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${arcadeBackdrop(W, H, kind, accent, topic)}${overlaySvg}${crtOverlay(W, H)}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
 }
 
@@ -778,7 +1168,7 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
 
   ${footer(W, H, "NEOBET QUANT PRO · auto-graded on official ESPN scoreboard · not financial advice")}`;
 
-  return compose("PRE_MATCH", overlay, accent);
+  return compose("PRE_MATCH", overlay, accent, "MATCH");
 }
 
 export async function renderTeaserPNG(input: Omit<MatchCardInput, "teaser">): Promise<Buffer> {
@@ -944,7 +1334,7 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
 
   ${footer(W, H, "NEOBET QUANT PRO · every settlement graded on the official ESPN final score — zero simulation")}`;
 
-  return compose(kind, overlay, meta.accent);
+  return compose(kind, overlay, meta.accent, jackpot ? "RESULT_JACKPOT" : loss ? "RESULT_LOSS" : "RESULT_WIN");
 }
 
 // ═════════════════════ ۵) قالب DAILY_REPORT — گزارش برآیند روزانه (1080×1440) ═════════════════════
@@ -1022,7 +1412,7 @@ export async function renderDailyReportPNG(input: DailyReportInput): Promise<Buf
 
   ${footer(W, H, "NEOBET QUANT PRO · daily real settlement digest · not financial advice")}`;
 
-  return compose("DAILY_REPORT", overlay, accent);
+  return compose("DAILY_REPORT", overlay, accent, "DAILY");
 }
 
 /** اعداد انگلیسی ساده برای پوستر */
@@ -1052,7 +1442,7 @@ export async function renderRolloverLadderPNG(input: RolloverLadderInput): Promi
       const teamSize = fitSize(s.teams, 520, 26, 14, 700);
       const tips = [s.tipA, s.tipB].filter(Boolean).map((t) => String(t).toUpperCase());
       const tipLine = tips.length > 0 ? `TIP A: ${esc(tips[0])}${tips[1] ? `  ·  TIP B: ${esc(tips[1])}` : ""}` : "orthogonal dual-tip coverage";
-      const tipSize = fitSize(tipLine.replace(/&amp;/g, "&"), 640, 17, 11, 700);
+      const tipSize = fitSize(tipLine.replace(/&amp;/g, "&"), 580, 17, 11, 700);
       return `
     ${glassBox(90, y, 900, 200, C.emerald, 20)}
     <circle cx="150" cy="${y + 100}" r="40" fill="rgba(245,197,66,0.14)" stroke="${C.gold}" stroke-width="3"/>
@@ -1083,7 +1473,7 @@ export async function renderRolloverLadderPNG(input: RolloverLadderInput): Promi
 
   ${footer(W, H, "NEOBET QUANT PRO · rollover planner on verified sub-10% risk cards · not financial advice")}`;
 
-  return compose("DAILY_REPORT", overlay, C.gold);
+  return compose("DAILY_REPORT", overlay, C.gold, "LADDER");
 }
 
 /** بانک ورودی هر پله (برای متن داخل باکس‌ها) */
@@ -1135,7 +1525,7 @@ export async function renderWinRateReportPNG(input: WinRateReportInput): Promise
   const boxW = (S - 96 - 3 * 18) / 4;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">
-  ${proceduralStadium(S, S, "WIN", good ? C.emerald : C.rose)}
+  ${arcadeBackdrop(S, S, "WIN", good ? C.emerald : C.rose, "WINRATE")}
   ${brandHeader(S, good ? C.emerald : C.rose)}
 
   <text x="${S / 2}" y="164" text-anchor="middle" font-family="${C.sans}" font-size="30" font-weight="bold" fill="${C.ink}" letter-spacing="3">VERIFIED WIN-RATE REPORT</text>
@@ -1246,7 +1636,7 @@ export async function renderComboPosterPNG(input: ComboPosterInput): Promise<Buf
 
   ${footer(W, H, "NEOBET QUANT PRO · disjoint combo product line · not financial advice")}`;
 
-  return compose("COMBO", overlay, accent);
+  return compose("COMBO", overlay, accent, "COMBO");
 }
 
 // ═════════════════════ v13.0 — پوستر تک‌تیرانداز ضریب بالا (HIGH_ODDS_SNIPER) ═════════════════════
@@ -1319,7 +1709,7 @@ export async function renderSniperPosterPNG(input: SniperPosterInput): Promise<B
 
   ${footer(W, H, "NEOBET QUANT PRO · value longshots capped at 0.5-1.0% bankroll · not financial advice")}`;
 
-  return compose("SNIPER", overlay, accent);
+  return compose("SNIPER", overlay, accent, "SNIPER");
 }
 
 // ═════════════════════ v13.0 — پوستر تیزر قفل‌شده قیف کانال (Blurred VIP Teaser) ═════════════════════
@@ -1391,7 +1781,7 @@ export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<B
 
   ${footer(W, H, "NEOBET QUANT PRO · public funnel teaser — same hash opens after FT · not financial advice")}`;
 
-  return compose("TEASER", overlay, accent);
+  return compose("TEASER", overlay, accent, "TEASER");
 }
 
 // ═════════════════════ v13.0 — پوستر رادار شفافیت روزانه (Morning Radar) ═════════════════════
@@ -1447,7 +1837,7 @@ export async function renderDailyRadarPNG(input: DailyRadarInput): Promise<Buffe
 
   ${footer(W, H, "NEOBET QUANT PRO · morning transparency radar · not financial advice")}`;
 
-  return compose("RADAR", overlay, accent);
+  return compose("RADAR", overlay, accent, "RADAR");
 }
 
 // ═════════════════════ v13.5 — بنر بازاریابی هوشمند ساعتی (VIP Marketing Banner) ═════════════════════
@@ -1556,7 +1946,7 @@ export async function renderVipAdPNG(input: VipAdInput): Promise<Buffer> {
 
   ${footer(W, H, `JOIN ${BRAND_HANDLE} VIP · USDT TRC-20 / SOL / BSC / POLYGON · instant auto-verify`)}`;
 
-  return compose("TEASER", overlay, accent);
+  return compose("TEASER", overlay, accent, "AD");
 }
 
 // ═══════════════════ ۸) قالب‌های ایجنت سوپروایزر تلگرام (v18.0) ═══════════════════
@@ -1603,7 +1993,7 @@ export async function renderBetLessonPNG(input: BetLessonInput): Promise<Buffer>
 
   ${footer(W, H, "NEOBET BET ACADEMY · education first · not financial advice")}`;
 
-  return compose("RADAR", overlay, "#c86bff");
+  return compose("RADAR", overlay, "#c86bff", "LESSON");
 }
 
 /** ۸-۲) تخته خبرهای فوتبال — تیترهای وایر ESPN روی قالب آرکید */
@@ -1640,12 +2030,16 @@ export async function renderNewsBoardPNG(input: NewsBoardInput): Promise<Buffer>
 
   ${newsRows}
 
+  ${glassBox(90, 1206, 900, 74, C.cyan)}
+  <text x="126" y="1234" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${C.cyan}" letter-spacing="2">WHY THIS POST EXISTS</text>
+  <text x="126" y="1256" font-family="${C.sans}" font-size="14" fill="${C.inkDim}">${tspans(wrapText(topicBrief("NEWS"), 830, 14, 400, 2), 126, 1256, 19)}</text>
+
   ${glassBox(90, 1290, 900, 60, C.gold, 14, 0.9)}
   <text x="${W / 2}" y="1327" text-anchor="middle" font-family="${C.sans}" font-size="16.5" font-weight="bold" fill="${C.gold}" letter-spacing="1.5">EVERY VIP CARD STILL SETTLES ON THE OFFICIAL ESPN SCOREBOARD</text>
 
   ${footer(W, H, "headlines via ESPN wire · team news is input, not betting advice")}`;
 
-  return compose("RADAR", overlay, C.cyan);
+  return compose("RADAR", overlay, C.cyan, "NEWS");
 }
 
 /** ۸-۳) بریفینگ صبح کانال VIP — کارت‌های امروز + توصیه‌های مهم */
@@ -1666,7 +2060,7 @@ export async function renderVipBriefPNG(input: VipBriefInput): Promise<Buffer> {
       const y = 470 + i * rowH;
       const teamSize = fitSize(c.teams, 620, 24, 14, 700);
       const tipLine = `TIP A: ${c.tipA.toUpperCase()} @${c.oddsA.toFixed(2)} · TIP B: ${c.tipB.toUpperCase()} @${c.oddsB.toFixed(2)}`;
-      const tipSize = fitSize(tipLine, 640, 16, 10, 700);
+      const tipSize = fitSize(tipLine, 590, 16, 10, 700);
       return `
     ${glassBox(90, y, 900, 168, C.gold)}
     <rect x="106" y="${y + 16}" width="64" height="30" fill="${C.gold}"/>
@@ -1723,7 +2117,7 @@ export async function renderVipBriefPNG(input: VipBriefInput): Promise<Buffer> {
 
   ${footer(W, H, `channel all-time net ${sign(input.netUnitsAllTime)} units · win-rate ${input.winRatePct != null ? input.winRatePct.toFixed(1) + "%" : "—"} · not financial advice`)}`;
 
-  return compose("PRE_MATCH", overlay, C.gold);
+  return compose("PRE_MATCH", overlay, C.gold, "BRIEF");
 }
 
 /** ۸-۴) گزارش هفتگی — برایند هفت به هر دو کانال */
@@ -1795,5 +2189,5 @@ export async function renderWeeklyDigestPNG(input: WeeklyDigestInput): Promise<B
 
   ${footer(W, H, "NEOBET WEEKLY AUDIT · no simulation · not financial advice")}`;
 
-  return compose("DAILY_REPORT", overlay, accent);
+  return compose("DAILY_REPORT", overlay, accent, "WEEKLY");
 }

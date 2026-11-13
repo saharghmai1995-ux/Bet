@@ -30,6 +30,9 @@ import {
   renderWeeklyDigestPNG,
 } from "./slip-images";
 import { fetchSoccerNews, newsTimeEn } from "./news-service";
+// v18.1 — ترجمه فارسی خبرهای مهم برای کپشن دوزبانه (پوستر انگلیسی / کپشن فارسی)
+import { translateNewsBatch, newsDateFa } from "./news-translate";
+import { faNum } from "@/lib/format";
 import { marketEnLabel, SETTLEMENT_RULE_EN, SETTLEMENT_RULE_FA } from "@/lib/engine/orthogonal";
 import { score100Of } from "@/lib/supervisor";
 import type { IssuedSlip } from "@prisma/client";
@@ -1727,8 +1730,8 @@ export async function sendBetTermLesson(force = false, slot = 0): Promise<{ ok: 
 }
 
 /**
- * v18.0 — خبرهای مهم فوتبال (۰۹:۳۰ و ۱۶:۳۰ تهران):
- * تیترهای وایر ESPN روی پوستر آرکید + کپشن فارسی — آگاهی پیش از شرط.
+ * v18.1 — خبرهای مهم فوتبال (۰۹:۳۰ و ۱۶:۳۰ تهران):
+ * کانال دوزبانه است — پوستر آرکید انگلیسی خالص + کپشن فارسی کامل با ترجمه خبرهای مهم.
  * slot: ۰ یا ۱ — شکست وایر = skip بی‌صدا (بدون پیام خطا به کانال).
  */
 export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: boolean; detail: string }> {
@@ -1752,24 +1755,31 @@ export async function sendFootballNews(force = false, slot = 0): Promise<{ ok: b
     items: items.slice(0, 6).map((n) => ({ headline: n.headline, timeEn: newsTimeEn(n.published) })),
   });
 
-  const headlineList = items
+  // v18.1 — ترجمه فارسی خبرهای مهم: کپشن فقط فارسی کامل است؛ تیتر انگلیسی فقط روی پوستر می‌ماند
+  const fa = await translateNewsBatch(items);
+  const faList = items
     .slice(0, 4)
-    .map((n) => `• <i>${esc(n.headline)}</i>`)
-    .join("\n");
+    .map((n, i) => {
+      const t = fa[i];
+      const head = t?.headlineFa && t.headlineFa.trim().length > 0 ? t.headlineFa.trim() : n.headline;
+      const sum = t?.summaryFa && t.summaryFa.trim().length > 0 ? `\n   <i>${esc(t.summaryFa.trim())}</i>` : "";
+      return `${faNum(i + 1, 0)}. <b>${esc(head)}</b>${sum}`;
+    })
+    .join("\n\n");
 
   const caption =
-    `📰 <b>خلاصه خبرهای مهم فوتبال — وایر ESPN</b>\n\n` +
-    `${headlineList}\n\n` +
-    `🧠 خبرها ورودی تصمیم‌اند، نه سیگنال — ترکیب‌ها، مصدومان و حواشی در محاسبات لامبدای موتور لحاظ می‌شوند.\n` +
-    `👑 برای دریافت کارت‌های تاییدشده سوپروایزر: @Aineobet_bot`;
+    `📰 <b>خلاصه خبرهای مهم فوتبال — وایر ESPN</b>\n📅 ${newsDateFa()}\n\n` +
+    `${faList}\n\n` +
+    `🧠 <b>حواشی مهم:</b> خبرها ورودی تصمیم‌اند، نه سیگنال — ترکیب‌ها، مصدومان و حواشی در محاسبات لامبدای موتور لحاظ می‌شوند. تیترهای روی پوستر به‌صورت بین‌المللی (انگلیسی) چاپ می‌شوند تا با منبع رسمی ESPN یک‌به‌یک قابل راستی‌آزمایی باشند.` +
+    `\n👑 برای دریافت کارت‌های تاییدشده سوپروایزر: @Aineobet_bot`;
 
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `news-board-${tehranDayKey()}-${slot}.png`)).ok;
   if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
     await setSetting(KEY_NEWS_LAST, stamp);
-    await logOutbox(null, "FOOTBALL_NEWS", true, `public:${chatId}:items=${Math.min(6, items.length)}`);
+    await logOutbox(null, "FOOTBALL_NEWS", true, `public:${chatId}:items=${Math.min(6, items.length)}:fa=1`);
   }
-  return { ok, detail: ok ? `news-sent:${items.length} headlines` : "send-failed" };
+  return { ok, detail: ok ? `news-sent:${items.length} headlines:fa-translated` : "send-failed" };
 }
 
 /**
