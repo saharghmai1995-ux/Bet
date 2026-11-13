@@ -183,11 +183,11 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v16.0 @AINEOBET — Golden Atomic Pairs Scanner
+                  <Sparkles className="size-2.5" /> v17.0 @AINEOBET — Non-Linear 5-Regime Bet-Type Router
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                سوپروایزر ارشد + ۳ الگوی طلایی اتمیک با پوشش ۹۲٪+ ماتریس (G1 · G2 · G3) + گیت سخت ریسک v16.0 (۱۰.۵٪) + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
+                مسیریاب غیرخطی ۵ رژیمی (🏦 بنکر · 🧩 کمبو · 🎯 خوشه نتیجه دقیق · ⚖️ زوج‌تیپ · 🔗 آکومولاتور) + تابع مطلوبیت شارپ/کلِی غیرخطی + آنتروپی شانون ماتریس ۶×۶ + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -400,7 +400,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v16.0 Golden Atomic Pairs Edition · موتور خودساز گرافیک استادیوم (صفر آپلود) + ۳ الگوی طلایی با پوشش ۹۲٪+ ماتریس ۶×۶ (Single-Button Pairs) + قیف کانال عمومی↔VIP (@aineobet) + افراز مجزا کارنامه + گیت سخت ریسک ۱۰.۵٪ + بلک‌لیست لیگ‌های سمّی + شتاب‌دهنده نامتقارن + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + حلقه فعال درس‌های کالیبراسیون
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v17.0 Non-Linear 5-Regime Bet-Type Router Edition · مسیریاب غیرخطی ۵ رژیمی (BANKER · COMBO · CORRECT SCORE CLUSTER · DUAL-HEDGE · ACCUMULATOR) + تابع مطلوبیت Non-Linear Sharpe &amp; Kelly + آنتروپی شانون ماتریس ۶×۶ + قیف کانال عمومی↔VIP (@aineobet) + افراز مجزا کارنامه بر اساس Bet-Type + بلک‌لیست لیگ‌های سمّی + شتاب‌دهنده نامتقارن + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + حلقه فعال درس‌های کالیبراسیون
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

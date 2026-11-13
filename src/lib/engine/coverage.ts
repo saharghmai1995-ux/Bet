@@ -39,6 +39,7 @@ export function selectionCoversCell(key: string, h: number, a: number): boolean 
     case "O25": return tot > 2.5;
     case "U25": return tot < 2.5;
     case "O15": return tot > 1.5;
+    case "U15": return tot < 1.5;
     case "U35": return tot < 3.5;
     case "O35": return tot > 3.5;
     case "BTTS_Y": return h > 0 && a > 0;
@@ -61,7 +62,18 @@ export function selectionCoversCell(key: string, h: number, a: number): boolean 
     // ═══ v16.0 — بازارهای طلایی تیمی (Golden Team-Total Markets) ═══
     case "HOME_O15": return h >= 2; // مجموع گل تیم میزبان بالای ۱.۵
     case "AWAY_O15": return a >= 2; // مجموع گل تیم میهمان بالای ۱.۵
-    default: return false; // کرنر/کارت/نیمه اول خارج از ماتریس نمره است
+    // ═══ v17.0 — کمبوهای رسمی تک‌دکمه‌ای (Official Single-Button Combos) ═══
+    case "C1XU35": return h >= a && tot <= 3; // 1X & Under 3.5 Goals
+    case "CHOME15": return h > a && tot >= 2; // Home Win & Over 1.5 Goals
+    case "CBTTS25": return h > 0 && a > 0 && tot >= 3; // BTTS Yes & Over 2.5 Goals
+    default: {
+      // ═══ v17.0 — نتیجه دقیق خوشه (Correct Score Cluster) — کلید CS_<h>-<a> ═══
+      if (key.startsWith("CS_")) {
+        const parts = key.slice(3).split("-");
+        return Number(parts[0]) === h && Number(parts[1]) === a;
+      }
+      return false; // کرنر/کارت/نیمه اول خارج از ماتریس نمره است
+    }
   }
 }
 
@@ -121,12 +133,16 @@ export function coverageGrid(
 
   const isConditional = structure.varAMatchId !== primaryMatchId || structure.varBMatchId !== primaryMatchId;
   const legsA = structure.legsA && structure.legsA.length > 0 ? structure.legsA : null;
+  // v17.0 — legsB خالی = حالت تک‌تیپ (BANKER) — تیپ A تنها ردیف پوشش است
   const legsB = structure.legsB && structure.legsB.length > 0 ? structure.legsB : null;
   const hasOffMatrixLegs = Boolean(
     legsA?.some(isOffMatrixKey) || legsB?.some(isOffMatrixKey)
   );
   const matA = legsA ? legsA.filter((k) => !isOffMatrixKey(k)) : null;
   const matB = legsB ? legsB.filter((k) => !isOffMatrixKey(k)) : null;
+  // v17.0 — خوشه نتیجه دقیق: هر ۴ کلید CS_ = «هرکدام» (any-of) نه همه با هم
+  const isClusterA = Boolean(matA && matA.length > 1 && matA.every((k) => k.startsWith("CS_")));
+  const isClusterB = Boolean(matB && matB.length > 1 && matB.every((k) => k.startsWith("CS_")));
 
   for (let h = 0; h < n; h++) {
     cells[h] = [];
@@ -134,10 +150,10 @@ export function coverageGrid(
       const p = matrix[h][a];
       let kind: CoverKind = "NONE";
 
-      if (legsA && matA && matB) {
-        // ═══ زوج متعامد v5.0 — بدون پایه مشترک ═══
-        const winsA = matA.length > 0 ? matA.every((k) => selectionCoversCell(k, h, a)) : false;
-        const winsB = matB.length > 0 ? matB.every((k) => selectionCoversCell(k, h, a)) : false;
+      if (legsA && matA && (matB === null || matB.length > 0)) {
+        // ═══ زوج متعامد v5.0 / تک‌تیپ یا خوشه v17.0 ═══
+        const winsA = matA.length > 0 ? (isClusterA ? matA.some((k) => selectionCoversCell(k, h, a)) : matA.every((k) => selectionCoversCell(k, h, a))) : false;
+        const winsB = matB && matB.length > 0 ? (isClusterB ? matB.some((k) => selectionCoversCell(k, h, a)) : matB.every((k) => selectionCoversCell(k, h, a))) : false;
         if (winsA && winsB) {
           kind = "BOTH";
           bothCells++;

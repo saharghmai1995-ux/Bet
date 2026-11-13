@@ -1,39 +1,38 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// دک فلش‌کارت‌های تیپ آماده (3D Flashcard Deck) — v8.0 Supervisor Quant
-// هر بازی فقط و فقط با «تک‌تیپ طلایی مونت‌کارلو» انتخاب‌شده ایجنت سوپروایزر
-// نمایش داده می‌شود (بدون دکمه «الگوی بعدی» — حذف سرگردانی کاربر).
-// + سوییچ استراتژی اجرایی ضد گوبینگ (دو سایت مجزا ↔ سایت واحد امن)
-// + فیلتر پیش‌فرض «فقط بازی‌های تاییدشده سوپروایزر» + نمایش وتو شده‌ها
+// دک فلش‌کارت‌های تیپ آماده (3D Flashcard Deck) — v17.0 Bet-Type Router Edition
+// هر بازی با «استراتژی منتخب سوپروایزر» از مسیریاب غیرخطی ۵ رژیمی نمایش داده می‌شود:
+// 🏦 BANKER · 🧩 COMBO · 🎯 CORRECT SCORE CLUSTER · ⚖️ DUAL-HEDGE · 🔗 ACCUMULATOR
+// + نوار انتخاب استراتژی (Bet-Type Filter Bar) در بالای فلش‌کارت‌ها
 // + v13.4 — تفکیک فلش‌کارت‌های «بازی امروز» از «بازی‌های روزهای آینده» (منطقه زمانی تهران)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BrainCircuit, ChevronLeft, ChevronRight, Grid3X3, Layers, Loader2, Shield, ShieldCheck, ShieldOff, Sparkles, Store, TriangleAlert, Users, Wallet, Zap } from "lucide-react";
+import { BrainCircuit, ChevronLeft, ChevronRight, Crosshair, Flame, Grid3X3, Landmark, Layers, Link2, Loader2, Puzzle, Scale, ShieldOff, Sparkles, Store, TriangleAlert, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuantStore } from "@/lib/store";
 import { useFlashcards } from "@/lib/autopilot-derive";
-import { boosterProfitPct } from "@/lib/engine/asymmetric";
 import { FlashCard, type DeepLlmState } from "./flash-card";
+import { AccumulatorCards } from "./accumulator-cards";
 import { faNum } from "@/lib/format";
 import { getCachedDebate, setCachedDebate } from "@/lib/llm-cache";
 import type { DebateResultDTO } from "@/lib/types";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-type FilterKey = "APPROVED" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "ALL" | "VETOED";
+// ═══ v17.0 — نوار انتخاب استراتژی (Bet-Type Filter Bar) ═══
+type FilterKey = "ALL_APPROVED" | "COMBO" | "DUAL_HEDGE" | "CORRECT_SCORE" | "BANKER" | "ACCUMULATOR" | "VETOED";
 
-// v13.0 — ۴ دکمه طلایی بدون هیچ آمار تاریخی (رفع باگ نمایشی) + فیلتر دژ نفوذناپذیر + شفافیت همه/وتو
 const FILTERS: { key: FilterKey; label: string; icon: typeof Layers; golden?: boolean }[] = [
-  { key: "APPROVED", label: "👑 تاییدشده سوپروایزر", icon: ShieldCheck, golden: true },
-  { key: "RISK10", label: "🛡️ ریسک باخت همزمان زیر ۱۰٪", icon: TriangleAlert, golden: true },
-  { key: "BOOSTER", label: "🚀 شتاب‌دهنده نامتقارن", icon: Zap, golden: true },
-  { key: "PROFIT15", label: "💰 سود تضمینی بالای ۱۵٪", icon: Wallet, golden: true },
-  { key: "FORTRESS", label: "🏰 دژ نفوذناپذیر (زیر ۷٪ + تایید)", icon: Shield },
-  { key: "ALL", label: "همه بازی‌ها", icon: Layers },
-  { key: "VETOED", label: "وتو شده", icon: ShieldOff },
+  { key: "ALL_APPROVED", label: "🔥 همه سیگنال‌های تاییدشده سوپروایزر (بهترین Bet-Type هر بازی)", icon: Flame, golden: true },
+  { key: "COMBO", label: "🧩 کمبوهای رسمی (Official Combos)", icon: Puzzle },
+  { key: "DUAL_HEDGE", label: "⚖️ زوج‌تیپ‌های دوقلو (Dual-Hedge)", icon: Scale },
+  { key: "CORRECT_SCORE", label: "🎯 خوشه نتیجه دقیق (Correct Score Dutching)", icon: Crosshair },
+  { key: "BANKER", label: "🏦 بنکرهای امن (Single Bankers)", icon: Landmark },
+  { key: "ACCUMULATOR", label: "🔗 آکومولاتورها (Smart Accumulators)", icon: Link2 },
+  { key: "VETOED", label: "🛡️ وتو شده", icon: ShieldOff },
 ];
 
 /** فاصله حداقل بین درخواست‌های LLM در اجرای توالی ۳ بازی برتر (سپر سمت کلاینت) */
@@ -86,13 +85,12 @@ export function FlashcardDeck({
   const toggleCart = useQuantStore((s) => s.toggleCart);
   const scanning = useQuantStore((s) => s.scanning);
   const matchesCount = useQuantStore((s) => s.matches.length);
-  const autopilot = useQuantStore((s) => s.autopilot);
   const bumpLlmShield = useQuantStore((s) => s.bumpLlmShield);
   const executionMode = useQuantStore((s) => s.config.executionMode);
   const patchConfig = useQuantStore((s) => s.patchConfig);
 
   const [view, setView] = useState<"carousel" | "grid">(defaultView);
-  const [filter, setFilter] = useState<FilterKey>("APPROVED");
+  const [filter, setFilter] = useState<FilterKey>("ALL_APPROVED");
   const [index, setIndex] = useState(0);
   const activeMatchId = useQuantStore((s) => s.activeMatchId);
 
@@ -100,25 +98,34 @@ export function FlashcardDeck({
   const [deepLlm, setDeepLlm] = useState<Record<string, DeepLlmState>>({});
   const [bulkRunning, setBulkRunning] = useState(false);
 
-  const approvedCount = useMemo(() => cards.filter((c) => !(c.supervisor?.veto ?? false)).length, [cards]);
+  // ═══ v17.0 — شمارش استراتژی‌های منتخب برای نشان‌های نوار Bet-Type ═══
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = { COMBO: 0, DUAL_HEDGE: 0, CORRECT_SCORE: 0, BANKER: 0 };
+    for (const c of cards) {
+      if (c.routerVeto) continue;
+      const k = c.betType?.key;
+      if (k && k in counts) counts[k] += 1;
+    }
+    return counts;
+  }, [cards]);
+
+  const approvedCount = useMemo(() => cards.filter((c) => !c.routerVeto).length, [cards]);
   const vetoedCount = cards.length - approvedCount;
 
   const filtered = useMemo(() => {
     switch (filter) {
-      case "APPROVED":
-        return cards.filter((c) => !(c.supervisor?.veto ?? false));
+      case "ALL_APPROVED":
+        return cards.filter((c) => !c.routerVeto);
+      case "COMBO":
+        return cards.filter((c) => !c.routerVeto && c.betType?.key === "COMBO");
+      case "DUAL_HEDGE":
+        return cards.filter((c) => !c.routerVeto && c.betType?.key === "DUAL_HEDGE");
+      case "CORRECT_SCORE":
+        return cards.filter((c) => !c.routerVeto && c.betType?.key === "CORRECT_SCORE");
+      case "BANKER":
+        return cards.filter((c) => !c.routerVeto && c.betType?.key === "BANKER");
       case "VETOED":
-        return cards.filter((c) => c.supervisor?.veto ?? false);
-      case "PROFIT15":
-        return cards.filter((c) => c.pair.guaranteedMarginPct > 15);
-      case "RISK10":
-        return cards.filter((c) => c.pair.jointStates.bothLose < 0.1);
-      case "BOOSTER":
-        // v11.0 — بیمه اصل پول (Principal-Lock سود > ۲۵٪) روی کارت‌های کم‌ریسک
-        return cards.filter((c) => c.pair.jointStates.bothLose < 0.1 && boosterProfitPct(c.pair.totalOddsA, c.pair.totalOddsB) > 25);
-      case "FORTRESS":
-        // v11.0 — دژ نفوذناپذیر: ریسک زیر ۷٪ + تایید سوپروایزر
-        return cards.filter((c) => !(c.supervisor?.veto ?? false) && c.pair.jointStates.bothLose < 0.07);
+        return cards.filter((c) => c.routerVeto);
       default:
         return cards;
     }
@@ -202,7 +209,7 @@ export function FlashcardDeck({
   // ─── تحلیل عمیق ۳ بازی برتر +EV با فاصله ۱۵ ثانیه ───
   const runTop3DeepLlm = useCallback(async () => {
     if (bulkRunning) return;
-    const top3 = [...cards].filter((c) => !(c.supervisor?.veto ?? false)).sort((a, b) => b.pair.selectionA.evPct - a.pair.selectionA.evPct).slice(0, 3);
+    const top3 = [...cards].filter((c) => !c.routerVeto).sort((a, b) => b.pair.selectionA.evPct - a.pair.selectionA.evPct).slice(0, 3);
     if (top3.length === 0) return;
     setBulkRunning(true);
     try {
@@ -247,7 +254,7 @@ export function FlashcardDeck({
 
   // کلیدهای جهت‌نما برای کاروسل
   useEffect(() => {
-    if (view !== "carousel") return;
+    if (view !== "carousel" || filter === "ACCUMULATOR") return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
@@ -256,7 +263,7 @@ export function FlashcardDeck({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, go]);
+  }, [view, go, filter]);
 
   const loading = matchesCount > 0 && cards.length < matchesCount;
 
@@ -357,13 +364,15 @@ export function FlashcardDeck({
         </div>
       </div>
 
-      {/* فیلترهای طلایی v11.0 — پیش‌فرض «👑 تاییدشده سوپروایزر» */}
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="فیلتر سریع فلش‌کارت‌ها">
+      {/* ═══ v17.0 — نوار انتخاب استراتژی (Bet-Type Filter Bar) ═══ */}
+      <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="نوار انتخاب استراتژی Bet-Type">
         {FILTERS.map((f) => (
           <Button
             key={f.key}
             size="sm"
             variant="outline"
+            role="tab"
+            aria-selected={filter === f.key}
             className={cn(
               "h-7 gap-1 rounded-full border-white/10 px-2.5 text-[10px] sm:text-[11px]",
               filter === f.key
@@ -373,20 +382,31 @@ export function FlashcardDeck({
                 : f.golden
                   ? "border-amber-500/20 text-amber-200/70 hover:bg-amber-500/10"
                   : "text-muted-foreground",
-              f.key === "APPROVED" && filter !== f.key && "border-emerald-500/25 text-emerald-300/80"
+              f.key === "ALL_APPROVED" && filter !== f.key && "border-emerald-500/25 text-emerald-300/80"
             )}
-            onClick={() => setFilter(f.key)}
-            aria-pressed={filter === f.key}
+            onClick={() => {
+              setFilter(f.key);
+              setIndex(0);
+            }}
           >
             <f.icon className="size-3" />
             {f.label}
+            {f.key in typeCounts && typeCounts[f.key] > 0 && (
+              <span className="rounded-full bg-white/10 px-1.5 text-[9px] font-bold" dir="ltr">
+                {faNum(typeCounts[f.key], 0)}
+              </span>
+            )}
           </Button>
         ))}
       </div>
 
       {/* توضیح حالت اجرایی فعال */}
       <p className="text-[10px] leading-4 text-muted-foreground" role="note">
-        {executionMode === "DUAL_BOOK" ? (
+        {filter === "ACCUMULATOR" ? (
+          <>
+            📍 فعال: <b className="text-violet-300">🔗 آکومولاتورهای هوشمند روز</b> — میکس زنجیره‌ای ۲ و ۳ پایه‌ای از بهترین بنکرها/کمبوهای تاییدشده در ساعت‌های مختلف + فرمول پوشش زنده پای آخر (Time-Staggered Hedge).
+          </>
+        ) : executionMode === "DUAL_BOOK" ? (
           <>
             📍 حالت فعال: <b className="text-emerald-300">ثبت در دو سایت مجزا (Dual-Bookmaker Split)</b> — تیپ A در سایت اول و تیپ B در سایت دوم/صرافی ثبت می‌شود تا هرگز دو طرف یک بازی در یک اکانت ثبت نشود.
           </>
@@ -398,7 +418,9 @@ export function FlashcardDeck({
       </p>
 
       {/* بدنه */}
-      {ordered.length === 0 ? (
+      {filter === "ACCUMULATOR" ? (
+        <AccumulatorCards />
+      ) : ordered.length === 0 ? (
         <div className="flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-6 text-center">
           {loading || scanning ? (
             <>
@@ -412,7 +434,7 @@ export function FlashcardDeck({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                خلبان خودکار در حال اسکن با موتور کمّی محلی (صفر توکن) و ممیزی ایجنت سوپروایزر است…
+                خلبان خودکار در حال اجرای مسیریاب غیرخطی ۵ رژیمی (۱۰٬۰۰۰ شبیه‌سازی مونت‌کارلو × ۴ روش Bet-Type) است…
               </p>
               <div className="grid w-full max-w-md grid-cols-3 gap-2" aria-hidden>
                 {[0, 1, 2].map((i) => (
@@ -420,19 +442,19 @@ export function FlashcardDeck({
                 ))}
               </div>
             </>
-          ) : filter === "APPROVED" && cards.length > 0 ? (
+          ) : filter === "ALL_APPROVED" && cards.length > 0 ? (
             <>
               <ShieldOff className="size-6 text-rose-400" />
               <p className="text-xs leading-5 text-muted-foreground">
-                🛡️ در اسکن جاری <b className="text-foreground">{faNum(vetoedCount, 0)}</b> بازی ممیزی شد و همه توسط ایجنت سوپروایزر وتو شدند
-                (ریسک نامتقارن یا سود ضعیف) — <b className="text-emerald-300">عدم پیشنهاد شرط</b>. فیلتر «وتو شده» را ببینید.
+                🛡️ در اسکن جاری <b className="text-foreground">{faNum(vetoedCount, 0)}</b> بازی ممیزی شد و همه توسط گیت غیرخطی سوپروایزر وتو شدند
+                (شارپ منفی در هر ۴ روش Bet-Type) — <b className="text-emerald-300">عدم پیشنهاد شرط</b>. فیلتر «وتو شده» را ببینید.
               </p>
             </>
           ) : (
             <>
               <Sparkles className="size-6 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">
-                هنوز فلش‌کارتی با این فیلتر ساخته نشده — فیلتر دیگری را امتحان کنید یا صبر کنید اسکن بعدی کامل شود.
+                هنوز فلش‌کارتی با این استراتژی ساخته نشده — نوار Bet-Type دیگری را امتحان کنید یا صبر کنید اسکن بعدی کامل شود.
               </p>
             </>
           )}

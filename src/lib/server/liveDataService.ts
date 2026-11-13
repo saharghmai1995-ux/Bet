@@ -117,6 +117,50 @@ function gradeLegs(
   };
 }
 
+/**
+ * v17.0 — ارزیابی خوشه نتیجه دقیق (Correct Score Cluster):
+ * شرط برد خوشه = وقوع «هرکدام» از نمرات دقیق (any-of) — برخلاف تیپ چندپا که
+ * همه پاها باید همزمان ببرند. تسویه پولی با ضریب موثر داچینگ انجام می‌شود
+ * (stakeA × oddsA − stakeA) که دقیقاً برابر سود داچینگ معکوس‌ضریبی است.
+ */
+function gradeClusterLegs(
+  legs: SettlementLegDTO[],
+  scoreOf: (externalId: string) => { hg: number; ag: number; state: string } | undefined,
+  fallbackExternalId: string | null
+): { graded: GradedLeg[]; allWon: boolean; anyLost: boolean; hasOffBoard: boolean; allFinal: boolean } {
+  const graded: GradedLeg[] = [];
+  let anyWon = false;
+  let allFinal = true;
+  let hasOffBoard = false;
+
+  for (const leg of legs) {
+    const ext = leg.matchExternalId || fallbackExternalId;
+    const label = leg.matchLabel || ext || "بازی نامشخص";
+    if (!ext || isOffMatrixKey(leg.key)) {
+      hasOffBoard = true;
+      graded.push({ key: leg.key, won: false, offBoard: true, notFinal: false, matchLabel: label });
+      continue;
+    }
+    const score = scoreOf(ext);
+    if (!score || score.state !== "post") {
+      allFinal = false;
+      graded.push({ key: leg.key, won: false, offBoard: false, notFinal: true, matchLabel: label });
+      continue;
+    }
+    const won = legCovers(leg.key, score.hg, score.ag);
+    if (won) anyWon = true;
+    graded.push({ key: leg.key, won, offBoard: false, notFinal: false, matchLabel: label });
+  }
+
+  return {
+    graded,
+    allWon: anyWon, // در خوشه: برد = وقوع هرکدام از نمرات
+    anyLost: !anyWon,
+    hasOffBoard,
+    allFinal: graded.length > 0 && allFinal,
+  };
+}
+
 // ═════════════════════ موتور تسویه ═════════════════════
 
 interface EspnScoreInfo {
@@ -160,7 +204,7 @@ function espnUrlOf(externalId: string | null): string | null {
   return id ? `https://www.espn.com/soccer/match/_/gameId/${id}` : null;
 }
 
-/** فرمول سود مستند در سند ارتقا — مجموع استیک ۱۰۰ واحد */
+/** فرمول سود مستند در سند ارتقا — مجموع استیک ۱۰۰ واحد (v17.0: برای کارت‌های تک‌ستون = stakeA + stakeB) */
 function settlementProfit(
   status: Exclude<SlipStatus, "PENDING" | "LIVE" | "MANUAL_REVIEW" | "VOID">,
   stakeA: number,
@@ -169,23 +213,24 @@ function settlementProfit(
   oddsB: number
 ): { netProfit: number; profitA: number; profitB: number } {
   const r1 = (v: number) => Math.round(v * 100) / 100;
+  const totalStaked = stakeA + stakeB; // v17.0 — کارت‌های تک‌تیپ (BANKER): stakeB = 0
   switch (status) {
     case "WON_A":
-      // 🟢 برد تیپ A: سود خالص = stakeA × oddsA − ۱۰۰
-      return { netProfit: r1(stakeA * oddsA - DUTCH_TOTAL), profitA: r1(stakeA * oddsA - DUTCH_TOTAL), profitB: r1(-stakeB) };
+      // 🟢 برد تیپ A: سود خالص = stakeA × oddsA − مجموع استیک
+      return { netProfit: r1(stakeA * oddsA - totalStaked), profitA: r1(stakeA * oddsA - totalStaked), profitB: r1(-stakeB) };
     case "WON_B":
-      // 🟢 برد تیپ B: سود خالص = stakeB × oddsB − ۱۰۰
-      return { netProfit: r1(stakeB * oddsB - DUTCH_TOTAL), profitA: r1(-stakeA), profitB: r1(stakeB * oddsB - DUTCH_TOTAL) };
+      // 🟢 برد تیپ B: سود خالص = stakeB × oddsB − مجموع استیک
+      return { netProfit: r1(stakeB * oddsB - totalStaked), profitA: r1(-stakeA), profitB: r1(stakeB * oddsB - totalStaked) };
     case "DOUBLE_WIN":
       // 🏆 برد طلایی هر دو تیپ: جمع سود هر دو
       return {
-        netProfit: r1(stakeA * oddsA + stakeB * oddsB - DUTCH_TOTAL),
+        netProfit: r1(stakeA * oddsA + stakeB * oddsB - totalStaked),
         profitA: r1(stakeA * oddsA - stakeA),
         profitB: r1(stakeB * oddsB - stakeB),
       };
     case "MIDDLE_TRAP":
       // 🔴 باخت همزمان — ثبت صادقانه
-      return { netProfit: r1(-DUTCH_TOTAL), profitA: r1(-stakeA), profitB: r1(-stakeB) };
+      return { netProfit: r1(-totalStaked), profitA: r1(-stakeA), profitB: r1(-stakeB) };
   }
 }
 
@@ -252,8 +297,17 @@ export async function settleFinishedSlips(options?: { notify?: boolean; /** v15.
       ftFound += 1;
       const legsA = safeParseLegs(slip.legsA);
       const legsB = safeParseLegs(slip.legsB);
-      const gradedA = gradeLegs(legsA, scoreOf, slip.externalId);
-      const gradedB = gradeLegs(legsB, scoreOf, slip.externalId);
+      // ═══ v17.0 — خوشه نتیجه دقیق (CS_CLUSTER): داچینگ معکوس‌ضریبی N نمره ≡ تک‌شرط با ضریب موثر ═══
+      // شرط برد خوشه = «هرکدام» از نمرات (any-of) — برخلاف زوج‌تیپ که «هر دو پا» است.
+      const isClusterA =
+        slip.productLine === "CS_CLUSTER" || legsA.filter((l) => l.key.startsWith("CS_")).length > 1;
+      const gradedA = isClusterA
+        ? gradeClusterLegs(legsA, scoreOf, slip.externalId)
+        : gradeLegs(legsA, scoreOf, slip.externalId);
+      // v17.0 — کارت تک‌تیپ (BANKER): تیپ B فاقد شرط است — همیشه «برنده» فرض می‌شود
+      const gradedB = legsB.length === 0
+        ? { graded: [], allWon: true, anyLost: false, hasOffBoard: false, allFinal: true }
+        : gradeLegs(legsB, scoreOf, slip.externalId);
 
       let status: SlipStatus;
       let note: string;
@@ -275,7 +329,9 @@ export async function settleFinishedSlips(options?: { notify?: boolean; /** v15.
         const bWon = gradedB.allWon;
         if (aWon && bWon) {
           status = "DOUBLE_WIN";
-          note = "🏆 نتیجه در خانه‌های مشترک هر دو تیپ — برد طلایی (Jackpot)";
+          note = isClusterA
+            ? "🏆 خوشه نتیجه دقیق برنده شد — یکی از نمرات خوشه وقوع یافت (تسویه با ضریب موثر داچینگ)"
+            : "🏆 نتیجه در خانه‌های مشترک هر دو تیپ — برد طلایی (Jackpot)";
         } else if (aWon) {
           status = "WON_A";
           note = "🟢 تیپ A برد — تسویه خودکار با نتیجه واقعی ESPN";
@@ -284,7 +340,9 @@ export async function settleFinishedSlips(options?: { notify?: boolean; /** v15.
           note = "🟢 تیپ B برد — تسویه خودکار با نتیجه واقعی ESPN";
         } else {
           status = "MIDDLE_TRAP";
-          note = "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
+          note = isClusterA
+            ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
+            : "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
         }
       }
 
@@ -601,6 +659,8 @@ export async function issueSlip(
       timingEndA: winA?.endAt ?? null,
       timingStartB: winB?.startAt ?? null,
       timingEndB: winB?.endAt ?? null,
+      // v17.0 — خط تولید Bet-Type برای افراز مجزای کارنامه (پیش‌فرض: SINGLE زوج‌تیپ)
+      productLine: item.productLine ?? "SINGLE",
       status: "PENDING",
     },
   });

@@ -155,53 +155,81 @@ export async function GET() {
     // نمی‌شوند؛ ریشه باگ «۳ تله میانی بدون صدور و تایید قبلی» حذف شد.
     // v13.5.1 — بازخوانی فقط با پرچم retroIssued شناسایی می‌شود (مستقل از تایید)؛ کارت
     // بازخوانی هرگز «تاییدشده» نیست و دفتر سایه (وتوی زنده) هم نیست — دسته مستقل ه.
+    // ═══ v17.0 — افراز ۵ روش Bet-Type: SINGLE (زوج‌تیپ) / COMBO / BANKER / CS_CLUSTER / SNIPER ═══
     const retro = slips.filter((s) => s.retroIssued);
     const live = slips.filter((s) => s.supervisorApproved && !s.retroIssued);
-    const partitionA = live.filter((s) => (s.productLine ?? "SINGLE") === "SINGLE");
-    const partitionB = live.filter((s) => s.productLine === "COMBO");
-    const partitionC = live.filter((s) => s.productLine === "SNIPER");
+    const partitionHedge = live.filter((s) => (s.productLine ?? "SINGLE") === "SINGLE");
+    const partitionCombo = live.filter((s) => s.productLine === "COMBO");
+    const partitionBanker = live.filter((s) => s.productLine === "BANKER");
+    const partitionCs = live.filter((s) => s.productLine === "CS_CLUSTER");
+    const partitionSniper = live.filter((s) => s.productLine === "SNIPER");
     const partitionD = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
 
-    // کنترل افراز: مجموع ۵ دسته = کل کارت‌ها (هر کارت دقیقاً یک‌بار)
-    const sumTotal = partitionA.length + partitionB.length + partitionC.length + partitionD.length + retro.length;
+    // کنترل افراز: مجموع دسته‌ها = کل کارت‌ها (هر کارت دقیقاً یک‌بار)
+    const sumTotal =
+      partitionHedge.length + partitionCombo.length + partitionBanker.length + partitionCs.length + partitionSniper.length + partitionD.length + retro.length;
 
     const categories: CategoryPerformanceDTO[] = [
       agg(
-        partitionA,
+        partitionHedge,
         "APPROVED",
-        "👑 دسته الف — تک‌بازی‌های تاییدشده سوپروایزر",
-        "خط تولید ۱ (Single Dual-Hedge) — پول واقعی و اعلام تلگرام؛ فقط کارت‌های واقعاً پیش از بازی صادرشده (بدون کارت‌های بازخوانی)",
+        "⚖️ زوج‌تیپ‌های دوقلو (Dual-Hedge)",
+        "خط تولید ۱ (Dual-Hedge Orthogonal Pair) — زوج‌های متعامد تک‌دکمه‌ای با برد طلایی همزمان؛ پول واقعی و اعلام تلگرام",
         false
       ),
       agg(
-        partitionB,
+        partitionCombo,
         "COMBO",
-        "🔗 دسته ب — میکس‌های ۲ و ۳ تایی هوشمند",
-        "خط تولید ۲ (Smart Combos) — محاسبه مستقل؛ با اولین صدور میکس‌ها پر می‌شود",
+        "🧩 کمبوهای رسمی (Official Combos)",
+        "خط تولید ۲ (Official Single-Button Combos: 1X&U3.5 / 1&O1.5 / BTTS&O2.5) — مارکت ترکیبی رسمی بوک‌میکر با پوشش مکمل",
         false
       ),
       agg(
-        partitionC,
+        partitionBanker,
+        "BANKER",
+        "🏦 بنکرهای امن (Single Bankers)",
+        "خط تولید ۳ (Safe Bankers) — تک‌ستون امن با اطمینان بالا (DNB/1/DC، احتمال ماتریس ≥ ۸۲٪) و استیک مستقیم ۶۰ واحدی",
+        false
+      ),
+      agg(
+        partitionCs,
+        "CS_CLUSTER",
+        "🎯 خوشه نتیجه دقیق (Correct Score Cluster)",
+        "خط تولید ۴ (3/4-Score Correct Score Dutching) — داچینگ خوشه‌ای نمرات دقیق با آنتروپی پایین ماتریس",
+        false
+      ),
+      agg(
+        partitionSniper,
         "SNIPER",
-        "🎯 دسته ج — شکارچی ضرایب بالا",
-        "خط تولید ۳ (High-Odds Sniper) — محاسبه مستقل؛ با اولین صدور شکارها پر می‌شود",
+        "🎯 شکارچی ضرایب بالا (Legacy Sniper)",
+        "خط تولید قدیمی ۳ (High-Odds Sniper) — فقط کارت‌های تاریخی نسخه‌های پیشین",
         false
       ),
       agg(
         partitionD,
         "VETOED",
-        "🛡️ دسته د — وتوشده‌های دفتر سایه",
-        "تسویه کاغذی counterfactual — ۰ اشتراک با تاییدشده‌ها؛ اثبات نجات سرمایه (والنسیا–رئال مادرید −۱۰۰ واحد)",
+        "🛡️ وتوشده‌های دفتر سایه",
+        "تسویه کاغذی counterfactual — ۰ اشتراک با تاییدشده‌ها؛ اثبات نجات سرمایه",
         true
       ),
       agg(
         retro,
         "RETRO",
-        "📚 دسته ه — کارت‌های بازخوانی (تحلیل کاغذی)",
-        "بازی‌های FT که هرگز پیش از بازی کارت صادر و تایید نشده بود — خط لوله چندروزه آنها را فقط برای یادگیری دکترین تسویه کاغذی می‌کند؛ هرگز در وین‌ریت واقعی کانال و دسته الف شمرده نمی‌شوند",
+        "📚 کارت‌های بازخوانی (تحلیل کاغذی)",
+        "بازی‌های FT که هرگز پیش از بازی کارت صادر و تایید نشده بود — فقط برای یادگیری دکترین؛ هرگز در وین‌ریت واقعی شمرده نمی‌شوند",
         true
       ),
     ];
+
+    // ─── v17.0 — سطر تجمیعی (Aggregate) — عملکرد کل خطوط تولید بدون سایه/بازخوانی ───
+    const aggregateRow = agg(
+      [...partitionHedge, ...partitionCombo, ...partitionBanker, ...partitionCs, ...partitionSniper],
+      "TOTAL",
+      "📊 تجمیعی ۵ خط تولید (Aggregate)",
+      "جمع عملکرد تمام Bet-Typeهای واقعی (زوج‌تیپ + کمبو + بنکر + خوشه + شکارچی) — بدون دفتر سایه و بازخوانی",
+      false
+    );
+    categories.push(aggregateRow);
 
     // ─── v13.4 — معادل دفتری ۶ فیلتر دک فلش‌کارت (مستقیماً از ستون‌های دفتر صدور) ───
     // APPROVED: تاییدشدهٔ زنده — کارت‌های بازخوانی (retroIssued) هرگز پیش از بازی صادر نشده‌اند و حذف می‌شوند

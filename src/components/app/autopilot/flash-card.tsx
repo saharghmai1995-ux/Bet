@@ -60,17 +60,54 @@ const TRUST_ICONS: Record<FlashcardView["trust"]["kind"], typeof Award> = {
   SILVER: BadgeCheck,
 };
 
-/** متن آماده کپی تیپ — v16.0 (تک‌تیپ طلایی سوپروایزر + پشتیبانی شتاب‌دهنده نامتقارن) */
+// ═══ v17.0 — استایل بج نئونی استراتژی منتخب (Bet-Type Badge) ═══
+const BET_TYPE_BADGE: Record<string, { border: string; bg: string; text: string; glow: string }> = {
+  BANKER: { border: "border-emerald-400/60", bg: "bg-emerald-500/15", text: "text-emerald-300", glow: "shadow-[0_0_18px_rgba(16,185,129,0.45)]" },
+  COMBO: { border: "border-violet-400/60", bg: "bg-violet-500/15", text: "text-violet-300", glow: "shadow-[0_0_18px_rgba(167,139,250,0.45)]" },
+  CORRECT_SCORE: { border: "border-fuchsia-400/60", bg: "bg-fuchsia-500/15", text: "text-fuchsia-300", glow: "shadow-[0_0_18px_rgba(232,121,249,0.45)]" },
+  DUAL_HEDGE: { border: "border-amber-400/60", bg: "bg-amber-500/15", text: "text-amber-300", glow: "shadow-[0_0_18px_rgba(251,191,36,0.45)]" },
+  ACCUMULATOR: { border: "border-cyan-400/60", bg: "bg-cyan-500/15", text: "text-cyan-300", glow: "shadow-[0_0_18px_rgba(34,211,238,0.45)]" },
+};
+
+/** متن آماده کپی تیپ — v17.0 (استراتژی منتخب مسیریاب Bet-Type + پشتیبانی خوشه نتیجه دقیق) */
 export function cardCopyText(v: FlashcardView): string {
   const p = v.pair;
   const sup = v.supervisor;
-  const head = `⚽ فوتبال‌کوانت v16.0 Supervisor Quant — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
-  const crownLine = sup
-    ? `👑 تک‌تیپ تاییدشده سوپروایزر — امتیاز مونت‌کارلو: ${sup.score100}/۱۰۰${p.archetype ? ` (${p.archetype.short})` : ""}`
-    : p.archetype
-      ? `📐 الگو: ${p.archetype.short}`
-      : "";
+  const bt = v.betType;
+  const head = `⚽ فوتبال‌کوانت v17.0 Bet-Type Router — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
+  const crownLine = bt
+    ? `${bt.icon} استراتژی منتخب سوپروایزر: ${bt.labelFa} — امتیاز غیرخطی ${Math.round(bt.score)} · شارپ ${bt.sharpe.toFixed(2)}`
+    : sup
+      ? `👑 تک‌تیپ تاییدشده سوپروایزر — امتیاز مونت‌کارلو: ${sup.score100}/۱۰۰${p.archetype ? ` (${p.archetype.short})` : ""}`
+      : p.archetype
+        ? `📐 الگو: ${p.archetype.short}`
+        : "";
   const acc = p.accelerator?.active ? p.accelerator : null;
+
+  if (bt?.key === "BANKER") {
+    return [
+      head,
+      crownLine,
+      `🏦 تیپ امن تک‌ستون (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA}`,
+      `💵 استیک مستقیم: ${faNum(bt.stakeMain, 0)} واحد | احتمال ماتریس: ${(bt.winProb * 100).toFixed(1)}٪ | سود در صورت برد: +${faNum(bt.guaranteedProfitUnits, 1)} واحد`,
+      `🔗 این بنکر به‌صورت خودکار پایه اصلی آکومولاتور روز است`,
+      `📊 آنتروپی ماتریس: ${bt.entropy.toFixed(2)} | عدم تقارن قدرت Rλ: ${bt.rLambda.toFixed(2)}`,
+      "⚖️ ابزار آموزشی تحلیل کمّی — مسئولیت استفاده با کاربر است.",
+    ].join("\n");
+  }
+
+  if (bt?.cluster) {
+    return [
+      head,
+      crownLine,
+      `🎯 خوشه نتیجه دقیق (${bt.cluster.length} شانسه) — ضریب موثر کل خوشه: ${bt.effectiveOdds.toFixed(2)}x`,
+      ...bt.cluster.map((c) => `   ${c.score} @ ${c.odds.toFixed(2)}x ⬅️ استیک ${faNum(c.stake, 1)} واحد | سود در صورت وقوع: +${faNum(c.profit, 1)} واحد`),
+      `✅ پوشش خوشه: ${(bt.winProb * 100).toFixed(1)}٪ فضای ماتریس | سود خالص تضمینی در صورت وقوع هر یک: +${faNum(bt.guaranteedProfitUnits, 1)} واحد`,
+      `📊 آنتروپی شانون: ${bt.entropy.toFixed(2)} ≤ ۲.۴۲ | مجموع ۴ خانه برتر: ${(bt.top4Sum * 100).toFixed(0)}٪`,
+      "⚖️ ابزار آموزشی تحلیل کمّی — مسئولیت استفاده با کاربر است.",
+    ].join("\n");
+  }
+
   const profitLine = acc
     ? `⚡ شتاب‌دهنده نامتقارن فعال — قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B · برد A: ${acc.profitOnA >= 0 ? "+" : ""}${faNum(acc.profitOnA, 1)} واحد · برد همزمان (جک‌پات): +${faNum(acc.profitOnDoubleWin, 1)} واحد`
     : p.guaranteedMarginPct > 0
@@ -82,7 +119,7 @@ export function cardCopyText(v: FlashcardView): string {
     `🔹 تیپ A (ضریب ${p.totalOddsA.toFixed(2)}): ${p.labelA} ⬅️ مبلغ شرط: ${faNum(acc ? acc.stakeA : p.equalProfit.stakeA, 1)} واحد`,
     `🟢 تیپ B مکمل (ضریب ${p.totalOddsB.toFixed(2)}): ${p.labelB} ⬅️ مبلغ شرط: ${faNum(acc ? acc.stakeB : p.equalProfit.stakeB, 1)} واحد`,
     profitLine,
-    `✅ پوشش سناریوها: ${(p.archetype ? p.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100).toFixed(0)}٪ | ریسک باخت همزمان: ${(p.jointStates.bothLose * 100).toFixed(1)}%`,
+    `✅ پوشش سناریوها: ${bt ? bt.matrixCoveragePct.toFixed(0) : ((p.archetype ? p.archetype.coveragePct * 100 : (1 - p.jointStates.bothLose) * 100)).toFixed(0)}٪ | ریسک باخت: ${((bt?.jointLossProb ?? p.jointStates.bothLose) * 100).toFixed(1)}%`,
     `⚖️ ${p.verdict}`,
   ]
     .filter(Boolean)
@@ -189,6 +226,12 @@ export function FlashCard({
   const sup = view.supervisor;
   const vetoed = sup?.veto ?? false;
   const dualBook = (sup?.executionMode ?? "DUAL_BOOK") === "DUAL_BOOK";
+  // v17.0 — استراتژی منتخب مسیریاب غیرخطی Bet-Type
+  const bt = view.betType;
+  const btBadge = bt ? BET_TYPE_BADGE[bt.key] : null;
+  const isBanker = bt?.key === "BANKER";
+  const isCluster = Boolean(bt?.cluster);
+  const isCombo = bt?.key === "COMBO";
   // v16.0 — شتاب‌دهنده نامتقارن موتور: قفل اصل سرمایه ۱۰۰ واحدی روی تیپ B + تجمیس کل سود روی تیپ A
   const acc = pair.accelerator?.active ? pair.accelerator : null;
   const stakeAShown = acc ? acc.stakeA : pair.equalProfit.stakeA;
@@ -284,7 +327,7 @@ export function FlashCard({
             <div className="flex items-center gap-2 rounded-lg border border-rose-500/35 bg-rose-500/[0.09] px-2.5 py-1.5">
               <ShieldAlert className="size-4 shrink-0 text-rose-400" />
               <p className="text-[10px] font-bold leading-4 text-rose-300">
-                وتو شده توسط ایجنت سوپروایزر: ریسک نامتقارن — عدم پیشنهاد شرط
+                وتو شده توسط گیت غیرخطی سوپروایزر: هیچ‌یک از ۴ روش Bet-Type آستانه کیفیت (EV &gt; +۸٪ · Sharpe &gt; ۰.۳۲) را پاس نکرد — عدم پیشنهاد شرط
                 {sup?.vetoReason && <span className="block font-normal text-rose-200/80">{sup.vetoReason}</span>}
               </p>
             </div>
@@ -299,7 +342,94 @@ export function FlashCard({
             </div>
           )}
 
+          {/* ═══ v17.0 — بج نئونی بزرگ استراتژی منتخب سوپروایزر (Bet-Type Router) ═══ */}
+          {bt && btBadge && (
+            <div className={`rounded-xl border px-3 py-2 ${btBadge.border} ${btBadge.bg} ${btBadge.glow}`}>
+              <p className={`flex flex-wrap items-center gap-x-1.5 text-[11px] font-extrabold ${btBadge.text}`}>
+                <span className="text-base leading-none" aria-hidden>{bt.icon}</span>
+                استراتژی منتخب سوپروایزر: {bt.labelFa}
+              </p>
+              <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[9.5px] font-semibold text-foreground/75">
+                <span>پوشش ماتریس: <b className="font-num" dir="ltr">{faNum(bt.matrixCoveragePct, 1)}٪</b></span>
+                <span>ضریب موثر: <b className="font-num" dir="ltr">{bt.effectiveOdds.toFixed(2)}x</b></span>
+                <span>شارپ: <b className="font-num" dir="ltr">{bt.sharpe.toFixed(2)}</b></span>
+                <span>EV: <b className="font-num" dir="ltr">{(bt.ev * 100).toFixed(1)}٪</b></span>
+                <span className="text-muted-foreground" dir="ltr">H={bt.entropy.toFixed(2)} · Rλ={bt.rLambda.toFixed(2)} · Top4={(bt.top4Sum * 100).toFixed(0)}٪</span>
+              </p>
+              <p className="mt-1 border-t border-white/10 pt-1 text-[9px] leading-4 text-muted-foreground">{bt.rationale}</p>
+            </div>
+          )}
+
+          {/* ═══ v17.0 — باکس تک‌ستون امن (BANKER — استیک مستقیم ۶۰ واحدی + پایه آکومولاتور) ═══ */}
+          {isBanker && bt && (
+            <div className="rounded-xl border border-emerald-500/40 bg-gradient-to-l from-emerald-500/[0.12] to-transparent p-3">
+              <p className="mb-1 flex items-center gap-1 text-[10px] font-bold text-emerald-300">
+                <span className="inline-block size-2 rounded-sm bg-emerald-500" />
+                🏦 بنکر امن — تک‌ستون با اطمینان بالا (ضریب هدف ۱.۳۸..۱.۶۸)
+              </p>
+              <p className="min-h-[30px] break-words text-[11.5px] font-semibold leading-5 text-foreground/95">{bt.mainLabel}</p>
+              <p className="mt-0.5 text-[9px] leading-3.5 text-emerald-200/75" dir="ltr">Market: {bt.mainLabelEn}</p>
+              <div className="mt-2 grid grid-cols-4 gap-1.5 text-center">
+                <div className="rounded-lg border border-white/10 bg-black/25 px-1 py-1.5">
+                  <p className="text-[8.5px] text-muted-foreground">ضریب</p>
+                  <p className="font-num text-sm font-bold text-emerald-300" dir="ltr">{bt.mainOdds.toFixed(2)}</p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-black/25 px-1 py-1.5">
+                  <p className="text-[8.5px] text-muted-foreground">استیک مستقیم</p>
+                  <p className="font-num text-sm font-bold text-foreground" dir="ltr">{faNum(bt.stakeMain, 0)}</p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-black/25 px-1 py-1.5">
+                  <p className="text-[8.5px] text-muted-foreground">احتمال ماتریس</p>
+                  <p className="font-num text-sm font-bold text-cyan-300" dir="ltr">{faNum(bt.mainProb * 100, 1)}٪</p>
+                </div>
+                <div className="rounded-lg border border-white/10 bg-black/25 px-1 py-1.5">
+                  <p className="text-[8.5px] text-muted-foreground">سود در صورت برد</p>
+                  <p className="font-num text-sm font-bold text-amber-300" dir="ltr">+{faNum(bt.guaranteedProfitUnits, 1)}</p>
+                </div>
+              </div>
+              <p className="mt-1.5 flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[9px] font-semibold text-violet-300">
+                🔗 این بنکر به‌صورت خودکار «پایه اصلی آکومولاتور روز» (2-Fold / 3-Fold / Time-Staggered) استفاده می‌شود
+              </p>
+            </div>
+          )}
+
+          {/* ═══ v17.0 — جدول خوشه نتیجه دقیق (CORRECT SCORE CLUSTER DUTCHING) ═══ */}
+          {isCluster && bt?.cluster && (
+            <div className="space-y-1.5 rounded-xl border border-fuchsia-500/40 bg-gradient-to-l from-fuchsia-500/[0.12] to-transparent p-3">
+              <p className="flex items-center gap-1 text-[10px] font-bold text-fuchsia-300">
+                🎯 خوشه {bt.cluster.length} تایی نتیجه دقیق — داچینگ ۱۰۰ واحدی به نسبت معکوس ضرایب
+              </p>
+              <div className="overflow-hidden rounded-lg border border-white/10">
+                <table className="w-full text-[10px]">
+                  <thead>
+                    <tr className="bg-white/[0.05] text-muted-foreground">
+                      <th className="px-2 py-1 text-right font-semibold">نتیجه دقیق</th>
+                      <th className="px-2 py-1 font-semibold">ضریب</th>
+                      <th className="px-2 py-1 font-semibold">استیک</th>
+                      <th className="px-2 py-1 font-semibold">سود خالص در صورت وقوع</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bt.cluster.map((c) => (
+                      <tr key={c.score} className="border-t border-white/8 bg-black/20">
+                        <td className="px-2 py-1 text-right"><b className="font-num text-fuchsia-200" dir="ltr">{c.score}</b></td>
+                        <td className="px-2 py-1 text-center font-num text-foreground/85" dir="ltr">{c.odds.toFixed(2)}x</td>
+                        <td className="px-2 py-1 text-center font-num text-sky-300" dir="ltr">{faNum(c.stake, 1)}</td>
+                        <td className="px-2 py-1 text-center font-num font-bold text-emerald-300" dir="ltr">+{faNum(c.profit, 1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="flex flex-wrap items-center justify-between gap-1 text-[10px] font-semibold">
+                <span className="text-muted-foreground">ضریب موثر کل خوشه: <b className="font-num text-fuchsia-200" dir="ltr">{bt.effectiveOdds.toFixed(2)}x</b> (سود خالص تضمینی در صورت وقوع هر یک از {bt.cluster.length} نتیجه)</span>
+                <span className="text-emerald-300">پوشش کل خوشه: <b className="font-num" dir="ltr">{faNum(bt.winProb * 100, 1)}٪</b></span>
+              </p>
+            </div>
+          )}
+
           {/* باکس دوقلوی تیپ مکمل */}
+          {!isBanker && !isCluster && (
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-xl border border-sky-500/30 bg-sky-500/10 p-2.5">
               <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold text-sky-300">
@@ -383,6 +513,7 @@ export function FlashCard({
               </p>
             </div>
           </div>
+          )}
 
           {/* ═══ v15.0 — نشان رسمی قانون تسویه (Settlement Rule Badge) ═══ */}
           <p className="flex items-center justify-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/[0.08] px-2 py-1.5 text-[9.5px] font-semibold text-amber-200/90">
@@ -525,7 +656,7 @@ export function FlashCard({
               variant="outline"
               className={`h-8 gap-1 border-white/15 text-[11px] ${inCart ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300" : "text-foreground/80"}`}
               onClick={onToggleCart}
-              aria-label={inCart ? "حذف زوج‌تیپ از سبد" : "افزودن زوج‌تیپ به سبد روزانه"}
+              aria-label={inCart ? "حذف تیپ از سبد" : "افزودن تیپ به سبد روزانه"}
             >
               {inCart ? <Check className="size-3.5" /> : <ShoppingCart className="size-3.5" />}
               {inCart ? "در سبد" : "افزودن به سبد"}
@@ -564,13 +695,12 @@ export function FlashCard({
                 <b className="font-num text-foreground" dir="ltr">۱۰,۰۰۰</b> شبیه‌سازی مونت‌کارلو، این الگو بالاترین امتیاز کیفیت را گرفت:
               </p>
               <p className="mt-1 rounded-lg bg-black/30 p-1.5 text-[10px] leading-4">
-                <b className="text-foreground">SupervisorScore v16.0</b> = (پوشش ماتریس {faNum(sup.coveragePct, 0)}٪ × ۳.۰) + (سود تضمینی {faNum(sup.guaranteedProfitPct, 1)}٪ × ۱.۰) − (ریسک {faNum(sup.jointLossRiskPct, 1)}٪^۱.۷۵) ={" "}
-                <b className={vetoed ? "text-rose-300" : "text-emerald-300"} dir="ltr">
-                  {sup.raw}
-                </b>{" "}
-                → امتیاز نهایی <b className="text-amber-300" dir="ltr">{sup.score100}/100</b>
+                <b className="text-foreground">Non-Linear Sharpe &amp; Kelly Utility v17.0</b> — هر ۴ روش تک‌بازی (🏦 بنکر · 🧩 کمبو · 🎯 خوشه نتیجه دقیق · ⚖️ زوج‌تیپ) با تابع مطلوبیت غیرخطی امتیاز گرفته‌اند:
+                <span className="mt-0.5 block text-[9px] text-muted-foreground" dir="ltr">
+                  EV = p·(O−1) + pDW·0.45 − (1−p) &nbsp;·&nbsp; Sharpe = EV/σ &nbsp;·&nbsp; Score = (Sharpe×45 + p^2.2×100×0.55 + (2.8−H)×12) × LeagueReliability
+                </span>
                 <span className="mt-0.5 block text-[9px] text-muted-foreground">
-                  فرمول v16.0: پاداش فریبنده Double-Win حذف شد — ۱۰۰٪ بر پایه پهنای پوشش ماتریس ۶×۶ و کمینه‌سازی ریسک باخت همزمان (گیت سخت طلایی: ریسک &gt; ۱۰.۵٪ = وتو و انتقال به دفتر سایه · دژ نفوذناپذیر: ریسک &lt; ۷٪)
+                  آنتروپی شانون ماتریس ۶×۶ (H) و نسبت عدم تقارن قدرت (Rλ) مسیر انتخاب را تعیین می‌کنند — گیت تایید: EV &gt; +۸٪ و Sharpe &gt; ۰.۳۲؛ تنها لیگ‌های سمّی (esp.2 / usa.1) و بازی‌های شارپ منفی در هر ۴ روش وتو می‌شوند.
                 </span>
               </p>
               {sup.vetoReason && (

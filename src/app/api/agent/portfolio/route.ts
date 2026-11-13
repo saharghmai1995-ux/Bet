@@ -6,6 +6,8 @@ import { runMonteCarlo, jointStates, MC_SELECTIONS, type SelectionKey, type Mont
 import { simultaneousKelly } from "@/lib/engine/kelly";
 import { checkMiddleTrap, type SelectionKind, type TrapLeg } from "@/lib/engine/dutching";
 import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair } from "@/lib/engine/orthogonal";
+import { routeBetTypes, type MarketPrices } from "@/lib/engine/betrouter";
+import { buildScoreMatrix } from "@/lib/engine/poisson";
 import { getActiveRuleFor } from "@/lib/server/calibration-rules";
 import type { LambdaBreakdown } from "@/lib/engine/matchEngine";
 import type { PortfolioPairDTO, PortfolioResultDTO, PortfolioSelectionDTO } from "@/lib/types";
@@ -462,6 +464,46 @@ export async function POST(req: NextRequest) {
       console.error("orthogonal merge failed:", orthoErr);
     }
 
+    // ─── v17.0 — مسیریاب غیرخطی ۵ رژیمی Bet-Type (Non-Linear Multi-Regime Router) ───
+    // برای هر مسابقه آنتروپی شانون ماتریس ۶×۶، نسبت عدم تقارن قدرت Rλ و مجموع
+    // ۴ خانه برتر محاسبه و بازی به مناسب‌ترین استراتژی از ۵ روش تخصصی هدایت می‌شود:
+    // BANKER / COMBO / CORRECT SCORE CLUSTER / DUAL-HEDGE (+ ACCUMULATOR سطح پرتفوی روز)
+    let betTypeRouter: import("@/lib/engine/betrouter").BetTypeRouteResult | null = null;
+    try {
+      const priceOf = (key: "HOME" | "DRAW" | "AWAY" | "O25" | "U25"): number => {
+        let best = 0;
+        for (const o of primaryOdds) {
+          const v = key === "HOME" ? o.oddsHome : key === "DRAW" ? o.oddsDraw : key === "AWAY" ? o.oddsAway : key === "O25" ? o.oddsOver25 : o.oddsUnder25;
+          if (v > best) best = v;
+        }
+        if (best > 1.01) return best;
+        // fallback: خط اجماعی خود بازی
+        return key === "HOME" ? primary.oddsHome : key === "DRAW" ? primary.oddsDraw : key === "AWAY" ? primary.oddsAway : key === "O25" ? primary.oddsOver25 : primary.oddsUnder25;
+      };
+      const prices: MarketPrices = {
+        oddsHome: priceOf("HOME"),
+        oddsDraw: priceOf("DRAW"),
+        oddsAway: priceOf("AWAY"),
+        oddsOver25: priceOf("O25"),
+        oddsUnder25: priceOf("U25"),
+      };
+      // ضریب اعتبار لیگ از بردار قانون کالیبراسیون (انحراف λ → اعتماد معکوس)
+      const leagueReliability = activeRule?.lambdaMultiplier
+        ? Math.min(1.15, Math.max(0.85, activeRule.lambdaMultiplier))
+        : 1;
+      betTypeRouter = routeBetTypes({
+        matrix: buildScoreMatrix(prim.lambdas.home, prim.lambdas.away),
+        lambdaHome: prim.lambdas.home,
+        lambdaAway: prim.lambdas.away,
+        prices,
+        pairs: topPairs,
+        league: primary.league,
+        leagueReliability,
+      });
+    } catch (routerErr) {
+      console.error("bet-type router failed:", routerErr);
+    }
+
     // ─── ذخیره TipSet برای زوج برتر ───
     const recommendedId = topPairs[0]?.id ?? null;
     if (topPairs.length > 0) {
@@ -532,6 +574,7 @@ export async function POST(req: NextRequest) {
       recommendedId,
       batchId,
       bankroll,
+      betTypeRouter,
     };
 
     return NextResponse.json(result);

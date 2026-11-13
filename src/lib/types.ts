@@ -449,6 +449,12 @@ export interface PortfolioResultDTO {
   recommendedId: string | null;
   batchId: string | null;
   bankroll: number;
+  /**
+   * v17.0 — مسیریاب غیرخطی ۵ رژیمی Bet-Type (Non-Linear Multi-Regime Router):
+   * سنجه‌های آنتروپی/Rλ/Top4 ماتریس ۶×۶ + کاندیدهای ۴ روش تک‌بازی با امتیاز
+   * Non-Linear Sharpe & Kelly Utility + واریانت برنده سوپروایزر.
+   */
+  betTypeRouter?: import("./engine/betrouter").BetTypeRouteResult | null;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -874,6 +880,11 @@ export interface IssueSlipItemDTO {
   archetype?: string | null;
   /** v9.0 — کد الگو (A1..A5) */
   archetypeCode?: string | null;
+  /**
+   * v17.0 — خط تولید Bet-Type برای افراز مجزای کارنامه:
+   * SINGLE (زوج‌تیپ) | COMBO (کمبوی رسمی) | BANKER (تک‌ستون امن) | CS_CLUSTER (خوشه نتیجه دقیق) | SNIPER
+   */
+  productLine?: string | null;
   lambdaHome?: number | null;
   lambdaAway?: number | null;
   /**
@@ -901,7 +912,8 @@ export interface IssueSlipItemDTO {
 export interface CategoryPerformanceDTO {
   // v13.4 — کلیدهای فیلتر دک فلش‌کارت (RISK10/BOOSTER/PROFIT15/FORTRESS) برای «پوشش کامل عملکرد هر فیلتر» اضافه شدند
   // v13.2 — RETRO: دسته پنجم افراز مجزا — کارت‌های بازخوانی (بازی FT پیش از صدور؛ تسویه کاغذی تحلیلی)
-  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER" | "RETRO" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS";
+  // v17.0 — کلیدهای عملکرد ۵ روش Bet-Type (BANKER / CS_CLUSTER) به افراز مجزا اضافه شدند
+  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER" | "RETRO" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "BANKER" | "CS_CLUSTER" | "TOTAL";
   label: string;
   description: string;
   total: number;

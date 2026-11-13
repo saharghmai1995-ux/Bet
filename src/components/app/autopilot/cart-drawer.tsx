@@ -60,12 +60,24 @@ export function SmartCartDrawer() {
   // به‌جای نمایش «۰ واحد»، خودکار به داچینگ سود برابر fallback می‌کنیم
   const kellyZero = useKelly && kelly.allocations.length > 0 && kelly.allocations.every((a) => a.stakeA + a.stakeB < 0.05);
 
-  // ─── سود تضمینی هر آیتم (داچینگ سود برابر روی سهم تخصیص‌یافته) ───
+  // ─── سود تضمینی هر آیتم — v17.0: آگاه از Bet-Type (بنکر تک‌ستون / خوشه نتیجه دقیق / زوج‌تیپ) ───
   const rows = useMemo(
     () =>
       cartItems.map((it) => {
-        const alloc = allocById.get(it.key) ?? { stakeA: 0, stakeB: 0 };
         const deployedBudget = (budget * deployment) / 100;
+        const bt = it.view.betType;
+        // 🏦 BANKER — استیک مستقیم تک‌ستون (فاقد تیپ B)
+        if (bt?.key === "BANKER") {
+          const stakeA = Math.min(bt.stakeMain, deployedBudget);
+          const profit = stakeA * (it.pair.totalOddsA - 1);
+          return { ...it, stakeA: Math.round(stakeA * 10) / 10, stakeB: 0, profit: Math.round(profit * 10) / 10 };
+        }
+        // 🎯 CORRECT SCORE CLUSTER — استیک ۱۰۰ واحدی از پیش بین ۴ نتیجه تقسیم شده (سود تضمینی متناسب با بودجه)
+        if (bt?.cluster) {
+          const profit = (bt.guaranteedProfitUnits * deployedBudget) / 100;
+          return { ...it, stakeA: Math.round(deployedBudget * 10) / 10, stakeB: 0, profit: Math.round(profit * 10) / 10 };
+        }
+        const alloc = allocById.get(it.key) ?? { stakeA: 0, stakeB: 0 };
         const pairTotal = kellyZero ? deployedBudget / Math.max(1, cartItems.length) : alloc.stakeA + alloc.stakeB;
         const impliedSum = 1 / it.pair.totalOddsA + 1 / it.pair.totalOddsB;
         const epStakeA = (pairTotal * (1 / it.pair.totalOddsA)) / impliedSum;

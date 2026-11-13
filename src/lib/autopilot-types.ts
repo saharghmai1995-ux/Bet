@@ -4,6 +4,7 @@
 
 import type { DebateResultDTO, LineupShockDTO, MatchDTO, PortfolioPairDTO, PortfolioResultDTO } from "./types";
 import type { ExecutionMode, RejectedCandidate } from "./supervisor";
+import type { BetTypeCandidate, BetTypeKey } from "./engine/betrouter";
 
 /** پنج مرحله خط لوله اتوماتیک (رادار تب ۱) */
 export type StageKey = "ingest" | "t60" | "debate" | "pair" | "signal";
@@ -136,6 +137,19 @@ export interface FlashcardView {
     /** ۴ الگوی رد‌شده + دلیل — پشت کارت */
     rejected: RejectedCandidate[];
   } | null;
+  /**
+   * v17.0 — استراتژی منتخب سوپروایزر از مسیریاب غیرخطی ۵ رژیمی Bet-Type:
+   * کاندید برنده (BANKER / COMBO / CORRECT_SCORE / DUAL_HEDGE) با سنجه‌های
+   * آنتروپی شانون، Rλ، شارپ، EV و امتیاز مطلوبیت غیرخطی.
+   */
+  betType: (BetTypeCandidate & {
+    /** سنجه‌های ساختاری ماتریس ۶×۶ این بازی */
+    entropy: number;
+    rLambda: number;
+    top4Sum: number;
+  }) | null;
+  /** v17.0 — کارت از بازی وتوشده مسیریاب است؟ (هیچ روشی آستانه کیفیت را پاس نکرد) */
+  routerVeto: boolean;
 }
 
 /** رویداد زنده برای توست پوشش In-Play — v6.1: منبع واقعی ESPN یا تست دستی موتور */

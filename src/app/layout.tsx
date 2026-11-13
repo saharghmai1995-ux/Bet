@@ -3,9 +3,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v16.0 Golden Atomic Pairs & Hard 10.5% Risk Gate — ۱۰۰٪ ESPN Verified",
+  title: "NEOBET QUANT PRO • @AINEOBET | v17.0 Non-Linear 5-Regime Bet-Type Router — ۱۰۰٪ ESPN Verified",
   description:
-    "ایجنت سوپروایزر ارشد + تک‌تیپ طلایی مونت‌کارلو ۱۰,۰۰۰ شبیه‌سازی، دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
+    "مسیریاب غیرخطی ۵ رژیمی Bet-Type (بنکر، کمبوی رسمی، خوشه نتیجه دقیق، زوج‌تیپ، آکومولاتور) + تابع مطلوبیت Non-Linear Sharpe & Kelly + آنتروپی شانون ماتریس ۶×۶ + دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },

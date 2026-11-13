@@ -20,11 +20,13 @@ import {
   Check,
   ClipboardList,
   Copy,
+  Crosshair,
   Crown,
   ExternalLink,
   EyeOff,
   Film,
   History,
+  Landmark,
   Link2,
   Loader2,
   Lock,
@@ -286,10 +288,30 @@ export function SettlementTab() {
       };
       // v16.0 — شتاب‌دهنده نامتقارن موتور: سود برابر زیر ۱۲٪ → قفل سرمایه روی تیپ B + تجمیس سود روی تیپ A
       const acc = pair.accelerator?.active ? pair.accelerator : null;
+      // v17.0 — کارت‌های Bet-Type استیک صریح دارند (بنکر ۶۰ واحدی / خوشه ۱۰۰ واحدی / داچینگ کمبو)
       const stakes = acc
         ? { stakeA: acc.stakeA, stakeB: acc.stakeB }
-        : equalProfitStakes(pair.totalOddsA, pair.totalOddsB);
+        : view.betType
+          ? { stakeA: pair.equalProfit.stakeA, stakeB: pair.equalProfit.stakeB }
+          : equalProfitStakes(pair.totalOddsA, pair.totalOddsB);
       const espnId = m.externalId?.split("-").pop() ?? null;
+      // v17.0 — پاهای صریح ماتریسی (کلیدهای HOME/DC_1X/C1XU35/CBTTS25/CS_…): خالی = تک‌تیپ بدون تیپ B
+      const legRow = (k: string) => ({ key: k, matchExternalId: m.externalId ?? null, matchLabel: `${m.homeTeam} × ${m.awayTeam}` });
+      const explicitLegsA = pair.structure.legsA && pair.structure.legsA.length > 0 ? pair.structure.legsA.map(legRow) : null;
+      const legsA = explicitLegsA ?? legsOf(pair.structure.legsA, pair.structure.baseKey, pair.structure.varAKey, pair.structure.varAMatchId);
+      const legsB =
+        pair.structure.legsB !== undefined
+          ? pair.structure.legsB.map(legRow) // v17.0 — آرایه خالی صریح = کارت تک‌تیپ (BANKER)
+          : legsOf(pair.structure.legsB, pair.structure.baseKey, pair.structure.varBKey, pair.structure.varBMatchId);
+      // v17.0 — خط تولید Bet-Type برای افراز مجزای کارنامه
+      const productLine =
+        view.betType?.key === "BANKER"
+          ? "BANKER"
+          : view.betType?.key === "COMBO"
+            ? "COMBO"
+            : view.betType?.key === "CORRECT_SCORE"
+              ? "CS_CLUSTER"
+              : "SINGLE";
       return {
         match: {
           id: m.id,
@@ -301,16 +323,17 @@ export function SettlementTab() {
           espnUrl: espnId ? `https://www.espn.com/soccer/match/_/gameId/${espnId}` : null,
         },
         labelA: pair.labelA,
-        labelB: pair.labelB,
-        legsA: legsOf(pair.structure.legsA, pair.structure.baseKey, pair.structure.varAKey, pair.structure.varAMatchId),
-        legsB: legsOf(pair.structure.legsB, pair.structure.baseKey, pair.structure.varBKey, pair.structure.varBMatchId),
+        labelB: legsB.length === 0 ? "تک‌تیپ — بدون پوشش مکمل" : pair.labelB,
+        legsA,
+        legsB,
         oddsA: pair.totalOddsA,
-        oddsB: pair.totalOddsB,
+        oddsB: legsB.length === 0 ? 1.0 : pair.totalOddsB,
         stakeA: stakes.stakeA,
         stakeB: stakes.stakeB,
         guaranteedProfit: acc ? Math.max(0, acc.profitOnA) : pair.equalProfit.profit,
         marginPct: pair.guaranteedMarginPct,
         archetype: pair.archetype?.short ?? null,
+        productLine,
         lambdaHome: view.lambdaHome,
         lambdaAway: view.lambdaAway,
       };
@@ -570,9 +593,23 @@ export function SettlementTab() {
           </p>
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
             {categories.categories.map((c) => {
-              // v13.0-③ — افراز مجزا: الف/ب/ج/د — هر کارت فقط یک‌بار شمرده می‌شود
+              // v17.0 — آیکن هر خط تولید Bet-Type (افراز مجزای ۵ روش + سایه + بازخوانی + تجمیعی)
               const icon =
-                c.key === "APPROVED" ? ShieldCheck : c.key === "VETOED" ? ShieldOff : c.key === "COMBO" ? Link2 : Target;
+                c.key === "APPROVED"
+                  ? ShieldCheck
+                  : c.key === "COMBO"
+                    ? Link2
+                    : c.key === "BANKER"
+                      ? Landmark
+                      : c.key === "CS_CLUSTER"
+                        ? Crosshair
+                        : c.key === "SNIPER"
+                          ? Target
+                          : c.key === "TOTAL"
+                            ? BarChart3
+                            : c.key === "VETOED"
+                              ? ShieldOff
+                              : History;
               const Icon = icon;
               return (
                 <div
@@ -608,7 +645,7 @@ export function SettlementTab() {
                     <p className={cn("font-num", c.netProfit >= 0 ? "text-emerald-300/90" : "text-rose-300/90")} dir="ltr">
                       {c.netProfit >= 0 ? "+" : ""}{faNum(c.netProfit, 1)} unit
                     </p>
-                    {c.key === "DOUBLE" && (
+                    {c.doubleWinHits > 0 && (
                       <p className="text-amber-300/90">🏆 برد طلایی واقعی: {faNum(c.doubleWinHits, 0)}</p>
                     )}
                     {c.avgJointLossRiskPct !== null && (
