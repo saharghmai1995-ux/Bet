@@ -1,7 +1,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Next.js Instrumentation — v10.0
-// بوت اتوماسیون سرور هنگام بالا آمدن پروسه (مستقل از مرورگر):
-// تسویه خودکار ESPN + صف انتشار تلگرام + گزارش روزانه کانال
+// Next.js Instrumentation — v18.2
+// بوت اتوماسیون سرور هنگام بالا آمدن پروسه (مستقل از مرورگر — همیشه گرم):
+//   · حلقه اتوماسیون ۹۰ ثانیه‌ای: اسکن ESPN → صدور کارت → تسویه → انتشار تلگرام
+//   · نگهبان همیشه‌گرم حلقه (watchdog) + جبران اسلات‌های از‌دست‌رفته (catch-up)
+//   · نگهبان پروسه‌ای سرویس اشتراک @aineobet_bot روی پورت ۳۰۱۰
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function register(): Promise<void> {
@@ -11,5 +13,11 @@ export async function register(): Promise<void> {
     startScheduler();
   } catch (err) {
     console.error("[instrumentation] scheduler bootstrap failed:", err);
+  }
+  try {
+    const { startVipBotGuardian } = await import("@/lib/server/vipbot-guardian");
+    startVipBotGuardian();
+  } catch (err) {
+    console.error("[instrumentation] vipbot guardian bootstrap failed:", err);
   }
 }
