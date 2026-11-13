@@ -37,6 +37,7 @@ export async function GET() {
         supervisorApproved: true,
         retroIssued: true, // v13.4 — کارت‌های بازخوانی از عملکرد واقعی فیلترها حذف می‌شوند
         productLine: true,
+        crownTier: true, // v18.0 — افراز تاج نقره‌ای (شکارچی آلفای سایه)
         netProfit: true,
         marginPct: true,
         jointLossRiskPct: true,
@@ -158,16 +159,18 @@ export async function GET() {
     // ═══ v17.0 — افراز ۵ روش Bet-Type: SINGLE (زوج‌تیپ) / COMBO / BANKER / CS_CLUSTER / SNIPER ═══
     const retro = slips.filter((s) => s.retroIssued);
     const live = slips.filter((s) => s.supervisorApproved && !s.retroIssued);
-    const partitionHedge = live.filter((s) => (s.productLine ?? "SINGLE") === "SINGLE");
-    const partitionCombo = live.filter((s) => s.productLine === "COMBO");
-    const partitionBanker = live.filter((s) => s.productLine === "BANKER");
-    const partitionCs = live.filter((s) => s.productLine === "CS_CLUSTER");
-    const partitionSniper = live.filter((s) => s.productLine === "SNIPER");
+    // v18.0 — 🥈 حصاد آلفای سایه: کارت‌های تاج نقره‌ای سطح ۲ (افراز مجزا — استیک ۵۰u Half-Kelly)
+    const partitionSilver = live.filter((s) => s.crownTier === "SILVER_SHADOW");
+    const partitionHedge = live.filter((s) => (s.productLine ?? "SINGLE") === "SINGLE" && s.crownTier !== "SILVER_SHADOW");
+    const partitionCombo = live.filter((s) => s.productLine === "COMBO" && s.crownTier !== "SILVER_SHADOW");
+    const partitionBanker = live.filter((s) => s.productLine === "BANKER" && s.crownTier !== "SILVER_SHADOW");
+    const partitionCs = live.filter((s) => s.productLine === "CS_CLUSTER" && s.crownTier !== "SILVER_SHADOW");
+    const partitionSniper = live.filter((s) => s.productLine === "SNIPER" && s.crownTier !== "SILVER_SHADOW");
     const partitionD = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
 
     // کنترل افراز: مجموع دسته‌ها = کل کارت‌ها (هر کارت دقیقاً یک‌بار)
     const sumTotal =
-      partitionHedge.length + partitionCombo.length + partitionBanker.length + partitionCs.length + partitionSniper.length + partitionD.length + retro.length;
+      partitionHedge.length + partitionCombo.length + partitionBanker.length + partitionCs.length + partitionSniper.length + partitionSilver.length + partitionD.length + retro.length;
 
     const categories: CategoryPerformanceDTO[] = [
       agg(
@@ -206,6 +209,13 @@ export async function GET() {
         false
       ),
       agg(
+        partitionSilver,
+        "SHADOW_ALPHA",
+        "🥈 حصاد آلفای سایه (تاج نقره‌ای سطح ۲)",
+        "کارت‌های نزدیک-به-وتو (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶) که به‌جای حبس در دفتر کاغذی با استیک نصف ۵۰ واحدی Half-Kelly منتشر و با پول واقعی تسویه شدند — سند v18.0",
+        false
+      ),
+      agg(
         partitionD,
         "VETOED",
         "🛡️ وتوشده‌های دفتر سایه",
@@ -223,10 +233,10 @@ export async function GET() {
 
     // ─── v17.0 — سطر تجمیعی (Aggregate) — عملکرد کل خطوط تولید بدون سایه/بازخوانی ───
     const aggregateRow = agg(
-      [...partitionHedge, ...partitionCombo, ...partitionBanker, ...partitionCs, ...partitionSniper],
+      [...partitionHedge, ...partitionCombo, ...partitionBanker, ...partitionCs, ...partitionSniper, ...partitionSilver],
       "TOTAL",
-      "📊 تجمیعی ۵ خط تولید (Aggregate)",
-      "جمع عملکرد تمام Bet-Typeهای واقعی (زوج‌تیپ + کمبو + بنکر + خوشه + شکارچی) — بدون دفتر سایه و بازخوانی",
+      "📊 تجمیعی ۵ خط تولید + تاج نقره‌ای (Aggregate)",
+      "جمع عملکرد تمام Bet-Typeهای واقعی (زوج‌تیپ + کمبو + بنکر + خوشه + شکارچی + نقره‌ای) — بدون دفتر سایه و بازخوانی",
       false
     );
     categories.push(aggregateRow);
@@ -297,9 +307,21 @@ export async function GET() {
         shadowSlips: partitionD.length,
         note:
           sumTotal === slips.length
-            ? "افراز مجزا v13.2 تأیید شد — مجموع ۵ دسته (شامل بازخوانی) دقیقاً برابر کل کارت‌هاست؛ هیچ کارتی دوبار شمرده نمی‌شود."
+            ? "افراز مجزا v18.0 تأیید شد — مجموع دسته‌ها (شامل تاج نقره‌ای و بازخوانی) دقیقاً برابر کل کارت‌هاست؛ هیچ کارتی دوبار شمرده نمی‌شود."
             : `هشدار افراز: مجموع دسته‌ها (${sumTotal}) با کل کارت‌ها (${slips.length}) نمی‌خواند.`,
       },
+      silverHarvest: (() => {
+        const sSettled = partitionSilver.filter((s) => SETTLED.includes(s.status));
+        const sWins = partitionSilver.filter((s) => WIN_STATUSES.includes(s.status)).length;
+        return {
+          total: partitionSilver.length,
+          settled: sSettled.length,
+          wins: sWins,
+          losses: sSettled.length - sWins,
+          winRate: sSettled.length > 0 ? r1((sWins / sSettled.length) * 100) : null,
+          netProfit: Math.round(partitionSilver.reduce((a, s) => a + (s.netProfit ?? 0), 0) * 100) / 100,
+        };
+      })(),
       generatedAt: new Date().toISOString(),
     };
     return NextResponse.json(body);

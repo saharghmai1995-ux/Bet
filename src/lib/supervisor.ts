@@ -154,11 +154,13 @@ export function scorePair(
   // نرمال‌سازی نمایش v16.0 — بازه خام واقعی الگوهای طلایی [−۴۸۰..+۱۲۰] → [۰..۱۰۰]
   const score100 = score100Of(raw);
 
-  // ═══ گیت سخت ایمنی v18.0 — گیت‌های رژیم‌محور (به‌جای گیت ثابت v16) ═══
+  // ═══ v18.0 — گیت سخت ایمنی — گیت‌های رژیم‌محور (به‌جای گیت ثابت v16) ═══
   //  ۱) سقف ریسک: DUAL_HEDGE → ۱۱.۲٪ | سایر رژیم‌ها → ۱۰.۵٪ | وتوی قرمز مطلق → > ۱۵٪
   //  ۲) پنجره λ اختصاصی رژیم (CORRECT_SCORE / COMBO) یا گیت ثابت فاوریت برای BANKER/بدون زمینه
-  //  ۳) حاشیه داچینگ (فقط حالت سود-برابر — شتاب‌دهنده نامتقارن معاف)
+  //  ۳) کف شارپ اختصاصی رژیم (جدول سند): DUAL_HEDGE ≥ ۰.۲۴ | COMBO ≥ ۰.۲۲
+  //  ۴) حاشیه داچینگ (فقط حالت سود-برابر — شتاب‌دهنده نامتقارن معاف)
   const regime = regimeCtx?.regime ?? null;
+  const regimeSharpe = regimeCtx?.sharpe ?? null;
   const riskCapPct = regime === "DUAL_HEDGE" ? VETO_JOINT_LOSS_PCT_DUAL_HEDGE : VETO_JOINT_LOSS_PCT_ATOMIC;
   let veto = false;
   let vetoReason: string | null = null;
@@ -176,7 +178,8 @@ export function scorePair(
   if (!veto && lambdaCtx) {
     const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
     const dog = Math.min(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
-    // v18.0 — پنجره λ اختصاصی هر رژیم (جدول سند)؛ گیت ثابت فقط برای BANKER/بدون زمینه
+    // v18.0 — پنجره λ اختصاصی هر رژیم (جدول سند)؛ گیت ثابت فقط برای BANKER/بدون زمینه.
+    // DUAL_HEDGE پنجره λ ندارد (سند: فقط ریسک ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴).
     if (regime === "CORRECT_SCORE") {
       if (fav < 1.15 || fav > 1.85 || dog > 1.15) {
         veto = true;
@@ -187,9 +190,19 @@ export function scorePair(
         veto = true;
         vetoReason = `🛡️ گیت کمبو v18.0: λ_Fav=${fav.toFixed(2)} باید ≥ 1.35 و λ_Dog=${dog.toFixed(2)} ≤ 1.25 — کمبو 1X&U3.5 / 1&O1.5 فقط روی فاوریت کنترل‌گر/هجومی صادر می‌شود`;
       }
-    } else if (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX) {
+    } else if (regime !== "DUAL_HEDGE" && (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX)) {
       veto = true;
       vetoReason = `🛡️ گیت فاوریت قاطع v18.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۵۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۰۵) — رژیم ${regime ?? "پیش‌فرض"} فقط روی فاوریت‌های قاطع صادر می‌شود — وتو و انتقال به دفتر سایه`;
+    }
+  }
+  if (!veto && regimeCtx && regimeSharpe != null) {
+    // v18.0 — کف شارپ اختصاصی رژیم (جدول سند) — رژیمِ بالاترین شارپ مسیریاب تعیین‌کننده است
+    if (regime === "DUAL_HEDGE" && regimeSharpe < 0.24) {
+      veto = true;
+      vetoReason = `🛡️ گیت رژیم DUAL_HEDGE v18.0: شارپ ${regimeSharpe.toFixed(2)} زیر کف ۰.۲۴ رژیم زوج‌تیپ — نسبت بازده/نوسان کافی نیست؛ انتقال به دفتر سایه`;
+    } else if (regime === "COMBO" && regimeSharpe < 0.22) {
+      veto = true;
+      vetoReason = `🛡️ گیت رژیم COMBO v18.0: شارپ ${regimeSharpe.toFixed(2)} زیر کف ۰.۲۲ رژیم کمبو — انتقال به دفتر سایه`;
     }
   }
   if (!veto && guaranteedProfitPct < VETO_WEAK_PROFIT_PCT && !p.accelerator?.active) {

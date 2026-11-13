@@ -53,15 +53,19 @@ export function supervisorFor(
     portfolio.primary?.lambdaHome && portfolio.primary?.lambdaAway
       ? { lambdaHome: portfolio.primary.lambdaHome, lambdaAway: portfolio.primary.lambdaAway }
       : null;
-  // v18.0 — زمینه رژیم منتخب مسیریاب: گیت اختصاصی همان رژیم جایگزین گیت ثابت λ می‌شود
+  // v18.0 — زمینه رژیم منتخب مسیریاب: گیت اختصاصی همان رژیم جایگزین گیت ثابت λ می‌شود.
+  // سند v18.0: رژیمِ «بالاترین شارپ» تعیین‌کننده گیت است — حتی وقتی رأی نهایی مسیریاب وتو است.
   const router = routerFor(portfolio);
-  const regimeCtx = router?.winner
+  const bestSharpe = router?.candidates?.length
+    ? router.candidates.reduce((a, b) => (b.sharpe > a.sharpe ? b : a))
+    : null;
+  const regimeCtx = bestSharpe
     ? {
-        regime: router.winner.key,
-        sharpe: router.winner.sharpe,
-        winProb: router.winner.winProb,
-        jointLossRiskPct: router.winner.jointLossProb * 100,
-        tier: router.tier,
+        regime: bestSharpe.key,
+        sharpe: bestSharpe.sharpe,
+        winProb: bestSharpe.winProb,
+        jointLossRiskPct: bestSharpe.jointLossProb * 100,
+        tier: bestSharpe.tier,
       }
     : null;
   return pickCrownPair(portfolio.pairs, executionMode, rule, categoryBoost, lambdaCtx, regimeCtx);

@@ -350,13 +350,18 @@ export async function autoSyncPastAndPresentMatches(options?: {
 
         // ─── گام ۲: انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر با گیت رژیم‌محور v18.0 ───
         // (به‌جای گیت ثابت λ_Fav<1.50/λ_Dog>1.05 که ۱۵۰ کارت ۹۰.۷٪-برد را حبس کرده بود)
-        const regimeCtx = router.winner
+        // سند v18.0: رژیمِ «بالاترین شارپ» تعیین‌کننده گیت است — حتی وقتی رأی نهایی مسیریاب وتو است،
+        // رژیم برتر باید گیت اختصاصی خودش را برای زوج‌های پرتفوی اعمال کند.
+        const bestSharpeCandidate = router.candidates.length > 0
+          ? router.candidates.reduce((a, b) => (b.sharpe > a.sharpe ? b : a))
+          : null;
+        const regimeCtx = bestSharpeCandidate
           ? {
-              regime: router.winner.key,
-              sharpe: router.winner.sharpe,
-              winProb: router.winner.winProb,
-              jointLossRiskPct: router.winner.jointLossProb * 100,
-              tier: router.tier,
+              regime: bestSharpeCandidate.key,
+              sharpe: bestSharpeCandidate.sharpe,
+              winProb: bestSharpeCandidate.winProb,
+              jointLossRiskPct: bestSharpeCandidate.jointLossProb * 100,
+              tier: bestSharpeCandidate.tier,
             }
           : null;
         const decision = pickCrownPair(

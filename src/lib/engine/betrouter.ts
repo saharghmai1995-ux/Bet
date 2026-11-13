@@ -476,9 +476,13 @@ export function buildComboCandidates(
           : leg === "HOME"
             ? matrixProb(matrix, (h, a) => h > a)
             : matrixProb(matrix, (h, a) => h + a > 2.5);
+      // v18.0 — رفع باگ محاسباتی v17: «احتمال ضمنی» باید عدد بین ۰ و ۱ باشد.
+      // قبلاً برای پایه 1X خودِ ضریب DC (۱ ÷ Σ(۱/ضریب‌ها) ≈ ۱.۱۸) به‌جای احتمال ضمنی
+      // آن (≈ ۰.۸۴) استفاده می‌شد → بایاس ~۱.۵۶× متورم → mainOdds زیر ۱.۲۸ می‌افتاد و
+      // «همه» کمبوهای 1X&U3.5 بی‌صدا فیلتر می‌شدند (ریشه مرگ رژیم COMBO).
       const implied =
         leg === "1X"
-          ? 1 / (1 / prices.oddsHome + 1 / prices.oddsDraw)
+          ? 1 / prices.oddsHome + 1 / prices.oddsDraw // احتمال ضمنی شانس مجدد 1X
           : leg === "HOME"
             ? 1 / prices.oddsHome
             : 1 / prices.oddsOver25;
