@@ -721,6 +721,8 @@ export interface IssuedSlipDTO {
   doubleWinProbPct: number | null;
   /** v18.0 — سطح تاج: GOLD (استیک کامل ۱۰۰u) | SILVER_SHADOW (استیک نصف ۵۰u) | null */
   crownTier: string | null;
+  /** v19.0 — خط تولید Bet-Type (SINGLE/COMBO/BANKER/CORRECT_SCORE/ACCUMULATOR) — ویترین ۵ رژیم */
+  productLine: string | null;
   espnUrl: string | null;
   status: SlipStatus;
   homeGoals: number | null;
@@ -946,6 +948,13 @@ export interface IssueSlipItemDTO {
   productLine?: string | null;
   lambdaHome?: number | null;
   lambdaAway?: number | null;
+  /**
+   * v19.0 — احتمال مدل فراخلب (Override) برای کارت‌های میکس چندبازی:
+   * آکومولاتور چندبازی را نمی‌توان با ماتریس تک‌بازی ارزیابی کرد — احتمال واقعی
+   * = حاصل‌ضرب احتمال هر پای مستقل (از ماتریس دیکسون-کولز همان بازی).
+   */
+  modelProbAOverride?: number | null;
+  modelProbBOverride?: number | null;
   /**
    * v10.0 — خط شارپ مرجع (Pinnacle) برای هر انتخاب مستقیم:
    * کلید = کلید بازار (HOME/DRAW/AWAY/DC_1X/DC_X2/O25/U25) — فقط وقتی ردیف قیمت

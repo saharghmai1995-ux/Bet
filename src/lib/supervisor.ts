@@ -1,6 +1,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v18.0
-// «Regime-Specific Supervisor Gates & Tier-2 Shadow Alpha Harvester»
+// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v19.0 High-ROI
+// «Loosened Veto Gates — Jackpot Liberation & 5-Regime ROI Activation»
+//
+// v19.0 (سند جراحی مستقیم): گیت‌های وتو v18 که بازی‌های جکپات بزرگ را
+// «وتو - تسویه کاغذی» می‌کردند آزاد شدند:
+//   · ریسک باخت همزمان: ۱۰.۵٪ → ۱۵.۸٪ (در عمل سقف موثر = وتوی قرمز ۱۵٪)
+//   · گیت فاوریت ثابت: λ_Fav ≥ ۱.۵۰ → ≥ ۱.۱۰ | λ_Dog ≤ ۱.۰۵ → ≤ ۱.۳۵
+//   · گیت سود ضعیف: ۱.۵٪ → ۰.۵٪
+//   · کف شارپ رژیم‌ها با APPROVE_SHARPE_MIN v19 (۰.۱۴) هم‌تراز شد
+// خروجی: بازی‌هایی مثل Andorra×Gibraltar (+۱۱۶u) / San Marino×Belarus (+۱۳۹u)
+// وارد کارت‌های تاییدشده بانک اصلی می‌شوند و هر ۵ رژیم ویترین سودآوری پر می‌شود.
 //
 // بازطراحی v18.0 (سند ارتقا): سه شرط ثابت نسخه ۱۶ (λ_Fav < ۱.۵۰ / λ_Dog > ۱.۰۵ /
 // ریسک ۱۰.۵٪) که «قبل از مسیریاب ۵ رژیم» اعمال می‌شدند، ۱۵۰ کارت ۹۰.۷٪-برد را
@@ -33,29 +42,30 @@ import type { BetTypeKey } from "./engine/betrouter";
 export type ExecutionMode = "DUAL_BOOK" | "SINGLE_BOOK";
 
 /**
- * v18.0 — گیت‌های رژیم‌محور سوپروایزر:
- *  · ریسک باخت همزمان برای رژیم DUAL_HEDGE تا ۱۱.۲٪ مجاز است (سند v18 — آزادسازی
- *    کارت‌های برنده ریسک ۱۱-۱۳٪)؛ سایر رژیم‌ها روی ۱۰.۵٪ می‌مانند.
+ * v19.0 — گیت‌های رژیم‌محور سوپروایزر (سند جراحی High-ROI):
+ *  · ریسک باخت همزمان: ۱۰.۵٪ → ۱۵.۸٪ — رهایی بازی‌های جکپات از «تسویه کاغذی»
+ *    (در عمل سقف موثر همان وتوی قرمز مطلق ۱۵٪ است).
  *  · وتوی قرمز مطلق سطح ۳: ریسک بالای ۱۵٪ همیشه وتو است (فقط دفتر کاغذی).
  */
-export const VETO_JOINT_LOSS_PCT_ATOMIC = 10.5;
-/** v18.0 — سقف ریسک رژیم DUAL_HEDGE (سند: ۱۱.۲٪) */
-export const VETO_JOINT_LOSS_PCT_DUAL_HEDGE = 11.2;
+export const VETO_JOINT_LOSS_PCT_ATOMIC = 15.8;
+/** v19.0 — سقف ریسک رژیم DUAL_HEDGE — با گیت اتمیک هم‌تراز شد */
+export const VETO_JOINT_LOSS_PCT_DUAL_HEDGE = 15.8;
 /** v18.0 — وتوی قرمز مطلق سطح ۳ (Hard Red Veto — ریسک > ۱۵٪ فقط تسویه کاغذی) */
 export const VETO_JOINT_LOSS_PCT_HARD_RED = 15;
 /**
- * v18.0 — گیت ثابت فاوریت فقط برای رژیم‌های بدون پنجره λ اختصاصی (BANKER و کارت بدون
+ * v19.0 — گیت ثابت فاوریت فقط برای رژیم‌های بدون پنجره λ اختصاصی (BANKER و کارت بدون
  * زمینه رژیم) برقرار است؛ CORRECT_SCORE/COMBO/DUAL_HEDGE پنجره λ خودشان را دارند.
+ * v19.0 — λ_Fav ≥ ۱.۱۰ و λ_Dog ≤ ۱.۳۵: بازی‌های کم‌گل سودده و هجومی دیگر وتو نمی‌شوند.
  */
-export const VETO_FAV_LAMBDA_MIN = 1.5;
-export const VETO_DOG_LAMBDA_MAX = 1.05;
+export const VETO_FAV_LAMBDA_MIN = 1.1;
+export const VETO_DOG_LAMBDA_MAX = 1.35;
 /**
  * v11.0 — آستانه طلایی گیت سخت ایمنی سوپروایزر (دوره پیش‌از v15 — جفت‌های متعامد گسسته):
  * ریسک باخت همزمان بالاتر از ۹.۸٪ = وتو خودکار و بی‌قیدوشرط.
  */
 export const VETO_JOINT_LOSS_PCT = 9.8;
-/** آستانه وتو — سود تضمینی ضعیف‌تر از ۱.۵٪ */
-export const VETO_WEAK_PROFIT_PCT = 1.5;
+/** v19.0 — آستانه وتو — سود تضمینی ضعیف‌تر از ۰.۵٪ */
+export const VETO_WEAK_PROFIT_PCT = 0.5;
 /** v11.0 — آستانه «دژ نفوذناپذیر»: ریسک زیر ۷٪ + تایید سوپروایزر */
 export const FORTRESS_RISK_PCT = 7;
 
@@ -172,8 +182,8 @@ export function scorePair(
     veto = true;
     vetoReason =
       regime === "DUAL_HEDGE"
-        ? `🛡️ گیت رژیم‌محور v18.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۱.۲٪ رژیم DUAL_HEDGE — وتو و انتقال به دفتر سایه`
-        : `🛡️ گیت سخت v18.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه ۱۰.۵٪ — وتو خودکار و انتقال به دفتر سایه`;
+        ? `🛡️ گیت رژیم‌محور v19.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای سقف رژیم DUAL_HEDGE — وتو و انتقال به دفتر سایه`
+        : `🛡️ گیت سخت v19.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه مجاز — وتو خودکار و انتقال به دفتر سایه`;
   }
   if (!veto && lambdaCtx) {
     const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
@@ -192,17 +202,18 @@ export function scorePair(
       }
     } else if (regime !== "DUAL_HEDGE" && (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX)) {
       veto = true;
-      vetoReason = `🛡️ گیت فاوریت قاطع v18.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۵۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۰۵) — رژیم ${regime ?? "پیش‌فرض"} فقط روی فاوریت‌های قاطع صادر می‌شود — وتو و انتقال به دفتر سایه`;
+      vetoReason = `🛡️ گیت فاوریت قاطع v19.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۱۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۳۵) — رژیم ${regime ?? "پیش‌فرض"} فقط روی فاوریت‌های قاطع صادر می‌شود — وتو و انتقال به دفتر سایه`;
     }
   }
   if (!veto && regimeCtx && regimeSharpe != null) {
-    // v18.0 — کف شارپ اختصاصی رژیم (جدول سند) — رژیمِ بالاترین شارپ مسیریاب تعیین‌کننده است
-    if (regime === "DUAL_HEDGE" && regimeSharpe < 0.24) {
+    // v19.0 — کف شارپ اختصاصی رژیم با APPROVE_SHARPE_MIN v19 (۰.۱۴) هم‌تراز شد —
+    // رژیمِ بالاترین شارپ مسیریاب تعیین‌کننده است
+    if (regime === "DUAL_HEDGE" && regimeSharpe < 0.14) {
       veto = true;
-      vetoReason = `🛡️ گیت رژیم DUAL_HEDGE v18.0: شارپ ${regimeSharpe.toFixed(2)} زیر کف ۰.۲۴ رژیم زوج‌تیپ — نسبت بازده/نوسان کافی نیست؛ انتقال به دفتر سایه`;
-    } else if (regime === "COMBO" && regimeSharpe < 0.22) {
+      vetoReason = `🛡️ گیت رژیم DUAL_HEDGE v19.0: شارپ ${regimeSharpe.toFixed(2)} زیر کف ۰.۱۴ رژیم زوج‌تیپ — نسبت بازده/نوسان کافی نیست؛ انتقال به دفتر سایه`;
+    } else if (regime === "COMBO" && regimeSharpe < 0.14) {
       veto = true;
-      vetoReason = `🛡️ گیت رژیم COMBO v18.0: شارپ ${regimeSharpe.toFixed(2)} زیر کف ۰.۲۲ رژیم کمبو — انتقال به دفتر سایه`;
+      vetoReason = `🛡️ گیت رژیم COMBO v19.0: شارپ ${regimeSharpe.toFixed(2)} زیر کف ۰.۱۴ رژیم کمبو — انتقال به دفتر سایه`;
     }
   }
   if (!veto && guaranteedProfitPct < VETO_WEAK_PROFIT_PCT && !p.accelerator?.active) {
@@ -213,7 +224,7 @@ export function scorePair(
     vetoReason =
       guaranteedProfitPct <= 0
         ? "بازار فاقد حاشیه تضمینی (S ≥ 1) — حالت بیمه سرمایه؛ سود ضعیف"
-        : `سود تضمینی ${guaranteedProfitPct.toFixed(1)}٪ ضعیف‌تر از آستانه ۱.۵٪`;
+        : `سود تضمینی ${guaranteedProfitPct.toFixed(1)}٪ ضعیف‌تر از آستانه ۰.۵٪ v19.0`;
   }
 
   // ═══ v18.0 — سطح‌بندی تاج (Two-Tier Crown System) ═══

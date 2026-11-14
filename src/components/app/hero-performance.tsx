@@ -310,7 +310,7 @@ function VetoEfficiency({ approved, vetoed, scanned, savedByVeto }: { approved: 
         <div className="h-1.5 flex-1 bg-rose-500/50" />
       </div>
       <p className="text-[10px] leading-4 text-muted-foreground">
-        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با گیت سخت v16.0 (۱۰.۵٪) وتو شده‌اند.
+        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با گیت سخت v19.0 (ریسک همزمان &gt; ۱۵٪) وتو شده‌اند.
       </p>
       {savedByVeto > 0 && (
         <p
@@ -569,7 +569,7 @@ function LedgerPulse({ ledger, savedByVeto }: { ledger: LedgerDTO | null; savedB
       </div>
       {frozen ? (
         <p className="rounded-lg border border-amber-500/35 bg-amber-500/[0.08] px-2 py-1.5 text-[10px] leading-4 text-amber-200">
-          <b>وضعیت فعلی: کتاب رسمی در انتظار کارت تازه است.</b> آمار و منحنی فقط از کارت‌های «تایید سوپروایزر با پول واقعی» ساخته می‌شوند؛ {faNum(pulse.vetoedTotal, 0)} کاندیدای پرریسک توسط گیت سخت v16.0 (ریسک همزمان &gt; ۱۰.۵٪ / لیگ‌های سمّی / فاوریت بدون برتری واضح) به دفتر سایه رفت‌اند — به‌محض تایید اولین کارت امروز، منحنی و وین‌ریت همین‌جا به‌روز می‌شود (رفرش خودکار هر ۹۰ ثانیه).
+          <b>وضعیت فعلی: کتاب رسمی در انتظار کارت تازه است.</b> آمار و منحنی فقط از کارت‌های «تایید سوپروایزر با پول واقعی» ساخته می‌شوند؛ {faNum(pulse.vetoedTotal, 0)} کاندیدای پرریسک توسط گیت سخت v19.0 (ریسک همزمان &gt; ۱۵٪ / لیگ‌های سمّی / سود تضمینی زیر ۰.۵٪) به دفتر سایه رفت‌اند — به‌محض تایید اولین کارت امروز، منحنی و وین‌ریت همین‌جا به‌روز می‌شود (رفرش خودکار هر ۹۰ ثانیه).
         </p>
       ) : (
         <p className="text-[10px] leading-4 text-muted-foreground">

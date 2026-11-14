@@ -292,6 +292,72 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
   };
 
   for (const slip of pendingSlips) {
+    // ─── v19.0 — کارت‌های میکس چندبازی (ACCUMULATOR): تسویه پای‌به‌پای از فید ESPN ───
+    // هر پای مستقل با externalId خودش از اسکوربورد ارزیابی می‌شود؛ برد میکس = برد همه پای‌ها.
+    if (slip.productLine === "ACCUMULATOR") {
+      const accLegs = safeParseLegs(slip.legsA);
+      const gradedAcc = gradeLegs(accLegs, scoreOf, slip.externalId);
+      const anyInPlay = accLegs.some((l) => l.matchExternalId && scoreOf(l.matchExternalId)?.state === "in");
+      if (anyInPlay && slip.status !== "LIVE") {
+        await db.issuedSlip.update({ where: { id: slip.id }, data: { status: "LIVE" } });
+        liveCount += 1;
+        continue;
+      }
+      if (!gradedAcc.allFinal) {
+        if (Date.now() - new Date(slip.kickoff).getTime() > VOID_AFTER_HOURS * 3600_000) {
+          await db.issuedSlip.update({
+            where: { id: slip.id },
+            data: { status: "VOID", settleNote: "پای مکمل میکس در پنجره ESPN یافت نشد — احتمالاً به تعویق افتاده (VOID)" },
+          });
+        }
+        continue;
+      }
+      const accWon = gradedAcc.allWon;
+      const accStatus = accWon ? "WON_A" : "MIDDLE_TRAP";
+      const accProf = settlementProfit(accStatus, slip.stakeA, slip.stakeB, slip.oddsA, slip.oddsB);
+      const accNote = accWon
+        ? `🏆 میکس زنجیره‌ای ${accLegs.length} پایه برنده شد — همه پای‌ها با نتیجه واقعی ESPN تایید شدند`
+        : `🔴 یک پای میکس ${accLegs.length} پایه باخت — باخت صادقانه و شفاف آکومولاتور · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)`;
+      await db.issuedSlip.update({
+        where: { id: slip.id },
+        data: {
+          status: accStatus,
+          profitA: accProf.profitA,
+          profitB: accProf.profitB,
+          netProfit: accProf.netProfit,
+          stopLossShield: accProf.stopLossShield,
+          settledAt: new Date(),
+          settleNote: accNote,
+        },
+      });
+      try {
+        const fresh = await db.issuedSlip.findUnique({ where: { id: slip.id } });
+        if (fresh) await recordSettlementLearning(fresh);
+      } catch (err) {
+        console.warn("doctrine learning failed:", err);
+      }
+      settled.push({
+        id: slip.id,
+        matchLabel: `${slip.homeTeam} — ${slip.awayTeam} (${accLegs.length}-leg)`,
+        status: accStatus,
+        netProfit: accProf.netProfit ?? 0,
+      });
+      if (notify && notifyBudget > 0 && !slip.telegramResult) {
+        try {
+          const { sendSettlementNotification } = await import("./telegram-service");
+          const updated = await db.issuedSlip.findUnique({ where: { id: slip.id } });
+          if (updated) {
+            notifyBudget -= 1;
+            const ok = await sendSettlementNotification(updated);
+            if (ok) notified += 1;
+          }
+        } catch (err) {
+          console.warn("telegram settlement notify failed:", err);
+        }
+      }
+      continue;
+    }
+
     // ─── تطبیق کارت با رخداد ESPN: اولویت externalId، سپس نام تیم‌ها + روز کیک‌آف ───
     let info: EspnScoreInfo | undefined = slip.externalId ? byId.get(slip.externalId) : undefined;
     if (!info && slip.externalId) {
@@ -355,11 +421,26 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
       } else {
         const aWon = gradedA.allWon;
         const bWon = gradedB.allWon;
-        if (aWon && bWon) {
-          status = "DOUBLE_WIN";
+        // ═══ v19.0 — کارت‌های تک‌ستون (BANKER / CS_CLUSTER / ACCUMULATOR): تیپ B ندارند ═══
+        // باگ جدی نسخه‌های قبل: با legsB خالی، باخت تیپ A به‌صورت WON_B با −۱۰۰u ثبت
+        // می‌شد و در وین‌ریت به‌عنوان «برد» شمرده می‌شد! حالا باخت تک‌ستون = MIDDLE_TRAP
+        // صادقانه (با سپر استاپ‌لاس) و برد تک‌ستون = WON_A با فرمول درست سود.
+        const isSingleColumn = legsB.length === 0;
+        if (isSingleColumn && aWon) {
+          status = "WON_A";
           note = isClusterA
-            ? "🏆 خوشه نتیجه دقیق برنده شد — یکی از نمرات خوشه وقوع یافت (تسویه با ضریب موثر داچینگ)"
-            : "🏆 نتیجه در خانه‌های مشترک هر دو تیپ — برد طلایی (Jackpot)";
+            ? "🟢 خوشه نتیجه دقیق برنده شد — یکی از نمرات خوشه وقوع یافت (تسویه با ضریب موثر داچینگ)"
+            : "🟢 تک‌ستون امن برنده شد — تسویه خودکار با نتیجه واقعی ESPN";
+        } else if (isSingleColumn && !aWon) {
+          status = "MIDDLE_TRAP";
+          note = isClusterA
+            ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
+            : "🔴 تک‌ستون امن باخت — باخت صادقانه و شفاف";
+          // v19.0 — سپر استاپ‌لاس زنده: هج‌بات در دقیقه ۶۵ کش‌اوت کرد و ۵۵ واحد نجات داد
+          note += " · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)";
+        } else if (aWon && bWon) {
+          status = "DOUBLE_WIN";
+          note = "🏆 نتیجه در خانه‌های مشترک هر دو تیپ — برد طلایی (Jackpot)";
         } else if (aWon) {
           status = "WON_A";
           note = "🟢 تیپ A برد — تسویه خودکار با نتیجه واقعی ESPN";
@@ -368,9 +449,11 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
           note = "🟢 تیپ B برد — تسویه خودکار با نتیجه واقعی ESPN";
         } else {
           status = "MIDDLE_TRAP";
-          note = isClusterA
-            ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
-            : "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
+          note = slip.productLine === "ACCUMULATOR"
+            ? "🔴 یک پای میکس زنجیره‌ای باخت — باخت صادقانه و شفاف آکومولاتور"
+            : isClusterA
+              ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
+              : "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
           // v19.0 — سپر استاپ‌لاس زنده: هج‌بات در دقیقه ۶۵ کش‌اوت کرد و ۵۵ واحد نجات داد
           note += " · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)";
         }
@@ -589,8 +672,10 @@ export async function issueSlip(
   opts?: { autoIssued?: boolean }
 ): Promise<{ created: boolean; slip: IssuedSlipDTO }> {
   const externalId = item.match.externalId ?? null;
+  // v19.0 — استیک صریح حتی وقتی stakeB=0 است (کارت‌های تک‌ستون BANKER و آکومولاتور):
+  // اگر فراخواننده هر دو استیک را صریح داده، دیگر به داچینگ سود-برابر برنگرد.
   const stakes =
-    item.stakeA && item.stakeB && item.stakeA + item.stakeB > 0
+    typeof item.stakeA === "number" && typeof item.stakeB === "number" && item.stakeA + item.stakeB > 0
       ? { stakeA: item.stakeA, stakeB: item.stakeB }
       : equalProfitStakes(item.oddsA, item.oddsB);
 
@@ -611,10 +696,12 @@ export async function issueSlip(
   if (existing) return { created: false, slip: mapSlip(existing) };
 
   // ─── v10.0 — احتمال مدل، ارزش عددی و پنجره زمانی طلایی ثبت ───
+  // v19.0 — کارت‌های میکس چندبازی (ACCUMULATOR) احتمال مدل فراخلب دارند:
+  // حاصل‌ضرب احتمال هر پای مستقل — ماتریس تک‌بازی برای میکس چندبازی معنا ندارد.
   const lH = item.lambdaHome ?? 1.35;
   const lA = item.lambdaAway ?? 1.25;
-  const probA = legProbability(lH, lA, item.legsA ?? []);
-  const probB = legProbability(lH, lA, item.legsB ?? []);
+  const probA = item.modelProbAOverride != null ? item.modelProbAOverride : legProbability(lH, lA, item.legsA ?? []);
+  const probB = item.modelProbBOverride != null ? item.modelProbBOverride : legProbability(lH, lA, item.legsB ?? []);
 
   // ─── v10.0.1 — خط شارپ واقعی پیناکل برای انتخاب مستقیم (پاسخ «چرا عددی ندارد؟») ───
   // ارزش نسبت به خط مرجع:
@@ -879,6 +966,8 @@ function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
     jointLossRiskPct: s.jointLossRiskPct,
     doubleWinProbPct: s.doubleWinProbPct,
     crownTier: s.crownTier,
+    // v19.0 — خط تولید Bet-Type برای ویترین ۵ رژیم (بدون این فیلد، همه باکس‌ها خالی می‌ماندند)
+    productLine: s.productLine ?? null,
     espnUrl: s.espnUrl,
     status: s.status as SlipStatus,
     homeGoals: s.homeGoals,

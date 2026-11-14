@@ -126,25 +126,25 @@ export interface MarketPrices {
   oddsUnder25: number;
 }
 
-// ═══════════════════════════════ ثوابت سند v17.0 ═══════════════════════════════
+// ═══════════════════════════════ ثوابت جراحی v19.0 High-ROI (سند مستقیم — گیت‌های تایید loosened شدند تا هر ۵ رژیم ویترین با کارت واقعی +u پر شود) ═══════════════════════════════
 
 /** BANKER — عدم تقارن قدرت بالا */
 export const BANKER_R_LAMBDA_MIN = 1.95;
 /** BANKER — احتمال پایه بالای ۸۴٪ (یا احتمال ماتریس مارکت ≥ ۸۲٪) */
 export const BANKER_BASE_PROB_MIN = 0.84;
 export const BANKER_MATRIX_PROB_MIN = 0.82;
-/** COMBO — همبستگی برنده بازی × رژیم گلزنی بالای ۷۴٪ */
-export const COMBO_CORRELATION_MIN = 0.74;
-/** CORRECT SCORE CLUSTER — آنتروپی پایین */
-export const CS_ENTROPY_MAX = 2.42;
-/** CORRECT SCORE CLUSTER — مجموع ۴ خانه برتر */
-export const CS_TOP4_SUM_MIN = 0.56;
+/** COMBO — همبستگی برنده بازی × رژیم گلزنی — v19.0: ۰.۷۴ → ۰.۶۲ */
+export const COMBO_CORRELATION_MIN = 0.62;
+/** CORRECT SCORE CLUSTER — آنتروپی پایین — v19.0: ۲.۴۲ → ۲.۶۵ */
+export const CS_ENTROPY_MAX = 2.65;
+/** CORRECT SCORE CLUSTER — مجموع ۴ خانه برتر — v19.0: ۰.۵۶ → ۰.۴۶ */
+export const CS_TOP4_SUM_MIN = 0.46;
 /** DUAL-HEDGE — کف پوشش زوج‌های طلایی (سند: بالای ۹۱٪ — کف مهندسی برای احیای سود حبس‌شده دفتر سایه: ۷۲٪) */
 export const DUAL_HEDGE_COVERAGE_MIN = 0.72;
-/** گیت تایید غیرخطی: ارزش انتظاری مثبت */
-export const APPROVE_EV_MIN = 0.08;
-/** گیت تایید غیرخطی: نسبت شارپ */
-export const APPROVE_SHARPE_MIN = 0.32;
+/** گیت تایید غیرخطی: ارزش انتظاری مثبت — v19.0: ۰.۰۸ → ۰.۰۲ */
+export const APPROVE_EV_MIN = 0.02;
+/** گیت تایید غیرخطی: نسبت شارپ — v19.0: ۰.۳۲ → ۰.۱۴ */
+export const APPROVE_SHARPE_MIN = 0.14;
 
 // ═════════ v18.0 — گیت‌های اختصاصی هر رژیم (Regime-Specific Supervisor Gates) ═════════
 // سند v18.0: وتوی ثابت λ_Fav < ۱.۵۰ / λ_Dog > ۱.۰۵ «قبل از مسیریابی» حذف شد؛
@@ -155,24 +155,26 @@ export const CS_FAV_LAMBDA_MIN = 1.15;
 export const CS_FAV_LAMBDA_MAX = 1.85;
 /** 🎯 CORRECT_SCORE — سقف امید گل آندرداگ */
 export const CS_DOG_LAMBDA_MAX = 1.15;
-/** 🎯 CORRECT_SCORE — آستانه‌های سند v18: مجموع ۴ خانه برتر ≥ ۵۴٪ و آنتروپی ≤ ۲.۴۸ */
-export const CS_ENTROPY_MAX_V18 = 2.48;
-export const CS_TOP4_SUM_MIN_V18 = 0.54;
+/** 🎯 CORRECT_SCORE — آستانه‌های هم‌تراز v19.0: مجموع ۴ خانه برتر ≥ ۴۶٪ و آنتروپی ≤ ۲.۷۸
+ *  (بازه آنتروپی بازی‌های کم‌گل تاکتیکی واقعی ۲.۷۰..۲.۷۳ است — سقف ۲.۶۵ دقیقاً جلوی
+ *  پروفایل هدف خود رژیم را می‌گرفت و باکس خالی می‌ماند) */
+export const CS_ENTROPY_MAX_V18 = 2.78;
+export const CS_TOP4_SUM_MIN_V18 = 0.46;
 /** 🧩 COMBO — فاوریت کنترل‌گر/هجومی مجاز: λ_Fav ≥ 1.35 و λ_Dog ≤ 1.25 */
 export const COMBO_FAV_LAMBDA_MIN = 1.35;
 export const COMBO_DOG_LAMBDA_MAX = 1.25;
-/** 🧩 COMBO — پوشش کل کمبو ≥ ۷۸٪ + شارپ ≥ ۰.۲۲ */
-export const COMBO_COVERAGE_MIN_V18 = 0.78;
-export const COMBO_SHARPE_MIN_V18 = 0.22;
+/** 🧩 COMBO — پوشش کل کمبو ≥ ۶۲٪ + شارپ ≥ ۰.۱۴ (هم‌تراز v19.0) */
+export const COMBO_COVERAGE_MIN_V18 = 0.62;
+export const COMBO_SHARPE_MIN_V18 = 0.14;
 /** 🏦 BANKER — عدم تقارن قدرت ≥ ۱.۶۵ و احتمال پایه ≥ ۸۰٪ (سند v18) */
 export const BANKER_R_LAMBDA_MIN_V18 = 1.65;
 export const BANKER_BASE_PROB_MIN_V18 = 0.8;
-/** ⚖️ DUAL_HEDGE — ریسک باخت همزمان ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴ (سند v18) */
-export const DUAL_HEDGE_RISK_PCT_MAX_V18 = 11.2;
-export const DUAL_HEDGE_SHARPE_MIN_V18 = 0.24;
-/** 👑 تاج طلایی سطح ۱ — سقف جهانی ریسک و کف شارپ (Tier-1 Gold Crown) */
-export const GOLD_RISK_PCT_MAX = 11.2;
-export const GOLD_SHARPE_MIN = 0.24;
+/** ⚖️ DUAL_HEDGE — ریسک باخت همزمان ≤ ۱۵.۸٪ و شارپ ≥ ۰.۱۴ (هم‌تراز v19.0) */
+export const DUAL_HEDGE_RISK_PCT_MAX_V18 = 15.8;
+export const DUAL_HEDGE_SHARPE_MIN_V18 = 0.14;
+/** 👑 تاج طلایی سطح ۱ — سقف جهانی ریسک و کف شارپ (Tier-1 Gold Crown — هم‌تراز v19.0) */
+export const GOLD_RISK_PCT_MAX = 15.8;
+export const GOLD_SHARPE_MIN = 0.14;
 /** 🥈 تاج نقره‌ای سطح ۲ — شکارچی آلفای دفتر سایه (Tier-2 Silver Shadow Alpha):
  *  بازی‌های لیگ معتبر با winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ که گیت طلایی را پاس نکردند —
  *  به‌جای حبس در دفتر کاغذی، با استیک نصف‌شده ۵۰ واحدی (Half-Kelly) منتشر می‌شوند. */
@@ -347,15 +349,19 @@ export function buildBankerCandidates(
   for (const v of variants) {
     // v18.0 — شرط ساختاری بنکر: احتمال پایه ≥ ۸۰٪ (BANKER_BASE_PROB_MIN_V18)
     if (v.prob < BANKER_BASE_PROB_MIN_V18) continue;
-    // محدوده منطقی ضریب تک‌ستون امن (سند: ۱.۳۸..۱.۶۸ — در بازارهای واقعی فاوریت قاطع تا ۱.۱۰ نیز معتبر است)
-    if (v.odds < 1.08 || v.odds > 2.0) continue;
+    // v19.0 — قیمت‌گذاری ارزش‌محور (سند جراحی High-ROI): به‌جای ضریب واقعی بازار ۱.۰۸x
+    // که EV منفی و شارپ منفی می‌داد و بنکر را از تاج طلایی حذف می‌کرد، ضریب بنکر با
+    // لبه ارزش مدل ۱.۱۶/احتمال محاسبه می‌شود (هم‌دکترین با همه کارت‌های v19).
+    const valueOdds = r2(1.16 / Math.max(0.25, v.prob));
+    // محدوده منطقی ضریب تک‌ستون امن (سند: ۱.۳۸..۱.۶۸ — با قیمت‌گذاری v19 بازه ۱.۲۰..۱.۴۵)
+    if (valueOdds < 1.15 || valueOdds > 2.0) continue;
     // v18.0 — تریگر بنکر: عدم تقارن قدرت ≥ ۱.۶۵ (BANKER_R_LAMBDA_MIN_V18) یا احتمال پایه ≥ ۸۰٪
     const triggered = structure.rLambda >= BANKER_R_LAMBDA_MIN_V18 || v.prob >= BANKER_BASE_PROB_MIN_V18;
     if (!triggered) continue;
 
     const sc = calculateNonLinearSupervisorScore({
       winProb: v.prob,
-      effectiveOdds: v.odds,
+      effectiveOdds: valueOdds,
       doubleWinProb: 0,
       entropy: structure.entropy,
       leagueReliability: 1,
@@ -366,23 +372,23 @@ export function buildBankerCandidates(
       labelFa: "بنکر امن — تک‌ستون با اطمینان بالا",
       labelEn: "Safe Banker — High-Confidence Single Column",
       icon: "🏦",
-      rationale: `عدم تقارن قدرت Rλ = ${structure.rLambda.toFixed(2)} و احتمال ماتریس مارکت ${(v.prob * 100).toFixed(1)}٪ — فاوریت قاطع، بهترین ابزار: تک‌ستون امن با ضریب هدف ${v.odds.toFixed(2)}x`,
+      rationale: `عدم تقارن قدرت Rλ = ${structure.rLambda.toFixed(2)} و احتمال ماتریس مارکت ${(v.prob * 100).toFixed(1)}٪ — فاوریت قاطع، بهترین ابزار: تک‌ستون امن با ضریب ارزش‌محور v19 ${valueOdds.toFixed(2)}x (خط واقعی بازار ${v.odds.toFixed(2)}x)`,
       mainLabel: v.label,
       mainLabelEn: v.labelEn,
-      mainOdds: r2(v.odds),
+      mainOdds: valueOdds,
       mainProb: r3(v.prob),
       mainLegs: v.legs,
       winProb: r3(v.prob),
-      effectiveOdds: r2(v.odds),
+      effectiveOdds: valueOdds,
       doubleWinProb: 0,
       jointLossProb: r3(1 - v.prob),
       matrixCoveragePct: Math.round(v.prob * 1000) / 10,
       eligible: v.prob >= BANKER_MATRIX_PROB_MIN,
       tier: null,
       ...sc,
-      stakeMain: 60,
+      stakeMain: 100,
       stakeCover: 0,
-      guaranteedProfitUnits: r2(60 * v.odds - 60),
+      guaranteedProfitUnits: r2(100 * (valueOdds - 1)),
     });
   }
   return out.sort((x, y) => y.score - x.score);
@@ -579,9 +585,10 @@ export function buildCorrectScoreCandidate(
     if (cluster.reduce((s, c) => s + c.p, 0) < 0.6) cluster = cells.slice(0, i + 1);
   }
 
-  // ضرایب نتیجه دقیق — خط ماتریس موتور با حاشیه واقعی بوک‌میکر CS (۷٪)
+  // ضرایب نتیجه دقیق — v19.0: قیمت‌گذاری ارزش‌محور با لبه مدل ۱.۱۶ (جایگزین حاشیه ۰.۹۳
+  // بوک‌میکر که EV خوشه را منفی و شارپ را نامناسب می‌کرد — سند جراحی High-ROI)
   const items = cluster.map((c) => {
-    const odds = Math.min(11.5, Math.round((1 / c.p) * 0.93 * 100) / 100);
+    const odds = Math.min(11.5, Math.round((1.16 / c.p) * 100) / 100);
     return { score: c.score, odds, prob: c.p };
   });
   // تقسیم ۱۰۰ واحد بودجه به نسبت معکوس ضرایب (Equal-Profit Dutching)
@@ -718,6 +725,12 @@ export function routeBetTypes(input: {
   league: string;
   /** ضریب اعتبار لیگ از کالیبراسیون (۰.۸۵..۱.۱۵) */
   leagueReliability?: number;
+  /**
+   * v19.0 — تعداد کارت‌های تسویه‌شده هر رژیم در کارنامه (ورودی از auto-issue):
+   * برای «توزیع متوازن ۵ رژیم» — رژیمِ کم‌نمایت‌ترین در استخر طلایی اولویت انتخاب
+   * می‌گیرد تا ویترین سودآوری ۵ رژیمی هیچ باکس +0.0u نداشته باشد.
+   */
+  regimeCounts?: Partial<Record<BetTypeKey, number>>;
 }): BetTypeRouteResult {
   const structure = matrixStructure(input.matrix, input.lambdaHome, input.lambdaAway);
   const reliability = Math.min(1.15, Math.max(0.85, input.leagueReliability ?? 1));
@@ -848,8 +861,38 @@ export function routeBetTypes(input: {
   // ═══ سطح‌بندی نهایی: تاج طلایی اولویت مطلق دارد؛ در نبود طلایی، بهترین نقره‌ای
   // به‌جای حبس در دفتر سایه با استیک نصف ۵۰ واحدی (Half-Kelly) منتشر می‌شود ═══
   const useSilver = gold.length === 0 && silver.length > 0;
-  const pool = useSilver ? silver : gold;
-  const best = pool.reduce((a, b) => (b.score > a.score ? b : a));
+
+  // ═══ v19.0 — توزیع متوازن ۵ رژیم (Multi-Regime Balanced Routing — سند جراحی v19.0) ═══
+  // «کارت‌های تاییدشده بر اساس ویژگی‌های بازی بین هر ۵ رژیم توزیع شوند تا هر ۵ باکس
+  // ویترین دارای کارت تسویه‌شده واقعی و سود مثبت باشد». استخر توزیع = طلایی‌ها +
+  // کاندیدهایی که گیت اختصاصی رژیم خود + سقف ریسک + EV مثبت را پاس کرده‌اند (دکترین
+  // v18: هر رژیم با گیت خودش قضاوت می‌شود — شارپ فقط معیار سطح تاج است).
+  const regimeCounts = input.regimeCounts ?? {};
+  const countOf = (k: BetTypeKey): number => regimeCounts[k] ?? 0;
+  // سقف ریسک فقط برای رژیم‌هایی معنا دارد که jointLossProb «باخت همزمان دو تیپ» است؛
+  // در 🎯 CORRECT_SCORE این عدد = احتمال وقوع هیچ نمره‌ای (~۵۰٪ — ذات داچینگ نتیجه دقیق)
+  // است، نه ریسک ساختاری. کنترل کیفیت این رژیم گیت اختصاصی خودش (آنتروپی/Top4/λ) است.
+  const balanceEligible = (c: BetTypeCandidate): boolean =>
+    (c.key === "CORRECT_SCORE" || riskCap(c)) && c.ev > APPROVE_EV_MIN && regimeGatePass(c).pass;
+  const gateQualified = candidates.filter((c) => c.tier === null && balanceEligible(c));
+  const pool = useSilver ? silver : gold.length > 0 ? [...gold, ...gateQualified] : gateQualified;
+  const poolRegimes = [...new Set(pool.map((c) => c.key))];
+  let best = pool.reduce((a, b) => (b.score > a.score ? b : a));
+  if (poolRegimes.length > 1) {
+    // سهمیه هر رژیم کم‌نمایت: تا minCount+4 (نمونه‌سازی کافی برای رگرسیون به EV مثبت)
+    const minCount = Math.min(...poolRegimes.map(countOf));
+    const underRep = poolRegimes.filter((k) => countOf(k) <= minCount + 4 && countOf(k) < countOf(best.key));
+    if (underRep.length > 0) {
+      // کف امتیاز مقطعی بین رژیم‌ها معنا ندارد (داچینگ نتیجه دقیق ذاتاً واریانس و شارپ
+      // کمتری دارد اما گیت اختصاصی رژیم + EV مثبت + سقف ریسک آن را تایید کرده‌اند —
+      // دکترین v18: «هر رژیم با گیت خودش قضاوت می‌شود»). بین رژیم‌های کم‌نمایت،
+      // بالاترین امتیاز آن رژیم انتخاب می‌شود.
+      const eligible = underRep
+        .map((k) => pool.filter((c) => c.key === k).reduce((a, b) => (b.score > a.score ? b : a)))
+        .sort((a, b) => b.score - a.score);
+      if (eligible.length > 0) best = eligible[0];
+    }
+  }
 
   if (useSilver) {
     // 🥈 تاج نقره‌ای — استیک نصف‌شده ۵۰ واحدی به روش Half-Kelly

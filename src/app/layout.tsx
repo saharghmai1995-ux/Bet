@@ -3,7 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v17.0 Non-Linear 5-Regime Bet-Type Router — ۱۰۰٪ ESPN Verified",
+  title: "NEOBET QUANT PRO • @AINEOBET | v19.0 High-ROI 5-Regime Value Engine — ۱۰۰٪ ESPN Verified",
   description:
     "مسیریاب غیرخطی ۵ رژیمی Bet-Type (بنکر، کمبوی رسمی، خوشه نتیجه دقیق، زوج‌تیپ، آکومولاتور) + تابع مطلوبیت Non-Linear Sharpe & Kelly + آنتروپی شانون ماتریس ۶×۶ + دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
   icons: {
