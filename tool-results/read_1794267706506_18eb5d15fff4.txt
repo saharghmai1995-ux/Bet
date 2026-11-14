@@ -1,0 +1,1096 @@
+     1→     1→#!/usr/bin/env python3
+     2→     2→"""
+     3→     3→NeoBet (@aineobet_bot) — Bilingual (FA/EN) VIP Subscription Bot
+     4→     4→with Automated On-Chain USDT (TRC20/Polygon) + Semi-Automated Iranian Card-to-Card Gateway
+     5→     5→===========================================================================================
+     6→     6→امکانات کلیدی این سرویس تجاری:
+     7→     7→1. رابط کاربری دوزبانه کامل (فارسی 🇮🇷 و انگلیسی 🇬🇧) با کیبورد شیشه‌ای (Inline Keyboard).
+     8→     8→2. قفل عضویت اجباری در کانال عمومی (@aineobet) و سیستم رفرال (دعوت ۵ دوست = ۴۸ ساعت VIP رایگان).
+     9→     9→3. سه پلن تجاری (بسته ۴۸ ساعته آخر هفته، اشتراک ماهانه Pro VIP، اشتراک جامع فوتبال + تنیس).
+    10→    10→4. درگاه اول (بین‌المللی و خودکار): تایید ۱۰۰٪ خودکار تراکنش تتر (USDT TRC-20 و Polygon POS) مستقیم از روی بلاکچین.
+    11→    11→5. درگاه دوم (ویژه کاربران ایران — کارت‌به‌کارت نیمه‌خودکار):
+    12→    12→   - تولید مبلغ تومانی رندوم اختصاصی (کد رهگیری ۳ رقمی در مبلغ، مثلاً ۱,۸۵۰,۴۰۰ تومان) برای تشخیص آنی در پیامک بانک.
+    13→    13→   - دریافت عکس فیش واریزی یا کد پیگیری از کاربر.
+    14→    14→   - ارسال آنی عکس فیش به تلگرام ادمین همراه با دکمه شیشه‌ای ۱ کلیکی: «✅ تایید و ارسال خودکار لینک VIP» و «❌ رد رسید».
+    15→    15→   - به محض کلیک ادمین روی «تایید»، ربات به صورت خودکار اشتراک کاربر را فعال کرده و لینک دعوت یک‌بارمصرف (`member_limit=1`) کانال VIP را برای کاربر می‌فرستد!
+    16→    16→6. بررسی خودکار انقضای اشتراک‌ها و اخراج خودکار کاربران منقضی‌شده از کانال خصوصی VIP.
+    17→    17→"""
+    18→    18→
+    19→    19→import json
+    20→    20→import os
+    21→    21→import random
+    22→    22→import sqlite3
+    23→    23→import time
+    24→    24→import urllib.parse
+    25→    25→import urllib.request
+    26→    26→from datetime import datetime, timedelta, timezone
+    27→    27→from typing import Any, Dict, Optional, Tuple
+    28→    28→
+    29→    29→# =====================================================================
+    30→    30→# ۱. تنظیمات پیکربندی ربات، کیف پول‌های تتر و اطلاعات کارت بانکی ایران
+    31→    31→# =====================================================================
+    32→    32→BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
+    33→    33→BOT_USERNAME = os.getenv("BOT_USERNAME", "aineobet_bot")
+    34→    34→PUBLIC_CHANNEL_USERNAME = os.getenv("PUBLIC_CHANNEL_USERNAME", "@aineobet")
+    35→    35→VIP_CHANNEL_ID = os.getenv("VIP_CHANNEL_ID", "-1001234567890")  # آیدی عددی کانال خصوصی VIP
+    36→    36→ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "123456789"))  # آیدی عددی تلگرام ادمین برای دریافت فیش‌ها
+    37→    37→
+    38→    38→# آدرس کیف پول‌های تتر (درگاه خودکار بلاکچین)
+    39→    39→WALLET_USDT_TRC20 = os.getenv("WALLET_USDT_TRC20", "TYourTronWalletAddressHereXXXXXXXXXX")
+    40→    40→WALLET_USDT_POLYGON = os.getenv("WALLET_USDT_POLYGON", "0xYourPolygonWalletAddressHereXXXXXXXXXXXX")
+    41→    41→
+    42→    42→# مشخصات کارت بانکی جهت درگاه کارت‌به‌کارت نیمه‌خودکار کاربران ایرانی
+    43→    43→BANK_CARD_NUMBER = os.getenv("BANK_CARD_NUMBER", "6037-9975-XXXX-XXXX")
+    44→    44→BANK_CARD_HOLDER = os.getenv("BANK_CARD_HOLDER", "نام صاحب حساب")
+    45→    45→BANK_NAME = os.getenv("BANK_NAME", "بانک ملی / ملت / سامان")
+    46→    46→USDT_TO_TOMAN_RATE = int(os.getenv("USDT_TO_TOMAN_RATE", "65000"))  # نرخ پایه هر تتر به تومان
+    47→    47→
+    48→    48→# قراردادهای رسمی هوشمند تتر
+    49→    49→TRON_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    50→    50→POLYGON_USDT_CONTRACT = "0xc2132d05d31c914a87c6611c10748aeb04b58e8f"
+    51→    51→ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+    52→    52→
+    53→    53→DB_PATH = os.getenv("NEOBET_BOT_DB", "aineobet_vip_members.db")
+    54→    54→
+    55→    55→# تعریف پلن‌های تجاری (دلاری و تومانی)
+    56→    56→SUBSCRIPTION_PLANS: Dict[str, Dict[str, Any]] = {
+    57→    57→    "weekend": {
+    58→    58→        "price_usdt": 7.0,
+    59→    59→        "price_toman": 450000,
+    60→    60→        "days": 2,
+    61→    61→        "title_fa": "⚡ بسته ۴۸ ساعته آخر هفته (Weekend Pass)",
+    62→    62→        "title_en": "⚡ 48-Hour Weekend Matchday Pass",
+    63→    63→    },
+    64→    64→    "pro_monthly": {
+    65→    65→        "price_usdt": 29.0,
+    66→    66→        "price_toman": 1850000,
+    67→    67→        "days": 30,
+    68→    68→        "title_fa": "💎 اشتراک ماهانه VIP فوتبال‌کوانت (۳۰ روز)",
+    69→    69→        "title_en": "💎 Pro Football Quant VIP (30 Days)",
+    70→    70→    },
+    71→    71→    "quant_all": {
+    72→    72→        "price_usdt": 59.0,
+    73→    73→        "price_toman": 3750000,
+    74→    74→        "days": 30,
+    75→    75→        "title_fa": "👑 اشتراک جامع VIP (فوتبال + تنیس مارکوف + اسنایپر)",
+    76→    76→        "title_en": "👑 All-Access Quant VIP (Football + Tennis + Sniper)",
+    77→    77→    },
+    78→    78→}
+    79→    79→
+    80→    80→# =====================================================================
+    81→    81→# ۲. دیکشنری پیام‌های دوزبانه (فارسی و انگلیسی)
+    82→    82→# =====================================================================
+    83→    83→MESSAGES: Dict[str, Dict[str, str]] = {
+    84→    84→    "fa": {
+    85→    85→        "welcome": (
+    86→    86→            "🏆 <b>به ربات رسمی مدیریت اشتراک NeoBet Quant (@aineobet) خوش آمدید!</b>\n\n"
+    87→    87→            "🤖 اولین موتور کمّی مجهز به <b>مهندسی معکوس ضرایب بوک‌میکر</b>، <b>۱۰,۰۰۰ شبیه‌سازی مونت‌کارلو</b>، "
+    88→    88→            "<b>فیلتر وتوی ایجنت سوپروایزر</b> و <b>اثبات رمزنگاری پیش از بازی (SHA-256)</b>.\n\n"
+    89→    89→            "📊 <b>عملکرد ثبت‌شده:</b> ۳۰ از ۳۰ برد در کارت‌های تاییدشده سوپروایزر (۱۰۰٪ وین‌ریت).\n"
+    90→    90→            "👇 لطفاً یکی از گزینه‌های زیر را انتخاب کنید:"
+    91→    91→        ),
+    92→    92→        "btn_plans": "💎 خرید اشتراک کانال VIP",
+    93→    93→        "btn_free_signal": "🎁 دریافت سیگنال رایگان روز + تست ریسک",
+    94→    94→        "btn_status": "👤 وضعیت اشتراک من",
+    95→    95→        "btn_referral": "🚀 دعوت دوستان (دریافت VIP رایگان)",
+    96→    96→        "btn_verify_tx": "⚡ پرداخت با تتر (تایید خودکار ۱۰ ثانیه‌ای)",
+    97→    97→        "btn_card_to_card": "💳 پرداخت ریالی کارت‌به‌کارت (ویژه ایران)",
+    98→    98→        "btn_switch_lang": "🇬🇧 Switch to English",
+    99→    99→        "force_sub_alert": (
+   100→   100→            "⚠️ <b>برای استفاده از سیگنال رایگان روز و ابزارهای ربات، ابتدا در کانال عمومی رسمی ما عضو شوید:</b>\n\n"
+   101→   101→            f"📢 کانال رسمی: {PUBLIC_CHANNEL_USERNAME}\n\n"
+   102→   102→            "پس از عضویت، روی دکمه زیر کلیک کنید:"
+   103→   103→        ),
+   104→   104→        "btn_check_join": "✅ عضو شدم — بازگشایی دسترسی",
+   105→   105→        "free_signal_unlocked": (
+   106→   106→            "🔥 <b>دسترسی شما تایید شد!</b>\n\n"
+   107→   107→            "📌 هر روز ۶۰ دقیقه قبل از شروع مسابقات، <b>۱ فلش‌کارت کامل دوقلو (تیپ A و B)</b> به صورت کاملاً رایگان "
+   108→   108→            f"در کانال {PUBLIC_CHANNEL_USERNAME} منتشر می‌شود.\n"
+   109→   109→            "🔒 برای دریافت تمام کارت‌های تاییدشده سوپروایزر، میکس‌های ۳ تایی و تک‌تیرانداز ضریب بالا، "
+   110→   110→            "از منوی اصلی گزینه <b>«💎 خرید اشتراک کانال VIP»</b> را انتخاب کنید."
+   111→   111→        ),
+   112→   112→        "select_plan": (
+   113→   113→            "💎 <b>پلن‌های اشتراک رسمی کانال خصوصی VIP (@aineobet):</b>\n\n"
+   114→   114→            "▫️ تمامی کارت‌ها به صورت پوسترهای گرافیکی استادیومی ارسال می‌شوند.\n"
+   115→   115→            "▫️ شامل: <b>زوج‌تیپ‌های تک‌بازی (ضریب ۲ و ۳)</b> + <b>میکس‌های ۲ و ۳ تایی</b> + <b>شکارچی ضرایب بالا (4x تا 9x)</b>.\n\n"
+   116→   116→            "👇 پلن مورد نظر خود را انتخاب کنید:"
+   117→   117→        ),
+   118→   118→        "choose_payment_method": (
+   119→   119→            "📦 <b>پلن انتخابی:</b> {plan_title}\n"
+   120→   120→            "⏳ <b>مدت اعتبار:</b> {days} روز کامل\n\n"
+   121→   121→            "💵 <b>مبلغ دلاری (تتر):</b> <code>{amount_usdt} USDT</code>\n"
+   122→   122→            "💳 <b>مبلغ ریالی (کارت‌به‌کارت):</b> <code>{amount_toman} تومان</code>\n\n"
+   123→   123→            "👇 لطفاً روش پرداخت خود را انتخاب کنید:"
+   124→   124→        ),
+   125→   125→        "payment_invoice_usdt": (
+   126→   126→            "🧾 <b>فاکتور پرداخت رمزارزی (تایید خودکار بلاکچین در ۱۰ ثانیه)</b>\n\n"
+   127→   127→            "📦 <b>پلن انتخابی:</b> {plan_title}\n"
+   128→   128→            "💰 <b>مبلغ قابل پرداخت:</b> <code>{amount}</code> <b>USDT (تتر)</b>\n\n"
+   129→   129→            "🟢 <b>روش ۱ — شبکه ترون (USDT - TRC20):</b>\n"
+   130→   130→            "<code>{wallet_trc20}</code>\n\n"
+   131→   131→            "🟣 <b>روش ۲ — شبکه پالیگان (USDT - Polygon POS):</b>\n"
+   132→   132→            "<code>{wallet_polygon}</code>\n\n"
+   133→   133→            "⚡ <b>نحوه فعال‌سازی آنی:</b>\n"
+   134→   134→            "پس از واریز، کافی است <b>کد هش تراکنش (TxID)</b> خود را مستقیماً در همین چت ارسال کنید تا لینک VIP بلافاصله صادر شود!"
+   135→   135→        ),
+   136→   136→        "payment_invoice_card": (
+   137→   137→            "💳 <b>فاکتور پرداخت ریالی (کارت‌به‌کارت نیمه‌خودکار)</b>\n\n"
+   138→   138→            "📦 <b>پلن انتخابی:</b> {plan_title}\n"
+   139→   139→            "💰 <b>مبلغ دقیق قابل واریز (دارای کد شناسایی):</b>\n"
+   140→   140→            "👉 <code>{exact_toman}</code> <b>تومان</b>\n"
+   141→   141→            "<i>(لطفاً دقیقاً همین مبلغ را واریز کنید تا واریزی شما فوراً شناسایی شود)</i>\n\n"
+   142→   142→            "🏦 <b>شماره کارت مقصد ({bank_name}):</b>\n"
+   143→   143→            "<code>{card_number}</code>\n"
+   144→   144→            "👤 <b>به نام:</b> {card_holder}\n\n"
+   145→   145→            "📸 <b>نحوه فعال‌سازی:</b>\n"
+   146→   146→            "پس از واریز، <b>عکس رسید (اسکرین‌شات واریزی)</b> ویا <b>۴ رقم آخر کارت خود + ساعت واریز</b> را در همین چت ارسال کنید. "
+   147→   147→            "فیش شما مستقیماً برای ادمین ارسال شده و با ۱ کلیک، لینک ورود به کانال VIP برایتان صادر می‌شود!"
+   148→   148→        ),
+   149→   149→        "receipt_submitted_user": (
+   150→   150→            "✅ <b>رسید پرداخت شما با کد پیگیری <code>#{receipt_id}</code> ثبت و برای ادمین ارسال شد!</b>\n\n"
+   151→   151→            "⏳ به محض تایید ادمین، لینک اختصاصی و یک‌بارمصرف ورود به کانال VIP به صورت خودکار در همین چت برای شما ارسال می‌شود."
+   152→   152→        ),
+   153→   153→        "card_approved_user": (
+   154→   154→            "🎉 <b>واریز کارت‌به‌کارت شما (رسید <code>#{receipt_id}</code>) تایید شد!</b>\n\n"
+   155→   155→            "📦 <b>پلن فعال‌شده:</b> {plan_title}\n"
+   156→   156→            "📅 <b>اعتبار تا تاریخ:</b> {expires_at}\n\n"
+   157→   157→            "🔗 <b>لینک اختصاصی و یک‌بارمصرف ورود به کانال VIP:</b>\n"
+   158→   158→            "{invite_link}\n\n"
+   159→   159→            "⚠️ <i>توجه: این لینک فقط برای ۱ نفر (اکانت شما) کار می‌کند.</i>"
+   160→   160→        ),
+   161→   161→        "card_rejected_user": (
+   162→   162→            "❌ <b>رسید پرداخت شماره <code>#{receipt_id}</code> تایید نشد.</b>\n"
+   163→   163→            "در صورت نیاز به بررسی مجدد، تصویر واضح‌تری از فیش واریزی یا شماره پیگیری بانکی را ارسال نمایید."
+   164→   164→        ),
+   165→   165→        "verifying_tx": "⏳ در حال استعلام مستقیم تراکنش از نودهای بلاکچین (TronGrid / Polygon RPC)...",
+   166→   166→        "tx_already_used": "❌ این کد تراکنش (TxID) قبلاً در سیستم ثبت و استفاده شده است.",
+   167→   167→        "tx_failed": (
+   168→   168→            "❌ <b>تراکنش تایید نشد:</b>\n{reason}\n\n"
+   169→   169→            "لطفاً مطمئن شوید تراکنش در بلاکچین وضعیت SUCCESS گرفته است و کد TxID را به درستی کپی کرده‌اید."
+   170→   170→        ),
+   171→   171→        "tx_success": (
+   172→   172→            "🎉 <b>پرداخت شما با موفقیت روی بلاکچین تایید شد!</b>\n\n"
+   173→   173→            "📦 <b>پلن فعال‌شده:</b> {plan_title}\n"
+   174→   174→            "💵 <b>مبلغ تاییدشده:</b> {amount} USDT ({network})\n"
+   175→   175→            "📅 <b>اعتبار تا تاریخ:</b> {expires_at}\n\n"
+   176→   176→            "🔗 <b>لینک اختصاصی و یک‌بارمصرف ورود به کانال VIP:</b>\n"
+   177→   177→            "{invite_link}\n\n"
+   178→   178→            "⚠️ <i>توجه: این لینک فقط برای ۱ نفر (اکانت شما) کار می‌کند.</i>"
+   179→   179→        ),
+   180→   180→        "status_active": (
+   181→   181→            "👤 <b>وضعیت حساب کاربری شما:</b>\n\n"
+   182→   182→            "✅ <b>وضعیت اشتراک:</b> فعال (VIP Member 👑)\n"
+   183→   183→            "📦 <b>پلن فعلی:</b> {plan}\n"
+   184→   184→            "⏳ <b>تاریخ انقضا:</b> {expires_at}\n"
+   185→   185→            "👥 <b>تعداد دعوت‌های موفق شما:</b> {referrals} نفر"
+   186→   186→        ),
+   187→   187→        "status_inactive": (
+   188→   188→            "👤 <b>وضعیت حساب کاربری شما:</b>\n\n"
+   189→   189→            "⚪ <b>وضعیت اشتراک:</b> کاربر عادی (Free Tier)\n"
+   190→   190→            "👥 <b>تعداد دعوت‌های موفق شما:</b> {referrals} از ۵ نفر (برای دریافت ۴۸ ساعت VIP رایگان)\n\n"
+   191→   191→            "💎 برای دسترسی به تمام سیگنال‌های تاییدشده سوپروایزر، اشتراک VIP را فعال کنید."
+   192→   192→        ),
+   193→   193→        "referral_info": (
+   194→   194→            "🚀 <b>طرح رشد ارگانیک @aineobet — دریافت اشتراک VIP رایگان!</b>\n\n"
+   195→   195→            "با اشتراک‌گذاری لینک اختصاصی خود، به ازای هر <b>۵ دوستی</b> که وارد ربات شده و در کانال عمومی عضو شوند، "
+   196→   196→            "<b>۴۸ ساعت اشتراک کامل کانال VIP (به ارزش ۷ دلار)</b> به صورت خودکار هدیه می‌گیرید!\n\n"
+   197→   197→            "🔗 <b>لینک دعوت اختصاصی شما:</b>\n"
+   198→   198→            "<code>{ref_link}</code>\n\n"
+   199→   199→            "📊 <b>تعداد دعوت‌های شما تا این لحظه:</b> {referrals} نفر"
+   200→   200→        ),
+   201→   201→    },
+   202→   202→    "en": {
+   203→   203→        "welcome": (
+   204→   204→            "🏆 <b>Welcome to the Official NeoBet Quant VIP Bot (@aineobet)!</b>\n\n"
+   205→   205→            "🤖 Powered by <b>Reverse-Poisson Market Odds Solver</b>, <b>10,000 Monte Carlo Simulations</b>, "
+   206→   206→            "<b>Chief Supervisor Veto Gate</b>, and <b>Pre-Match SHA-256 Cryptographic Proof</b>.\n\n"
+   207→   207→            "📊 <b>Verified Track Record:</b> 30/30 Wins on Supervisor-Approved Dual Slips (100% Win Rate).\n"
+   208→   208→            "👇 Select an option below:"
+   209→   209→        ),
+   210→   210→        "btn_plans": "💎 Get VIP Channel Access",
+   211→   211→        "btn_free_signal": "🎁 Free Daily Signal & Risk Check",
+   212→   212→        "btn_status": "👤 My Subscription Status",
+   213→   213→        "btn_referral": "🚀 Refer Friends (Earn Free VIP)",
+   214→   214→        "btn_verify_tx": "⚡ Pay with USDT (Instant 10s Auto-Verify)",
+   215→   215→        "btn_card_to_card": "💳 Iranian Bank Card-to-Card (IRR/Toman)",
+   216→   216→        "btn_switch_lang": "🇮🇷 تغییر زبان به فارسی",
+   217→   217→        "force_sub_alert": (
+   218→   218→            "⚠️ <b>To unlock the Free Daily Pick and Quant Tools, please join our official public showcase channel first:</b>\n\n"
+   219→   219→            f"📢 Official Channel: {PUBLIC_CHANNEL_USERNAME}\n\n"
+   220→   220→            "Once joined, click the verification button below:"
+   221→   221→        ),
+   222→   222→        "btn_check_join": "✅ I Joined — Unlock Access",
+   223→   223→        "free_signal_unlocked": (
+   224→   224→            "🔥 <b>Access Verified!</b>\n\n"
+   225→   225→            "📌 Every day at T-60m before kickoff, <b>1 Full Dual-Hedge Card (Slip A & B)</b> is posted 100% free "
+   226→   226→            f"inside {PUBLIC_CHANNEL_USERNAME}.\n"
+   227→   227→            "🔒 To unlock all Supervisor-Approved cards, 2/3-Leg Combos, and High-Odds Sniper picks, "
+   228→   228→            "tap <b>'💎 Get VIP Channel Access'</b> from the main menu."
+   229→   229→        ),
+   230→   230→        "select_plan": (
+   231→   231→            "💎 <b>Official @aineobet Private VIP Subscription Plans:</b>\n\n"
+   232→   232→            "▫️ Pure high-res English broadcast stadium cards (zero text clutter).\n"
+   233→   233→            "▫️ Includes: <b>Single Dual-Hedge Slips (2.0x & 3.0x)</b> + <b>2/3-Leg Smart Combos</b> + <b>High-Odds Sniper (4x-9x)</b>.\n\n"
+   234→   234→            "👇 Choose your plan below:"
+   235→   235→        ),
+   236→   236→        "choose_payment_method": (
+   237→   237→            "📦 <b>Selected Plan:</b> {plan_title}\n"
+   238→   238→            "⏳ <b>Duration:</b> {days} Full Days\n\n"
+   239→   239→            "💵 <b>Crypto Price (USDT):</b> <code>{amount_usdt} USDT</code>\n"
+   240→   240→            "💳 <b>Iranian Card Price:</b> <code>{amount_toman} Toman</code>\n\n"
+   241→   241→            "👇 Select your preferred payment method:"
+   242→   242→        ),
+   243→   243→        "payment_invoice_usdt": (
+   244→   244→            "🧾 <b>Automated On-Chain USDT Invoice (Instant 10s Verification)</b>\n\n"
+   245→   245→            "📦 <b>Selected Plan:</b> {plan_title}\n"
+   246→   246→            "💰 <b>Amount Due:</b> <code>{amount}</code> <b>USDT</b>\n\n"
+   247→   247→            "🟢 <b>Option 1 — Tron Network (USDT - TRC20):</b>\n"
+   248→   248→            "<code>{wallet_trc20}</code>\n\n"
+   249→   249→            "🟣 <b>Option 2 — Polygon Network (USDT - Polygon POS):</b>\n"
+   250→   250→            "<code>{wallet_polygon}</code>\n\n"
+   251→   251→            "⚡ <b>Instant Activation Instructions:</b>\n"
+   252→   252→            "After sending USDT, simply paste your <b>Transaction Hash (TxID)</b> directly in this chat!"
+   253→   253→        ),
+   254→   254→        "payment_invoice_card": (
+   255→   255→            "💳 <b>Iranian Bank Card-to-Card Invoice (Semi-Automated)</b>\n\n"
+   256→   256→            "📦 <b>Selected Plan:</b> {plan_title}\n"
+   257→   257→            "💰 <b>Exact Amount to Transfer (includes unique ID):</b>\n"
+   258→   258→            "👉 <code>{exact_toman}</code> <b>Toman</b>\n\n"
+   259→   259→            "🏦 <b>Destination Card ({bank_name}):</b>\n"
+   260→   260→            "<code>{card_number}</code>\n"
+   261→   261→            "👤 <b>Card Holder:</b> {card_holder}\n\n"
+   262→   262→            "📸 <b>How to Activate:</b>\n"
+   263→   263→            "After transferring, send a <b>screenshot/photo of your receipt</b> or the <b>last 4 digits of your card</b> right here in this chat."
+   264→   264→        ),
+   265→   265→        "receipt_submitted_user": (
+   266→   266→            "✅ <b>Your payment receipt <code>#{receipt_id}</code> has been logged and forwarded to the admin!</b>\n\n"
+   267→   267→            "⏳ As soon as the admin taps Approve, your single-use VIP invite link will be sent here automatically."
+   268→   268→        ),
+   269→   269→        "card_approved_user": (
+   270→   270→            "🎉 <b>Your Card-to-Card Payment (Receipt <code>#{receipt_id}</code>) is Approved!</b>\n\n"
+   271→   271→            "📦 <b>Activated Plan:</b> {plan_title}\n"
+   272→   272→            "📅 <b>Valid Until:</b> {expires_at}\n\n"
+   273→   273→            "🔗 <b>Your Single-Use Private VIP Channel Invite Link:</b>\n"
+   274→   274→            "{invite_link}"
+   275→   275→        ),
+   276→   276→        "card_rejected_user": (
+   277→   277→            "❌ <b>Payment Receipt <code>#{receipt_id}</code> was not approved.</b>\n"
+   278→   278→            "Please send a clearer screenshot of your bank transfer receipt or contact support."
+   279→   279→        ),
+   280→   280→        "verifying_tx": "⏳ Querying blockchain nodes (TronGrid / Polygon RPC) to verify your transaction...",
+   281→   281→        "tx_already_used": "❌ This Transaction Hash (TxID) has already been redeemed.",
+   282→   282→        "tx_failed": (
+   283→   283→            "❌ <b>Verification Failed:</b>\n{reason}\n\n"
+   284→   284→            "Please ensure the transaction is confirmed on-chain and paste the exact TxID."
+   285→   285→        ),
+   286→   286→        "tx_success": (
+   287→   287→            "🎉 <b>On-Chain Payment Confirmed!</b>\n\n"
+   288→   288→            "📦 <b>Activated Plan:</b> {plan_title}\n"
+   289→   289→            "💵 <b>Verified Amount:</b> {amount} USDT ({network})\n"
+   290→   290→            "📅 <b>Valid Until:</b> {expires_at}\n\n"
+   291→   291→            "🔗 <b>Your Single-Use Private VIP Channel Invite Link:</b>\n"
+   292→   292→            "{invite_link}"
+   293→   293→        ),
+   294→   294→        "status_active": (
+   295→   295→            "👤 <b>Your Account Status:</b>\n\n"
+   296→   296→            "✅ <b>Status:</b> Active VIP Member 👑\n"
+   297→   297→            "📦 <b>Current Plan:</b> {plan}\n"
+   298→   298→            "⏳ <b>Expires At:</b> {expires_at}\n"
+   299→   299→            "👥 <b>Verified Referrals:</b> {referrals}"
+   300→   300→        ),
+   301→   301→        "status_inactive": (
+   302→   302→            "👤 <b>Your Account Status:</b>\n\n"
+   303→   303→            "⚪ <b>Status:</b> Free Tier Member\n"
+   304→   304→            "👥 <b>Verified Referrals:</b> {referrals} / 5 (Refer 5 friends for a free 48h VIP Pass)\n\n"
+   305→   305→            "💎 Upgrade to VIP to receive all Supervisor-Approved cards, Combos, and Sniper picks."
+   306→   306→        ),
+   307→   307→        "referral_info": (
+   308→   308→            "🚀 <b>@aineobet Referral Program — Earn Free VIP Access!</b>\n\n"
+   309→   309→            "Share your personal invite link. For every <b>5 friends</b> who start the bot and join our public channel, "
+   310→   310→            "you automatically unlock a <b>48-Hour VIP Weekend Pass ($7 value)</b>!\n\n"
+   311→   311→            "🔗 <b>Your Personal Referral Link:</b>\n"
+   312→   312→            "<code>{ref_link}</code>\n\n"
+   313→   313→            "📊 <b>Your Verified Referrals:</b> {referrals}"
+   314→   314→        ),
+   315→   315→    },
+   316→   316→}
+   317→   317→
+   318→   318→
+   319→   319→# =====================================================================
+   320→   320→# ۳. لایه دیتابیس SQLite (اعضا، تراکنش‌های تتر و فیش‌های کارت‌به‌کارت)
+   321→   321→# =====================================================================
+   322→   322→def init_db(db_path: str = DB_PATH) -> sqlite3.Connection:
+   323→   323→    conn = sqlite3.connect(db_path, check_same_thread=False)
+   324→   324→    conn.row_factory = sqlite3.Row
+   325→   325→    conn.execute(
+   326→   326→        """
+   327→   327→        CREATE TABLE IF NOT EXISTS users (
+   328→   328→            user_id INTEGER PRIMARY KEY,
+   329→   329→            username TEXT,
+   330→   330→            lang TEXT DEFAULT 'fa',
+   331→   331→            selected_plan TEXT DEFAULT 'pro_monthly',
+   332→   332→            payment_mode TEXT DEFAULT 'NONE', -- NONE, AWAITING_USDT_TXID, AWAITING_CARD_RECEIPT
+   333→   333→            pending_toman_amount INTEGER DEFAULT 0,
+   334→   334→            vip_expires_at TEXT,
+   335→   335→            referred_by INTEGER,
+   336→   336→            referral_count INTEGER DEFAULT 0,
+   337→   337→            reward_claimed_count INTEGER DEFAULT 0,
+   338→   338→            joined_at TEXT NOT NULL
+   339→   339→        )
+   340→   340→        """
+   341→   341→    )
+   342→   342→    conn.execute(
+   343→   343→        """
+   344→   344→        CREATE TABLE IF NOT EXISTS payments (
+   345→   345→            id INTEGER PRIMARY KEY AUTOINCREMENT,
+   346→   346→            txid TEXT NOT NULL UNIQUE,
+   347→   347→            user_id INTEGER NOT NULL,
+   348→   348→            network TEXT NOT NULL,
+   349→   349→            amount_usdt REAL NOT NULL,
+   350→   350→            plan_key TEXT NOT NULL,
+   351→   351→            verified_at TEXT NOT NULL
+   352→   352→        )
+   353→   353→        """
+   354→   354→    )
+   355→   355→    conn.execute(
+   356→   356→        """
+   357→   357→        CREATE TABLE IF NOT EXISTS card_receipts (
+   358→   358→            id INTEGER PRIMARY KEY AUTOINCREMENT,
+   359→   359→            user_id INTEGER NOT NULL,
+   360→   360→            username TEXT,
+   361→   361→            plan_key TEXT NOT NULL,
+   362→   362→            expected_toman INTEGER NOT NULL,
+   363→   363→            receipt_type TEXT NOT NULL, -- PHOTO or TEXT
+   364→   364→            receipt_content TEXT NOT NULL, -- file_id or text info
+   365→   365→            status TEXT DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
+   366→   366→            submitted_at TEXT NOT NULL,
+   367→   367→            reviewed_at TEXT
+   368→   368→        )
+   369→   369→        """
+   370→   370→    )
+   371→   371→    conn.commit()
+   372→   372→    return conn
+   373→   373→
+   374→   374→
+   375→   375→def get_or_create_user(
+   376→   376→    conn: sqlite3.Connection, user_id: int, username: str = "", referred_by: Optional[int] = None
+   377→   377→) -> sqlite3.Row:
+   378→   378→    row = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+   379→   379→    if row:
+   380→   380→        if username and row["username"] != username:
+   381→   381→            conn.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
+   382→   382→            conn.commit()
+   383→   383→        return conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+   384→   384→    now_iso = datetime.now(timezone.utc).isoformat()
+   385→   385→    conn.execute(
+   386→   386→        """
+   387→   387→        INSERT INTO users (user_id, username, lang, referred_by, joined_at)
+   388→   388→        VALUES (?, ?, 'fa', ?, ?)
+   389→   389→        """,
+   390→   390→        (user_id, username, referred_by, now_iso),
+   391→   391→    )
+   392→   392→    conn.commit()
+   393→   393→    return conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
+   394→   394→
+   395→   395→
+   396→   396→def set_user_lang(conn: sqlite3.Connection, user_id: int, lang: str) -> None:
+   397→   397→    conn.execute("UPDATE users SET lang = ? WHERE user_id = ?", (lang, user_id))
+   398→   398→    conn.commit()
+   399→   399→
+   400→   400→
+   401→   401→def set_user_plan_and_mode(
+   402→   402→    conn: sqlite3.Connection, user_id: int, plan_key: str, mode: str, toman_amount: int = 0
+   403→   403→) -> None:
+   404→   404→    conn.execute(
+   405→   405→        "UPDATE users SET selected_plan = ?, payment_mode = ?, pending_toman_amount = ? WHERE user_id = ?",
+   406→   406→        (plan_key, mode, toman_amount, user_id),
+   407→   407→    )
+   408→   408→    conn.commit()
+   409→   409→
+   410→   410→
+   411→   411→def extend_user_vip(conn: sqlite3.Connection, user_id: int, days: int, plan_key: str) -> str:
+   412→   412→    row = conn.execute("SELECT vip_expires_at FROM users WHERE user_id = ?", (user_id,)).fetchone()
+   413→   413→    now = datetime.now(timezone.utc)
+   414→   414→    base_time = now
+   415→   415→    if row and row["vip_expires_at"]:
+   416→   416→        try:
+   417→   417→            existing_exp = datetime.fromisoformat(row["vip_expires_at"])
+   418→   418→            if existing_exp > now:
+   419→   419→                base_time = existing_exp
+   420→   420→        except ValueError:
+   421→   421→            pass
+   422→   422→    new_exp = base_time + timedelta(days=days)
+   423→   423→    new_exp_iso = new_exp.strftime("%Y-%m-%d %H:%M UTC")
+   424→   424→    conn.execute(
+   425→   425→        "UPDATE users SET vip_expires_at = ?, selected_plan = ?, payment_mode = 'NONE' WHERE user_id = ?",
+   426→   426→        (new_exp.isoformat(), plan_key, user_id),
+   427→   427→    )
+   428→   428→    conn.commit()
+   429→   429→    return new_exp_iso
+   430→   430→
+   431→   431→
+   432→   432→# =====================================================================
+   433→   433→# ۴. موتور تایید خودکار تراکنش تتر روی بلاکچین (TRC-20 & Polygon POS)
+   434→   434→# =====================================================================
+   435→   435→def verify_trc20_usdt_transaction(
+   436→   436→    txid: str, expected_wallet: str, min_amount_usdt: float
+   437→   437→) -> Tuple[bool, float, str]:
+   438→   438→    clean_tx = txid.strip()
+   439→   439→    if len(clean_tx) != 64:
+   440→   440→        return False, 0.0, "Invalid TRC20 TxID length (must be 64 hex characters)."
+   441→   441→
+   442→   442→    url = f"https://apilist.tronscanapi.com/api/transaction-info?hash={clean_tx}"
+   443→   443→    try:
+   444→   444→        req = urllib.request.Request(url, headers={"User-Agent": "NeoBetQuantVerifier/1.0"})
+   445→   445→        with urllib.request.urlopen(req, timeout=12) as resp:
+   446→   446→            data = json.loads(resp.read().decode("utf-8"))
+   447→   447→    except Exception as exc:
+   448→   448→        return False, 0.0, f"Blockchain node connection error: {exc}"
+   449→   449→
+   450→   450→    if not data or data.get("contractRet") != "SUCCESS":
+   451→   451→        return False, 0.0, "Transaction not found or status is not SUCCESS on Tron blockchain."
+   452→   452→
+   453→   453→    transfers = data.get("trc20TransferInfo") or []
+   454→   454→    for tr in transfers:
+   455→   455→        contract_addr = tr.get("contract_address", "")
+   456→   456→        to_addr = tr.get("to_address", "")
+   457→   457→        decimals = int(tr.get("decimals", 6))
+   458→   458→        raw_amount = float(tr.get("amount_str", "0")) / (10**decimals)
+   459→   459→
+   460→   460→        if contract_addr == TRON_USDT_CONTRACT and to_addr.lower() == expected_wallet.lower():
+   461→   461→            if raw_amount + 0.05 >= min_amount_usdt:
+   462→   462→                return True, round(raw_amount, 2), "Confirmed on Tron (TRC-20)"
+   463→   463→            return (
+   464→   464→                False,
+   465→   465→                raw_amount,
+   466→   466→                f"Transferred amount ({raw_amount:.2f} USDT) is less than required ({min_amount_usdt:.2f} USDT).",
+   467→   467→            )
+   468→   468→
+   469→   469→    return False, 0.0, "No matching USDT-TRC20 transfer to the official NeoBet wallet was found in this TxID."
+   470→   470→
+   471→   471→
+   472→   472→def verify_polygon_usdt_transaction(
+   473→   473→    txid: str, expected_wallet: str, min_amount_usdt: float
+   474→   474→) -> Tuple[bool, float, str]:
+   475→   475→    clean_tx = txid.strip().lower()
+   476→   476→    if not clean_tx.startswith("0x") or len(clean_tx) != 66:
+   477→   477→        return False, 0.0, "Invalid Polygon TxID format (must start with 0x and be 66 characters)."
+   478→   478→
+   479→   479→    rpc_payload = json.dumps(
+   480→   480→        {
+   481→   481→            "jsonrpc": "2.0",
+   482→   482→            "method": "eth_getTransactionReceipt",
+   483→   483→            "params": [clean_tx],
+   484→   484→            "id": 1,
+   485→   485→        }
+   486→   486→    ).encode("utf-8")
+   487→   487→
+   488→   488→    try:
+   489→   489→        req = urllib.request.Request(
+   490→   490→            "https://polygon-rpc.com",
+   491→   491→            data=rpc_payload,
+   492→   492→            headers={"Content-Type": "application/json", "User-Agent": "NeoBetQuantVerifier/1.0"},
+   493→   493→        )
+   494→   494→        with urllib.request.urlopen(req, timeout=12) as resp:
+   495→   495→            res_json = json.loads(resp.read().decode("utf-8"))
+   496→   496→    except Exception as exc:
+   497→   497→        return False, 0.0, f"Polygon RPC connection error: {exc}"
+   498→   498→
+   499→   499→    receipt = res_json.get("result")
+   500→   500→    if not receipt or receipt.get("status") != "0x1":
+   501→   501→        return False, 0.0, "Transaction not found or failed on Polygon network."
+   502→   502→
+   503→   503→    clean_wallet_padded = "0x" + expected_wallet.lower().replace("0x", "").rjust(64, "0")
+   504→   504→    for log in receipt.get("logs", []):
+   505→   505→        if log.get("address", "").lower() == POLYGON_USDT_CONTRACT:
+   506→   506→            topics = [t.lower() for t in log.get("topics", [])]
+   507→   507→            if len(topics) >= 3 and topics[0] == ERC20_TRANSFER_TOPIC and topics[2] == clean_wallet_padded:
+   508→   508→                raw_hex = log.get("data", "0x0")
+   509→   509→                amount_usdt = int(raw_hex, 16) / 1e6
+   510→   510→                if amount_usdt + 0.05 >= min_amount_usdt:
+   511→   511→                    return True, round(amount_usdt, 2), "Confirmed on Polygon POS"
+   512→   512→                return (
+   513→   513→                    False,
+   514→   514→                    amount_usdt,
+   515→   515→                    f"Transferred amount ({amount_usdt:.2f} USDT) is less than required ({min_amount_usdt:.2f} USDT).",
+   516→   516→                )
+   517→   517→
+   518→   518→    return False, 0.0, "No matching Polygon USDT transfer to the official NeoBet wallet was found."
+   519→   519→
+   520→   520→
+   521→   521→def verify_any_usdt_txid(
+   522→   522→    conn: sqlite3.Connection, user_id: int, txid: str, plan_key: str
+   523→   523→) -> Tuple[bool, float, str, str]:
+   524→   524→    clean_tx = txid.strip()
+   525→   525→    dup = conn.execute("SELECT id FROM payments WHERE txid = ?", (clean_tx,)).fetchone()
+   526→   526→    if dup:
+   527→   527→        return False, 0.0, "ALREADY_USED", ""
+   528→   528→
+   529→   529→    plan = SUBSCRIPTION_PLANS.get(plan_key, SUBSCRIPTION_PLANS["pro_monthly"])
+   530→   530→    min_amt = plan["price_usdt"]
+   531→   531→
+   532→   532→    if clean_tx.startswith("0x") and len(clean_tx) == 66:
+   533→   533→        ok, amt, msg = verify_polygon_usdt_transaction(clean_tx, WALLET_USDT_POLYGON, min_amt)
+   534→   534→        net = "Polygon (USDT)"
+   535→   535→    else:
+   536→   536→        ok, amt, msg = verify_trc20_usdt_transaction(clean_tx, WALLET_USDT_TRC20, min_amt)
+   537→   537→        net = "Tron (TRC-20)"
+   538→   538→
+   539→   539→    if ok:
+   540→   540→        conn.execute(
+   541→   541→            """
+   542→   542→            INSERT INTO payments (txid, user_id, network, amount_usdt, plan_key, verified_at)
+   543→   543→            VALUES (?, ?, ?, ?, ?, ?)
+   544→   544→            """,
+   545→   545→            (clean_tx, user_id, net, amt, plan_key, datetime.now(timezone.utc).isoformat()),
+   546→   546→        )
+   547→   547→        conn.commit()
+   548→   548→    return ok, amt, msg, net
+   549→   549→
+   550→   550→
+   551→   551→# =====================================================================
+   552→   552→# ۵. موتور کارت‌به‌کارت نیمه‌خودکار (ثبت رسید و تایید ۱ کلیکی توسط ادمین)
+   553→   553→# =====================================================================
+   554→   554→def generate_unique_toman_amount(base_toman: int) -> int:
+   555→   555→    """
+   556→   556→    افزودن یک کد ۳ رقمی رندوم (مثلاً بین 110 تا 890 تومان) به مبلغ پایه
+   557→   557→    تا ادمین به محض دیدن پیامک بانک، بدون شک متوجه شود واریزی متعلق به کدام کاربر است.
+   558→   558→    """
+   559→   559→    unique_suffix = random.randint(11, 89) * 10
+   560→   560→    return base_toman + unique_suffix
+   561→   561→
+   562→   562→
+   563→   563→def create_card_receipt(
+   564→   564→    conn: sqlite3.Connection,
+   565→   565→    user_id: int,
+   566→   566→    username: str,
+   567→   567→    plan_key: str,
+   568→   568→    expected_toman: int,
+   569→   569→    receipt_type: str,
+   570→   570→    receipt_content: str,
+   571→   571→) -> int:
+   572→   572→    now_iso = datetime.now(timezone.utc).isoformat()
+   573→   573→    cur = conn.execute(
+   574→   574→        """
+   575→   575→        INSERT INTO card_receipts (
+   576→   576→            user_id, username, plan_key, expected_toman, receipt_type, receipt_content, status, submitted_at
+   577→   577→        ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?)
+   578→   578→        """,
+   579→   579→        (user_id, username, plan_key, expected_toman, receipt_type, receipt_content, now_iso),
+   580→   580→    )
+   581→   581→    conn.execute("UPDATE users SET payment_mode = 'NONE' WHERE user_id = ?", (user_id,))
+   582→   582→    conn.commit()
+   583→   583→    return int(cur.lastrowid)
+   584→   584→
+   585→   585→
+   586→   586→def notify_admin_of_card_receipt(conn: sqlite3.Connection, receipt_id: int) -> None:
+   587→   587→    rec = conn.execute("SELECT * FROM card_receipts WHERE id = ?", (receipt_id,)).fetchone()
+   588→   588→    if not rec:
+   589→   589→        return
+   590→   590→    plan = SUBSCRIPTION_PLANS.get(rec["plan_key"], SUBSCRIPTION_PLANS["pro_monthly"])
+   591→   591→    user_tag = f"@{rec['username']}" if rec["username"] else f"ID: <code>{rec['user_id']}</code>"
+   592→   592→    admin_caption = (
+   593→   593→        f"🔔 <b>رسید جدید کارت‌به‌کارت (#{rec['id']})</b>\n\n"
+   594→   594→        f"👤 <b>کاربر:</b> {user_tag} (<code>{rec['user_id']}</code>)\n"
+   595→   595→        f"📦 <b>پلن درخواستی:</b> {plan['title_fa']}\n"
+   596→   596→        f"💰 <b>مبلغ تعیین‌شده با کد شناسایی:</b> <code>{rec['expected_toman']:,}</code> تومان\n"
+   597→   597→        f"🕒 <b>زمان ثبت:</b> {rec['submitted_at'][:19]} UTC\n"
+   598→   598→    )
+   599→   599→    admin_kb = {
+   600→   600→        "inline_keyboard": [
+   601→   601→            [
+   602→   602→                {
+   603→   603→                    "text": f"✅ تایید و ارسال لینک VIP (#{rec['id']})",
+   604→   604→                    "callback_data": f"admin_approve_{rec['id']}",
+   605→   605→                }
+   606→   606→            ],
+   607→   607→            [
+   608→   608→                {
+   609→   609→                    "text": f"❌ رد کردن رسید (#{rec['id']})",
+   610→   610→                    "callback_data": f"admin_reject_{rec['id']}",
+   611→   611→                }
+   612→   612→            ],
+   613→   613→        ]
+   614→   614→    }
+   615→   615→
+   616→   616→    if rec["receipt_type"] == "PHOTO":
+   617→   617→        tg_api_call(
+   618→   618→            "sendPhoto",
+   619→   619→            {
+   620→   620→                "chat_id": ADMIN_USER_ID,
+   621→   621→                "photo": rec["receipt_content"],
+   622→   622→                "caption": admin_caption,
+   623→   623→                "parse_mode": "HTML",
+   624→   624→                "reply_markup": admin_kb,
+   625→   625→            },
+   626→   626→        )
+   627→   627→    else:
+   628→   628→        tg_api_call(
+   629→   629→            "sendMessage",
+   630→   630→            {
+   631→   631→                "chat_id": ADMIN_USER_ID,
+   632→   632→                "text": admin_caption + f"\n📝 <b>مشخصات ارسالی کاربر:</b>\n<code>{rec['receipt_content']}</code>",
+   633→   633→                "parse_mode": "HTML",
+   634→   634→                "reply_markup": admin_kb,
+   635→   635→            },
+   636→   636→        )
+   637→   637→
+   638→   638→
+   639→   639→def process_admin_receipt_decision(
+   640→   640→    conn: sqlite3.Connection, receipt_id: int, approve: bool
+   641→   641→) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+   642→   642→    rec = conn.execute("SELECT * FROM card_receipts WHERE id = ?", (receipt_id,)).fetchone()
+   643→   643→    if not rec:
+   644→   644→        return False, "رسید یافت نشد.", None
+   645→   645→    if rec["status"] != "PENDING":
+   646→   646→        return False, f"این رسید قبلاً در وضعیت {rec['status']} قرار گرفته است.", None
+   647→   647→
+   648→   648→    new_status = "APPROVED" if approve else "REJECTED"
+   649→   649→    now_iso = datetime.now(timezone.utc).isoformat()
+   650→   650→    conn.execute(
+   651→   651→        "UPDATE card_receipts SET status = ?, reviewed_at = ? WHERE id = ?",
+   652→   652→        (new_status, now_iso, receipt_id),
+   653→   653→    )
+   654→   654→    conn.commit()
+   655→   655→
+   656→   656→    user = get_or_create_user(conn, rec["user_id"])
+   657→   657→    lang = user["lang"]
+   658→   658→    m = MESSAGES[lang]
+   659→   659→    plan = SUBSCRIPTION_PLANS.get(rec["plan_key"], SUBSCRIPTION_PLANS["pro_monthly"])
+   660→   660→    plan_title = plan["title_fa"] if lang == "fa" else plan["title_en"]
+   661→   661→
+   662→   662→    if approve:
+   663→   663→        exp_str = extend_user_vip(conn, rec["user_id"], plan["days"], rec["plan_key"])
+   664→   664→        invite_link = create_single_use_vip_invite_link(rec["user_id"], plan["days"])
+   665→   665→        user_msg = m["card_approved_user"].format(
+   666→   666→            receipt_id=receipt_id,
+   667→   667→            plan_title=plan_title,
+   668→   668→            expires_at=exp_str,
+   669→   669→            invite_link=invite_link,
+   670→   670→        )
+   671→   671→        tg_api_call("sendMessage", {"chat_id": rec["user_id"], "text": user_msg, "parse_mode": "HTML"})
+   672→   672→        return (
+   673→   673→            True,
+   674→   674→            f"✅ رسید #{receipt_id} تایید شد و لینک یک‌بارمصرف VIP برای کاربر {rec['user_id']} ارسال گردید.",
+   675→   675→            {"user_id": rec["user_id"], "expires_at": exp_str, "invite_link": invite_link},
+   676→   676→        )
+   677→   677→    else:
+   678→   678→        user_msg = m["card_rejected_user"].format(receipt_id=receipt_id)
+   679→   679→        tg_api_call("sendMessage", {"chat_id": rec["user_id"], "text": user_msg, "parse_mode": "HTML"})
+   680→   680→        return True, f"❌ رسید #{receipt_id} رد شد و به کاربر اطلاع داده شد.", None
+   681→   681→
+   682→   682→
+   683→   683→# =====================================================================
+   684→   684→# ۶. توابع ارتباط با API تلگرام و ساخت کیبوردها
+   685→   685→# =====================================================================
+   686→   686→def tg_api_call(method: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+   687→   687→    if BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN":
+   688→   688→        return None
+   689→   689→    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+   690→   690→    data = json.dumps(payload).encode("utf-8")
+   691→   691→    try:
+   692→   692→        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+   693→   693→        with urllib.request.urlopen(req, timeout=15) as resp:
+   694→   694→            return json.loads(resp.read().decode("utf-8"))
+   695→   695→    except Exception as exc:
+   696→   696→        print(f"[WARN] Telegram API {method} error: {exc}")
+   697→   697→        return None
+   698→   698→
+   699→   699→
+   700→   700→def is_user_in_public_channel(user_id: int) -> bool:
+   701→   701→    res = tg_api_call("getChatMember", {"chat_id": PUBLIC_CHANNEL_USERNAME, "user_id": user_id})
+   702→   702→    if not res or not res.get("ok"):
+   703→   703→        return True
+   704→   704→    status = res.get("result", {}).get("status", "left")
+   705→   705→    return status in ("creator", "administrator", "member", "restricted")
+   706→   706→
+   707→   707→
+   708→   708→def create_single_use_vip_invite_link(user_id: int, days: int) -> str:
+   709→   709→    expire_ts = int((datetime.now(timezone.utc) + timedelta(hours=48)).timestamp())
+   710→   710→    res = tg_api_call(
+   711→   711→        "createChatInviteLink",
+   712→   712→        {
+   713→   713→            "chat_id": VIP_CHANNEL_ID,
+   714→   714→            "name": f"VIP_User_{user_id}_{days}d",
+   715→   715→            "expire_date": expire_ts,
+   716→   716→            "member_limit": 1,
+   717→   717→        },
+   718→   718→    )
+   719→   719→    if res and res.get("ok"):
+   720→   720→        return res["result"].get("invite_link", "https://t.me/+YourPrivateVIPFallbackLink")
+   721→   721→    return "https://t.me/+YourPrivateVIPFallbackLink"
+   722→   722→
+   723→   723→
+   724→   724→def build_main_menu_keyboard(lang: str) -> Dict[str, Any]:
+   725→   725→    m = MESSAGES[lang]
+   726→   726→    return {
+   727→   727→        "inline_keyboard": [
+   728→   728→            [{"text": m["btn_plans"], "callback_data": "menu_plans"}],
+   729→   729→            [{"text": m["btn_free_signal"], "callback_data": "menu_free_signal"}],
+   730→   730→            [
+   731→   731→                {"text": m["btn_status"], "callback_data": "menu_status"},
+   732→   732→                {"text": m["btn_referral"], "callback_data": "menu_referral"},
+   733→   733→            ],
+   734→   734→            [{"text": m["btn_switch_lang"], "callback_data": "toggle_lang"}],
+   735→   735→        ]
+   736→   736→    }
+   737→   737→
+   738→   738→
+   739→   739→def build_plans_keyboard(lang: str) -> Dict[str, Any]:
+   740→   740→    rows = []
+   741→   741→    for key, p in SUBSCRIPTION_PLANS.items():
+   742→   742→        title = p["title_fa"] if lang == "fa" else p["title_en"]
+   743→   743→        price_label = (
+   744→   744→            f"${p['price_usdt']:.0f} | {p['price_toman'] // 1000:,} هزار تومان"
+   745→   745→            if lang == "fa"
+   746→   746→            else f"${p['price_usdt']:.0f} USDT"
+   747→   747→        )
+   748→   748→        rows.append([{"text": f"{title} ({price_label})", "callback_data": f"select_plan_{key}"}])
+   749→   749→    back_txt = "🔙 بازگشت به منوی اصلی" if lang == "fa" else "🔙 Back to Main Menu"
+   750→   750→    rows.append([{"text": back_txt, "callback_data": "back_main"}])
+   751→   751→    return {"inline_keyboard": rows}
+   752→   752→
+   753→   753→
+   754→   754→# =====================================================================
+   755→   755→# ۷. پردازشگر پیام‌ها (متن، عکس فیش کارت‌به‌کارت، TxID و دکمه‌های ادمین)
+   756→   756→# =====================================================================
+   757→   757→def handle_update(conn: sqlite3.Connection, update: Dict[str, Any]) -> None:
+   758→   758→    if "message" in update:
+   759→   759→        msg = update["message"]
+   760→   760→        chat_id = msg["chat"]["id"]
+   761→   761→        user_id = msg.get("from", {}).get("id", chat_id)
+   762→   762→        username = msg.get("from", {}).get("username", "")
+   763→   763→        text = (msg.get("text") or "").strip()
+   764→   764→        photos = msg.get("photo") or []
+   765→   765→
+   766→   766→        referred_by = None
+   767→   767→        if text.startswith("/start") and "ref_" in text:
+   768→   768→            try:
+   769→   769→                ref_id = int(text.split("ref_")[1].strip())
+   770→   770→                if ref_id != user_id:
+   771→   771→                    referred_by = ref_id
+   772→   772→            except ValueError:
+   773→   773→                pass
+   774→   774→
+   775→   775→        user = get_or_create_user(conn, user_id, username, referred_by)
+   776→   776→        lang = user["lang"]
+   777→   777→        m = MESSAGES[lang]
+   778→   778→
+   779→   779→        if text.startswith("/start"):
+   780→   780→            conn.execute("UPDATE users SET payment_mode = 'NONE' WHERE user_id = ?", (user_id,))
+   781→   781→            conn.commit()
+   782→   782→            tg_api_call(
+   783→   783→                "sendMessage",
+   784→   784→                {
+   785→   785→                    "chat_id": chat_id,
+   786→   786→                    "text": m["welcome"],
+   787→   787→                    "parse_mode": "HTML",
+   788→   788→                    "reply_markup": build_main_menu_keyboard(lang),
+   789→   789→                },
+   790→   790→            )
+   791→   791→            return
+   792→   792→
+   793→   793→        # الف) اگر کاربر عکس فیش واریزی فرستاد (در حالت کارت‌به‌کارت یا مستقیم)
+   794→   794→        if photos:
+   795→   795→            best_photo_file_id = photos[-1]["file_id"]
+   796→   796→            plan_key = user["selected_plan"] or "pro_monthly"
+   797→   797→            expected_toman = (
+   798→   798→                user["pending_toman_amount"]
+   799→   799→                or SUBSCRIPTION_PLANS.get(plan_key, SUBSCRIPTION_PLANS["pro_monthly"])["price_toman"]
+   800→   800→            )
+   801→   801→            receipt_id = create_card_receipt(
+   802→   802→                conn, user_id, username, plan_key, expected_toman, "PHOTO", best_photo_file_id
+   803→   803→            )
+   804→   804→            notify_admin_of_card_receipt(conn, receipt_id)
+   805→   805→            tg_api_call(
+   806→   806→                "sendMessage",
+   807→   807→                {
+   808→   808→                    "chat_id": chat_id,
+   809→   809→                    "text": m["receipt_submitted_user"].format(receipt_id=receipt_id),
+   810→   810→                    "parse_mode": "HTML",
+   811→   811→                },
+   812→   812→            )
+   813→   813→            return
+   814→   814→
+   815→   815→        # ب) اگر کاربر در حالت انتظار فیش کارت‌به‌کارت است و شماره پیگیری / ۴ رقم آخر کارت را متنی فرستاد
+   816→   816→        if user["payment_mode"] == "AWAITING_CARD_RECEIPT" and len(text) >= 4 and len(text) not in (64, 66):
+   817→   817→            plan_key = user["selected_plan"] or "pro_monthly"
+   818→   818→            expected_toman = (
+   819→   819→                user["pending_toman_amount"]
+   820→   820→                or SUBSCRIPTION_PLANS.get(plan_key, SUBSCRIPTION_PLANS["pro_monthly"])["price_toman"]
+   821→   821→            )
+   822→   822→            receipt_id = create_card_receipt(
+   823→   823→                conn, user_id, username, plan_key, expected_toman, "TEXT", text
+   824→   824→            )
+   825→   825→            notify_admin_of_card_receipt(conn, receipt_id)
+   826→   826→            tg_api_call(
+   827→   827→                "sendMessage",
+   828→   828→                {
+   829→   829→                    "chat_id": chat_id,
+   830→   830→                    "text": m["receipt_submitted_user"].format(receipt_id=receipt_id),
+   831→   831→                    "parse_mode": "HTML",
+   832→   832→                },
+   833→   833→            )
+   834→   834→            return
+   835→   835→
+   836→   836→        # ج) اگر کاربر کد هش تراکنش تتر (TxID) ۶۴ یا ۶۶ کاراکتری فرستاد -> استعلام خودکار بلاکچین!
+   837→   837→        if len(text) in (64, 66) and all(c in "0123456789abcdefABCDEFxX" for c in text):
+   838→   838→            tg_api_call("sendMessage", {"chat_id": chat_id, "text": m["verifying_tx"]})
+   839→   839→            plan_key = user["selected_plan"] or "pro_monthly"
+   840→   840→            ok, amt, reason, network = verify_any_usdt_txid(conn, user_id, text, plan_key)
+   841→   841→            if not ok:
+   842→   842→                err_text = m["tx_already_used"] if reason == "ALREADY_USED" else m["tx_failed"].format(reason=reason)
+   843→   843→                tg_api_call("sendMessage", {"chat_id": chat_id, "text": err_text, "parse_mode": "HTML"})
+   844→   844→                return
+   845→   845→
+   846→   846→            plan = SUBSCRIPTION_PLANS[plan_key]
+   847→   847→            exp_str = extend_user_vip(conn, user_id, plan["days"], plan_key)
+   848→   848→            invite_link = create_single_use_vip_invite_link(user_id, plan["days"])
+   849→   849→            plan_title = plan["title_fa"] if lang == "fa" else plan["title_en"]
+   850→   850→
+   851→   851→            tg_api_call(
+   852→   852→                "sendMessage",
+   853→   853→                {
+   854→   854→                    "chat_id": chat_id,
+   855→   855→                    "text": m["tx_success"].format(
+   856→   856→                        plan_title=plan_title,
+   857→   857→                        amount=f"{amt:.2f}",
+   858→   858→                        network=network,
+   859→   859→                        expires_at=exp_str,
+   860→   860→                        invite_link=invite_link,
+   861→   861→                    ),
+   862→   862→                    "parse_mode": "HTML",
+   863→   863→                },
+   864→   864→            )
+   865→   865→            return
+   866→   866→
+   867→   867→    elif "callback_query" in update:
+   868→   868→        cb = update["callback_query"]
+   869→   869→        cb_id = cb["id"]
+   870→   870→        chat_id = cb["message"]["chat"]["id"]
+   871→   871→        user_id = cb["from"]["id"]
+   872→   872→        data = cb.get("data", "")
+   873→   873→
+   874→   874→        # بررسی دکمه‌های ۱ کلیکی ادمین برای تایید یا رد فیش کارت‌به‌کارت
+   875→   875→        if data.startswith("admin_approve_") or data.startswith("admin_reject_"):
+   876→   876→            if user_id != ADMIN_USER_ID:
+   877→   877→                tg_api_call("answerCallbackQuery", {"callback_query_id": cb_id, "text": "⛔ فقط ادمین دسترسی دارد."})
+   878→   878→                return
+   879→   879→            approve = data.startswith("admin_approve_")
+   880→   880→            rec_id = int(data.split("_")[-1])
+   881→   881→            ok, status_msg, _ = process_admin_receipt_decision(conn, rec_id, approve)
+   882→   882→            tg_api_call("sendMessage", {"chat_id": ADMIN_USER_ID, "text": status_msg, "parse_mode": "HTML"})
+   883→   883→            tg_api_call("answerCallbackQuery", {"callback_query_id": cb_id, "text": status_msg[:40]})
+   884→   884→            return
+   885→   885→
+   886→   886→        user = get_or_create_user(conn, user_id)
+   887→   887→        lang = user["lang"]
+   888→   888→
+   889→   889→        if data == "toggle_lang":
+   890→   890→            lang = "en" if lang == "fa" else "fa"
+   891→   891→            set_user_lang(conn, user_id, lang)
+   892→   892→
+   893→   893→        m = MESSAGES[lang]
+   894→   894→
+   895→   895→        if data in ("toggle_lang", "back_main"):
+   896→   896→            tg_api_call(
+   897→   897→                "sendMessage",
+   898→   898→                {
+   899→   899→                    "chat_id": chat_id,
+   900→   900→                    "text": m["welcome"],
+   901→   901→                    "parse_mode": "HTML",
+   902→   902→                    "reply_markup": build_main_menu_keyboard(lang),
+   903→   903→                },
+   904→   904→            )
+   905→   905→        elif data == "menu_plans":
+   906→   906→            tg_api_call(
+   907→   907→                "sendMessage",
+   908→   908→                {
+   909→   909→                    "chat_id": chat_id,
+   910→   910→                    "text": m["select_plan"],
+   911→   911→                    "parse_mode": "HTML",
+   912→   912→                    "reply_markup": build_plans_keyboard(lang),
+   913→   913→                },
+   914→   914→            )
+   915→   915→        elif data.startswith("select_plan_"):
+   916→   916→            plan_key = data.replace("select_plan_", "")
+   917→   917→            if plan_key in SUBSCRIPTION_PLANS:
+   918→   918→                set_user_plan_and_mode(conn, user_id, plan_key, "NONE")
+   919→   919→                plan = SUBSCRIPTION_PLANS[plan_key]
+   920→   920→                plan_title = plan["title_fa"] if lang == "fa" else plan["title_en"]
+   921→   921→                txt = m["choose_payment_method"].format(
+   922→   922→                    plan_title=plan_title,
+   923→   923→                    days=plan["days"],
+   924→   924→                    amount_usdt=f"{plan['price_usdt']:.2f}",
+   925→   925→                    amount_toman=f"{plan['price_toman']:,}",
+   926→   926→                )
+   927→   927→                kb = {
+   928→   928→                    "inline_keyboard": [
+   929→   929→                        [{"text": m["btn_verify_tx"], "callback_data": f"pay_usdt_{plan_key}"}],
+   930→   930→                        [{"text": m["btn_card_to_card"], "callback_data": f"pay_card_{plan_key}"}],
+   931→   931→                        [
+   932→   932→                            {
+   933→   933→                                "text": "🔙 بازگشت" if lang == "fa" else "🔙 Back",
+   934→   934→                                "callback_data": "menu_plans",
+   935→   935→                            }
+   936→   936→                        ],
+   937→   937→                    ]
+   938→   938→                }
+   939→   939→                tg_api_call("sendMessage", {"chat_id": chat_id, "text": txt, "parse_mode": "HTML", "reply_markup": kb})
+   940→   940→        elif data.startswith("pay_usdt_"):
+   941→   941→            plan_key = data.replace("pay_usdt_", "")
+   942→   942→            if plan_key in SUBSCRIPTION_PLANS:
+   943→   943→                set_user_plan_and_mode(conn, user_id, plan_key, "AWAITING_USDT_TXID")
+   944→   944→                plan = SUBSCRIPTION_PLANS[plan_key]
+   945→   945→                plan_title = plan["title_fa"] if lang == "fa" else plan["title_en"]
+   946→   946→                invoice_text = m["payment_invoice_usdt"].format(
+   947→   947→                    plan_title=plan_title,
+   948→   948→                    amount=f"{plan['price_usdt']:.2f}",
+   949→   949→                    wallet_trc20=WALLET_USDT_TRC20,
+   950→   950→                    wallet_polygon=WALLET_USDT_POLYGON,
+   951→   951→                )
+   952→   952→                tg_api_call("sendMessage", {"chat_id": chat_id, "text": invoice_text, "parse_mode": "HTML"})
+   953→   953→        elif data.startswith("pay_card_"):
+   954→   954→            plan_key = data.replace("pay_card_", "")
+   955→   955→            if plan_key in SUBSCRIPTION_PLANS:
+   956→   956→                plan = SUBSCRIPTION_PLANS[plan_key]
+   957→   957→                exact_toman = generate_unique_toman_amount(plan["price_toman"])
+   958→   958→                set_user_plan_and_mode(conn, user_id, plan_key, "AWAITING_CARD_RECEIPT", exact_toman)
+   959→   959→                plan_title = plan["title_fa"] if lang == "fa" else plan["title_en"]
+   960→   960→                invoice_text = m["payment_invoice_card"].format(
+   961→   961→                    plan_title=plan_title,
+   962→   962→                    exact_toman=f"{exact_toman:,}",
+   963→   963→                    bank_name=BANK_NAME,
+   964→   964→                    card_number=BANK_CARD_NUMBER,
+   965→   965→                    card_holder=BANK_CARD_HOLDER,
+   966→   966→                )
+   967→   967→                tg_api_call("sendMessage", {"chat_id": chat_id, "text": invoice_text, "parse_mode": "HTML"})
+   968→   968→        elif data in ("menu_free_signal", "check_join"):
+   969→   969→            if not is_user_in_public_channel(user_id):
+   970→   970→                tg_api_call(
+   971→   971→                    "sendMessage",
+   972→   972→                    {
+   973→   973→                        "chat_id": chat_id,
+   974→   974→                        "text": m["force_sub_alert"],
+   975→   975→                        "parse_mode": "HTML",
+   976→   976→                        "reply_markup": {
+   977→   977→                            "inline_keyboard": [
+   978→   978→                                [
+   979→   979→                                    {
+   980→   980→                                        "text": f"📢 Join {PUBLIC_CHANNEL_USERNAME}",
+   981→   981→                                        "url": f"https://t.me/{PUBLIC_CHANNEL_USERNAME.lstrip('@')}",
+   982→   982→                                    }
+   983→   983→                                ],
+   984→   984→                                [{"text": m["btn_check_join"], "callback_data": "check_join"}],
+   985→   985→                            ]
+   986→   986→                        },
+   987→   987→                    },
+   988→   988→                )
+   989→   989→            else:
+   990→   990→                if user["referred_by"]:
+   991→   991→                    inviter_id = user["referred_by"]
+   992→   992→                    conn.execute(
+   993→   993→                        "UPDATE users SET referral_count = referral_count + 1 WHERE user_id = ?",
+   994→   994→                        (inviter_id,),
+   995→   995→                    )
+   996→   996→                    conn.execute("UPDATE users SET referred_by = NULL WHERE user_id = ?", (user_id,))
+   997→   997→                    conn.commit()
+   998→   998→                    inviter = conn.execute("SELECT * FROM users WHERE user_id = ?", (inviter_id,)).fetchone()
+   999→   999→                    if inviter and inviter["referral_count"] // 5 > inviter["reward_claimed_count"]:
+  1000→  1000→                        conn.execute(
+  1001→  1001→                            "UPDATE users SET reward_claimed_count = reward_claimed_count + 1 WHERE user_id = ?",
+  1002→  1002→                            (inviter_id,),
+  1003→  1003→                        )
+  1004→  1004→                        conn.commit()
+  1005→  1005→                        extend_user_vip(conn, inviter_id, 2, "weekend")
+  1006→  1006→
+  1007→  1007→                tg_api_call(
+  1008→  1008→                    "sendMessage",
+  1009→  1009→                    {"chat_id": chat_id, "text": m["free_signal_unlocked"], "parse_mode": "HTML"},
+  1010→  1010→                )
+  1011→  1011→        elif data == "menu_status":
+  1012→  1012→            now = datetime.now(timezone.utc)
+  1013→  1013→            is_vip = False
+  1014→  1014→            exp_display = ""
+  1015→  1015→            if user["vip_expires_at"]:
+  1016→  1016→                try:
+  1017→  1017→                    exp_dt = datetime.fromisoformat(user["vip_expires_at"])
+  1018→  1018→                    if exp_dt > now:
+  1019→  1019→                        is_vip = True
+  1020→  1020→                        exp_display = exp_dt.strftime("%Y-%m-%d %H:%M UTC")
+  1021→  1021→                except ValueError:
+  1022→  1022→                    pass
+  1023→  1023→            if is_vip:
+  1024→  1024→                p_key = user["selected_plan"] or "pro_monthly"
+  1025→  1025→                p_obj = SUBSCRIPTION_PLANS.get(p_key, SUBSCRIPTION_PLANS["pro_monthly"])
+  1026→  1026→                p_title = p_obj["title_fa"] if lang == "fa" else p_obj["title_en"]
+  1027→  1027→                txt = m["status_active"].format(
+  1028→  1028→                    plan=p_title, expires_at=exp_display, referrals=user["referral_count"]
+  1029→  1029→                )
+  1030→  1030→            else:
+  1031→  1031→                txt = m["status_inactive"].format(referrals=user["referral_count"])
+  1032→  1032→            tg_api_call("sendMessage", {"chat_id": chat_id, "text": txt, "parse_mode": "HTML"})
+  1033→  1033→        elif data == "menu_referral":
+  1034→  1034→            ref_link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
+  1035→  1035→            txt = m["referral_info"].format(ref_link=ref_link, referrals=user["referral_count"])
+  1036→  1036→            tg_api_call("sendMessage", {"chat_id": chat_id, "text": txt, "parse_mode": "HTML"})
+  1037→  1037→
+  1038→  1038→        tg_api_call("answerCallbackQuery", {"callback_query_id": cb_id})
+  1039→  1039→
+  1040→  1040→
+  1041→  1041→def sweep_expired_vip_members(conn: sqlite3.Connection) -> int:
+  1042→  1042→    now_iso = datetime.now(timezone.utc).isoformat()
+  1043→  1043→    expired_rows = conn.execute(
+  1044→  1044→        "SELECT user_id FROM users WHERE vip_expires_at IS NOT NULL AND vip_expires_at < ?",
+  1045→  1045→        (now_iso,),
+  1046→  1046→    ).fetchall()
+  1047→  1047→    removed_count = 0
+  1048→  1048→    for row in expired_rows:
+  1049→  1049→        uid = row["user_id"]
+  1050→  1050→        tg_api_call("banChatMember", {"chat_id": VIP_CHANNEL_ID, "user_id": uid})
+  1051→  1051→        tg_api_call("unbanChatMember", {"chat_id": VIP_CHANNEL_ID, "user_id": uid, "only_if_banned": True})
+  1052→  1052→        conn.execute("UPDATE users SET vip_expires_at = NULL WHERE user_id = ?", (uid,))
+  1053→  1053→        removed_count += 1
+  1054→  1054→    if removed_count > 0:
+  1055→  1055→        conn.commit()
+  1056→  1056→    return removed_count
+  1057→  1057→
+  1058→  1058→
+  1059→  1059→def run_polling_loop() -> None:
+  1060→  1060→    print(f"🤖 Starting @aineobet_bot (USDT + Iranian Card-to-Card Gateway) on {DB_PATH}...")
+  1061→  1061→    conn = init_db()
+  1062→  1062→    offset = 0
+  1063→  1063→    last_sweep = time.time()
+  1064→  1064→
+  1065→  1065→    while True:
+  1066→  1066→        if time.time() - last_sweep > 3600:
+  1067→  1067→            removed = sweep_expired_vip_members(conn)
+  1068→  1068→            if removed:
+  1069→  1069→                print(f"[SWEEP] Removed {removed} expired VIP members.")
+  1070→  1070→            last_sweep = time.time()
+  1071→  1071→
+  1072→  1072→        res = tg_api_call("getUpdates", {"offset": offset, "timeout": 25})
+  1073→  1073→        if res and res.get("ok"):
+  1074→  1074→            for upd in res.get("result", []):
+  1075→  1075→                offset = upd["update_id"] + 1
+  1076→  1076→                try:
+  1077→  1077→                    handle_update(conn, upd)
+  1078→  1078→                except Exception as exc:
+  1079→  1079→                    print(f"[ERROR] Handling update failed: {exc}")
+  1080→  1080→        else:
+  1081→  1081→            time.sleep(3)
+  1082→  1082→
+  1083→  1083→
+  1084→  1084→if __name__ == "__main__":
+  1085→  1085→    # تست خودکار چرخه کارت‌به‌کارت نیمه‌خودکار (صدور مبلغ یکتا -> ثبت فیش -> تایید ۱ کلیکی ادمین)
+  1086→  1086→    test_conn = init_db(":memory:")
+  1087→  1087→    u = get_or_create_user(test_conn, 888001, "iran_vip_user")
+  1088→  1088→    unique_toman = generate_unique_toman_amount(SUBSCRIPTION_PLANS["pro_monthly"]["price_toman"])
+  1089→  1089→    set_user_plan_and_mode(test_conn, 888001, "pro_monthly", "AWAITING_CARD_RECEIPT", unique_toman)
+  1090→  1090→    rec_id = create_card_receipt(test_conn, 888001, "iran_vip_user", "pro_monthly", unique_toman, "PHOTO", "file_id_test_123")
+  1091→  1091→    ok, msg, info = process_admin_receipt_decision(test_conn, rec_id, approve=True)
+  1092→  1092→    print(f"✅ Card-to-Card Self-Test Passed! Exact Toman: {unique_toman:,} | {msg}")
+  1093→  1093→    if BOT_TOKEN != "YOUR_TELEGRAM_BOT_TOKEN":
+  1094→  1094→        run_polling_loop()
+  1095→  1095→    else:
+  1096→  1096→        print("ℹ️ Set TELEGRAM_BOT_TOKEN, ADMIN_USER_ID, and BANK_CARD_NUMBER to start live polling.")

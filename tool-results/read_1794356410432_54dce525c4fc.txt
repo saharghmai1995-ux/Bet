@@ -1,0 +1,642 @@
+    36→    36→
+    37→    37→// ═════════════════════ ثابت‌ها ═════════════════════
+    38→    38→
+    39→    39→/** مجموع استیک داچینگ هر کارت — مبنای فرمول سود «stakeA × oddsA − ۱۰۰» */
+    40→    40→export const DUTCH_TOTAL = 100;
+    41→    41→/** پنجره جستجوی نتیجه: ۳ روز گذشته + امروز (اسکوربورد ESPN تاریخ‌دار — سند v9.0) */
+    42→    42→const RESULT_WINDOW_DAYS = 3;
+    43→    43→/** اگر تا ۳۶ ساعت پس از کیک‌آف نتیجه‌ای نیامد → VOID (به تعویق افتاده/لغو) */
+    44→    44→const VOID_AFTER_HOURS = 36;
+    45→    45→
+    46→    46→// ═════════════════════ ارزیابی شرط‌ها از نتیجه واقعی ═════════════════════
+    47→    47→
+    48→    48→interface GradedLeg {
+    49→    49→  key: string;
+    50→    50→  won: boolean;
+    51→    51→  /** بازار قابل تسویه از اسکوربورد نیست (کرنر/کارت/نیمه اول) */
+    52→    52→  offBoard: boolean;
+    53→    53→  /** بازیِ این شرط هنوز FT نشده */
+    54→    54→  notFinal: boolean;
+    55→    55→  matchLabel: string;
+    56→    56→}
+    57→    57→
+    58→    58→function legCovers(key: string, hg: number, ag: number): boolean {
+    59→    59→  return selectionCoversCell(key, hg, ag);
+    60→    60→}
+    61→    61→
+    62→    62→/**
+    63→    63→ * ارزیابی همه شرط‌های یک تیپ با نتایج واقعی ESPN.
+    64→    64→ * هر شرط ممکن است روی بازی دیگری باشد (میکس دو بازی) → امتیاز همان بازی از نقشه اسکوربورد.
+    65→    65→ */
+    66→    66→function gradeLegs(
+    67→    67→  legs: SettlementLegDTO[],
+    68→    68→  scoreOf: (externalId: string) => { hg: number; ag: number; state: string } | undefined,
+    69→    69→  fallbackExternalId: string | null
+    70→    70→): { graded: GradedLeg[]; allWon: boolean; anyLost: boolean; hasOffBoard: boolean; allFinal: boolean } {
+    71→    71→  const graded: GradedLeg[] = [];
+    72→    72→  let allWon = true;
+    73→    73→  let anyLost = false;
+    74→    74→  let hasOffBoard = false;
+    75→    75→  let allFinal = true;
+    76→    76→
+    77→    77→  for (const leg of legs) {
+    78→    78→    const ext = leg.matchExternalId || fallbackExternalId;
+    79→    79→    const label = leg.matchLabel || ext || "بازی نامشخص";
+    80→    80→    if (!ext || isOffMatrixKey(leg.key)) {
+    81→    81→      hasOffBoard = true;
+    82→    82→      graded.push({ key: leg.key, won: false, offBoard: true, notFinal: false, matchLabel: label });
+    83→    83→      continue;
+    84→    84→    }
+    85→    85→    const score = scoreOf(ext);
+    86→    86→    if (!score) {
+    87→    87→      // بازیِ این شرط در پنجره امروز/دیروز ESPN پیدا نشد
+    88→    88→      allFinal = false;
+    89→    89→      graded.push({ key: leg.key, won: false, offBoard: false, notFinal: true, matchLabel: label });
+    90→    90→      continue;
+    91→    91→    }
+    92→    92→    if (score.state !== "post") {
+    93→    93→      allFinal = false;
+    94→    94→      graded.push({ key: leg.key, won: false, offBoard: false, notFinal: true, matchLabel: label });
+    95→    95→      continue;
+    96→    96→    }
+    97→    97→    const won = legCovers(leg.key, score.hg, score.ag);
+    98→    98→    if (!won) {
+    99→    99→      allWon = false;
+   100→   100→      anyLost = true;
+   101→   101→    }
+   102→   102→    graded.push({ key: leg.key, won, offBoard: false, notFinal: false, matchLabel: label });
+   103→   103→  }
+   104→   104→
+   105→   105→  // شرط سینتتیک خارج اسکوربورد اگر تنها مشکل باشد → MANUAL_REVIEW؛ در غیر این صورت فقط تیپ‌های قابل ارزیابی لحاظ می‌شوند
+   106→   106→  const evaluable = graded.filter((g) => !g.offBoard);
+   107→   107→  const evaluableAllFinal = evaluable.length > 0 && evaluable.every((g) => !g.notFinal);
+   108→   108→  const evaluableAllWon = evaluable.length > 0 && evaluable.every((g) => g.won);
+   109→   109→  const evaluableAnyLost = evaluable.some((g) => !g.won);
+   110→   110→
+   111→   111→  return {
+   112→   112→    graded,
+   113→   113→    allWon: evaluableAllWon,
+   114→   114→    anyLost: evaluableAnyLost,
+   115→   115→    hasOffBoard,
+   116→   116→    allFinal: evaluableAllFinal,
+   117→   117→  };
+   118→   118→}
+   119→   119→
+   120→   120→// ═════════════════════ موتور تسویه ═════════════════════
+   121→   121→
+   122→   122→interface EspnScoreInfo {
+   123→   123→  hg: number;
+   124→   124→  ag: number;
+   125→   125→  state: string;
+   126→   126→  statusDetail: string;
+   127→   127→  kickoff: string;
+   128→   128→  homeTeam: string;
+   129→   129→  awayTeam: string;
+   130→   130→  league: string;
+   131→   131→}
+   132→   132→
+   133→   133→/** نقشه اسکوربورد ESPN امروز+دیروز — بر اساس externalId و تطبیق نام تیم */
+   134→   134→async function loadEspnScoreWindow(): Promise<{ byId: Map<string, EspnScoreInfo>; byName: Map<string, EspnScoreInfo>; count: number }> {
+   135→   135→  const events: LiveMatchEvent[] = await fetchEspnEvents(-RESULT_WINDOW_DAYS, 0);
+   136→   136→  const byId = new Map<string, EspnScoreInfo>();
+   137→   137→  const byName = new Map<string, EspnScoreInfo>();
+   138→   138→  for (const ev of events) {
+   139→   139→    const info: EspnScoreInfo = {
+   140→   140→      hg: ev.homeScore ?? 0,
+   141→   141→      ag: ev.awayScore ?? 0,
+   142→   142→      state: ev.statusState,
+   143→   143→      statusDetail: ev.statusDetail,
+   144→   144→      kickoff: ev.kickoff,
+   145→   145→      homeTeam: ev.homeTeam,
+   146→   146→      awayTeam: ev.awayTeam,
+   147→   147→      league: ev.leagueName,
+   148→   148→    };
+   149→   149→    byId.set(ev.externalId, info);
+   150→   150→    // کلید تطبیق نامی — برای کارت‌هایی که شناسه ESPN ندارند
+   151→   151→    const nk = `${normTeam(ev.homeTeam)}::${normTeam(ev.awayTeam)}::${new Date(ev.kickoff).toISOString().slice(0, 10)}`;
+   152→   152→    if (!byName.has(nk)) byName.set(nk, info);
+   153→   153→  }
+   154→   154→  return { byId, byName, count: events.length };
+   155→   155→}
+   156→   156→
+   157→   157→function espnUrlOf(externalId: string | null): string | null {
+   158→   158→  if (!externalId || !externalId.startsWith("espn-")) return null;
+   159→   159→  const id = externalId.split("-").pop();
+   160→   160→  return id ? `https://www.espn.com/soccer/match/_/gameId/${id}` : null;
+   161→   161→}
+   162→   162→
+   163→   163→/** فرمول سود مستند در سند ارتقا — مجموع استیک ۱۰۰ واحد */
+   164→   164→function settlementProfit(
+   165→   165→  status: Exclude<SlipStatus, "PENDING" | "LIVE" | "MANUAL_REVIEW" | "VOID">,
+   166→   166→  stakeA: number,
+   167→   167→  stakeB: number,
+   168→   168→  oddsA: number,
+   169→   169→  oddsB: number
+   170→   170→): { netProfit: number; profitA: number; profitB: number } {
+   171→   171→  const r1 = (v: number) => Math.round(v * 100) / 100;
+   172→   172→  switch (status) {
+   173→   173→    case "WON_A":
+   174→   174→      // 🟢 برد تیپ A: سود خالص = stakeA × oddsA − ۱۰۰
+   175→   175→      return { netProfit: r1(stakeA * oddsA - DUTCH_TOTAL), profitA: r1(stakeA * oddsA - DUTCH_TOTAL), profitB: r1(-stakeB) };
+   176→   176→    case "WON_B":
+   177→   177→      // 🟢 برد تیپ B: سود خالص = stakeB × oddsB − ۱۰۰
+   178→   178→      return { netProfit: r1(stakeB * oddsB - DUTCH_TOTAL), profitA: r1(-stakeA), profitB: r1(stakeB * oddsB - DUTCH_TOTAL) };
+   179→   179→    case "DOUBLE_WIN":
+   180→   180→      // 🏆 برد طلایی هر دو تیپ: جمع سود هر دو
+   181→   181→      return {
+   182→   182→        netProfit: r1(stakeA * oddsA + stakeB * oddsB - DUTCH_TOTAL),
+   183→   183→        profitA: r1(stakeA * oddsA - stakeA),
+   184→   184→        profitB: r1(stakeB * oddsB - stakeB),
+   185→   185→      };
+   186→   186→    case "MIDDLE_TRAP":
+   187→   187→      // 🔴 باخت همزمان — ثبت صادقانه
+   188→   188→      return { netProfit: r1(-DUTCH_TOTAL), profitA: r1(-stakeA), profitB: r1(-stakeB) };
+   189→   189→  }
+   190→   190→}
+   191→   191→
+   192→   192→/**
+   193→   193→ * قلب موتور: بررسی همه کارت‌های در انتظار با فید FT واقعی ESPN و تسویه خودکار.
+   194→   194→ */
+   195→   195→export async function settleFinishedSlips(options?: { notify?: boolean }): Promise<SettlementSyncResultDTO> {
+   196→   196→  const t0 = Date.now();
+   197→   197→  const notify = options?.notify !== false;
+   198→   198→  const settled: SettlementSyncResultDTO["settled"] = [];
+   199→   199→  let liveCount = 0;
+   200→   200→  let notified = 0;
+   201→   201→  let ftFound = 0;
+   202→   202→  /** v9.0 — سقف اعلام تصویری هر پاس (تولید تصویر ~۲۰ ثانیه هر پیام — حفظ تأخیر سینک) */
+   203→   203→  const NOTIFY_CAP = 4;
+   204→   204→  let notifyBudget = NOTIFY_CAP;
+   205→   205→
+   206→   206→  const [{ byId, byName, count }, pendingSlips] = await Promise.all([
+   207→   207→    loadEspnScoreWindow(),
+   208→   208→    db.issuedSlip.findMany({
+   209→   209→      where: { status: { in: ["PENDING", "LIVE"] } },
+   210→   210→      orderBy: { createdAt: "asc" },
+   211→   211→    }),
+   212→   212→  ]);
+   213→   213→
+   214→   214→  const scoreOf = (externalId: string) => {
+   215→   215→    const direct = byId.get(externalId);
+   216→   216→    if (direct) return { hg: direct.hg, ag: direct.ag, state: direct.state };
+   217→   217→    return undefined;
+   218→   218→  };
+   219→   219→
+   220→   220→  for (const slip of pendingSlips) {
+   221→   221→    // ─── تطبیق کارت با رخداد ESPN: اولویت externalId، سپس نام تیم‌ها + روز کیک‌آف ───
+   222→   222→    let info: EspnScoreInfo | undefined = slip.externalId ? byId.get(slip.externalId) : undefined;
+   223→   223→    if (!info && slip.externalId) {
+   224→   224→      // شناسه ESPN ممکن است پس از به‌روزرسانی رخداد تغییر کرده باشد → تطبیق نامی
+   225→   225→      const dayKey = new Date(slip.kickoff).toISOString().slice(0, 10);
+   226→   226→      info = byName.get(`${normTeam(slip.homeTeam)}::${normTeam(slip.awayTeam)}::${dayKey}`);
+   227→   227→    }
+   228→   228→
+   229→   229→    // ─── بازی در جریان → برچسب LIVE ───
+   230→   230→    if (info && info.state === "in") {
+   231→   231→      if (slip.status !== "LIVE") {
+   232→   232→        await db.issuedSlip.update({ where: { id: slip.id }, data: { status: "LIVE" } });
+   233→   233→      }
+   234→   234→      liveCount += 1;
+   235→   235→      continue;
+   236→   236→    }
+   237→   237→
+   238→   238→    // ─── مسابقه به تعویق افتاده/لغو شده → VOID شفاف ───
+   239→   239→    if (info && /postpon|cancell|suspend|abandon|forfeit/i.test(info.statusDetail)) {
+   240→   240→      await db.issuedSlip.update({
+   241→   241→        where: { id: slip.id },
+   242→   242→        data: {
+   243→   243→          status: "VOID",
+   244→   244→          settleNote: `ESPN وضعیت «${info.statusDetail}» را ثبت کرد — تسویه انجام نمی‌شود (VOID)`,
+   245→   245→        },
+   246→   246→      });
+   247→   247→      continue;
+   248→   248→    }
+   249→   249→
+   250→   250→    if (info && info.state === "post" && (info.hg > 0 || info.ag > 0 || /ft|full|agg|pens/i.test(info.statusDetail))) {
+   251→   251→      ftFound += 1;
+   252→   252→      const legsA = safeParseLegs(slip.legsA);
+   253→   253→      const legsB = safeParseLegs(slip.legsB);
+   254→   254→      const gradedA = gradeLegs(legsA, scoreOf, slip.externalId);
+   255→   255→      const gradedB = gradeLegs(legsB, scoreOf, slip.externalId);
+   256→   256→
+   257→   257→      let status: SlipStatus;
+   258→   258→      let note: string;
+   259→   259→
+   260→   260→      if (!gradedA.allFinal || !gradedB.allFinal) {
+   261→   261→        // شرطی روی بازی دومی است که هنوز FT نشده — صبورانه در انتظار می‌مانیم
+   262→   262→        if (Date.now() - new Date(slip.kickoff).getTime() > VOID_AFTER_HOURS * 3600_000) {
+   263→   263→          status = "VOID";
+   264→   264→          note = "بازی مکمل در پنجره ESPN یافت نشد — احتمالاً به تعویق افتاده (VOID)";
+   265→   265→        } else {
+   266→   266→          continue;
+   267→   267→        }
+   268→   268→      } else if (gradedA.hasOffBoard || gradedB.hasOffBoard) {
+   269→   269→        // بازار کرنر/کارت/نیمه اول از اسکوربورد قابل تسویه نیست — شفاف اعلام می‌شود
+   270→   270→        status = "MANUAL_REVIEW";
+   271→   271→        note = "شامل بازار خارج اسکوربورد ESPN (کرنر/کارت/نیمه اول) — تسویه دستی لازم است";
+   272→   272→      } else {
+   273→   273→        const aWon = gradedA.allWon;
+   274→   274→        const bWon = gradedB.allWon;
+   275→   275→        if (aWon && bWon) {
+   276→   276→          status = "DOUBLE_WIN";
+   277→   277→          note = "🏆 نتیجه در خانه‌های مشترک هر دو تیپ — برد طلایی (Jackpot)";
+   278→   278→        } else if (aWon) {
+   279→   279→          status = "WON_A";
+   280→   280→          note = "🟢 تیپ A برد — تسویه خودکار با نتیجه واقعی ESPN";
+   281→   281→        } else if (bWon) {
+   282→   282→          status = "WON_B";
+   283→   283→          note = "🟢 تیپ B برد — تسویه خودکار با نتیجه واقعی ESPN";
+   284→   284→        } else {
+   285→   285→          status = "MIDDLE_TRAP";
+   286→   286→          note = "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
+   287→   287→        }
+   288→   288→      }
+   289→   289→
+   290→   290→      if ((status as string) === "PENDING" || (status as string) === "LIVE") continue;
+   291→   291→
+   292→   292→      const hg = info.hg;
+   293→   293→      const ag = info.ag;
+   294→   294→      const prof =
+   295→   295→        status === "WON_A" || status === "WON_B" || status === "DOUBLE_WIN" || status === "MIDDLE_TRAP"
+   296→   296→          ? settlementProfit(status, slip.stakeA, slip.stakeB, slip.oddsA, slip.oddsB)
+   297→   297→          : { netProfit: null, profitA: null, profitB: null };
+   298→   298→
+   299→   299→      await db.issuedSlip.update({
+   300→   300→        where: { id: slip.id },
+   301→   301→        data: {
+   302→   302→          status,
+   303→   303→          homeGoals: hg,
+   304→   304→          awayGoals: ag,
+   305→   305→          profitA: prof.profitA,
+   306→   306→          profitB: prof.profitB,
+   307→   307→          netProfit: prof.netProfit,
+   308→   308→          settledAt: new Date(),
+   309→   309→          settleNote: note,
+   310→   310→        },
+   311→   311→      });
+   312→   312→
+   313→   313→      // ─── v10.0 — ژورنال + دفتر دکترین: سیستم از هر تسویه یاد می‌گیرد ───
+   314→   314→      try {
+   315→   315→        const fresh = await db.issuedSlip.findUnique({ where: { id: slip.id } });
+   316→   316→        if (fresh) await recordSettlementLearning(fresh);
+   317→   317→      } catch (err) {
+   318→   318→        console.warn("doctrine learning failed:", err);
+   319→   319→      }
+   320→   320→
+   321→   321→      settled.push({
+   322→   322→        id: slip.id,
+   323→   323→        matchLabel: `${slip.homeTeam} ${hg}−${ag} ${slip.awayTeam}`,
+   324→   324→        status,
+   325→   325→        netProfit: prof.netProfit ?? 0,
+   326→   326→      });
+   327→   327→
+   328→   328→      // ─── اعلام نتیجه در کانال تلگرام VIP (تصویر جام / رختکن بهم‌ریخته) ───
+   329→   329→      if (notify && notifyBudget > 0 && status !== "VOID" && status !== "MANUAL_REVIEW" && !slip.telegramResult) {
+   330→   330→        try {
+   331→   331→          const { sendSettlementNotification } = await import("./telegram-service");
+   332→   332→          const updated = await db.issuedSlip.findUnique({ where: { id: slip.id } });
+   333→   333→          if (updated) {
+   334→   334→            notifyBudget -= 1;
+   335→   335→            const ok = await sendSettlementNotification(updated);
+   336→   336→            if (ok) notified += 1;
+   337→   337→          }
+   338→   338→        } catch (err) {
+   339→   339→          console.warn("telegram settlement notify failed:", err);
+   340→   340→        }
+   341→   341→      }
+   342→   342→      continue;
+   343→   343→    }
+   344→   344→
+   345→   345→    // ─── رخدادی در ESPN نیست → VOID پس از ۳۶ ساعت (به تعویق/لغو) ───
+   346→   346→    if (!info && Date.now() - new Date(slip.kickoff).getTime() > VOID_AFTER_HOURS * 3600_000) {
+   347→   347→      await db.issuedSlip.update({
+   348→   348→        where: { id: slip.id },
+   349→   349→        data: {
+   350→   350→          status: "VOID",
+   351→   351→          settleNote: "نتیجه در اسکوربورد ESPN (امروز+دیروز) یافت نشد — بازی به تعویق افتاده یا خارج پنجره (VOID)",
+   352→   352→        },
+   353→   353→      });
+   354→   354→    }
+   355→   355→  }
+   356→   356→
+   357→   357→  // ─── ۴.۶) v9.0 — گزارش وین‌ریت کل کانال پس از تسویه تازه (پیام نوع دوم) ───
+   358→   358→  if (notify && settled.length > 0) {
+   359→   359→    try {
+   360→   360→      const { sendWinRateReport } = await import("./telegram-service");
+   361→   361→      await sendWinRateReport();
+   362→   362→    } catch (err) {
+   363→   363→      console.warn("win-rate report failed:", err);
+   364→   364→    }
+   365→   365→  }
+   366→   366→
+   367→   367→  // ─── ۴.۶) تلاش مجدد اعلام نتایج ناموفق (مثلاً تصویر 429 یا قطعی تلگرام) — سقف ۵ در هر اجرا ───
+   368→   368→  if (notify) {
+   369→   369→    try {
+   370→   370→      const unnotified = await db.issuedSlip.findMany({
+   371→   371→        where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, telegramResult: false, supervisorApproved: true },
+   372→   372→        orderBy: { settledAt: "asc" },
+   373→   373→        take: 5,
+   374→   374→      });
+   375→   375→      if (unnotified.length > 0) {
+   376→   376→        const { sendSettlementNotification } = await import("./telegram-service");
+   377→   377→        for (const s of unnotified) {
+   378→   378→          try {
+   379→   379→            const ok = await sendSettlementNotification(s);
+   380→   380→            if (ok) notified += 1;
+   381→   381→          } catch (err) {
+   382→   382→            console.warn("settlement notify retry failed:", err);
+   383→   383→          }
+   384→   384→        }
+   385→   385→      }
+   386→   386→    } catch (err) {
+   387→   387→      console.warn("settlement notify retry pass failed:", err);
+   388→   388→    }
+   389→   389→  }
+   390→   390→
+   391→   391→  return {
+   392→   392→    success: true,
+   393→   393→    checkedEspn: count,
+   394→   394→    ftFound,
+   395→   395→    settled,
+   396→   396→    live: liveCount,
+   397→   397→    notified,
+   398→   398→    elapsedMs: Date.now() - t0,
+   399→   399→  };
+   400→   400→}
+   401→   401→
+   402→   402→function safeParseLegs(json: string): SettlementLegDTO[] {
+   403→   403→  try {
+   404→   404→    const arr = JSON.parse(json);
+   405→   405→    return Array.isArray(arr) ? (arr as SettlementLegDTO[]) : [];
+   406→   406→  } catch {
+   407→   407→    return [];
+   408→   408→  }
+   409→   409→}
+   410→   410→
+   411→   411→// ═════════════════════ صدور کارت (SHA-256) ═════════════════════
+   412→   412→
+   413→   413→/** استیک داچینگ سود برابر روی مجموع ۱۰۰ واحد — مبنای فرمول سند ارتقا */
+   414→   414→export function equalProfitStakes(oddsA: number, oddsB: number): { stakeA: number; stakeB: number } {
+   415→   415→  const invA = 1 / Math.max(1.01, oddsA);
+   416→   416→  const invB = 1 / Math.max(1.01, oddsB);
+   417→   417→  const sum = invA + invB;
+   418→   418→  const r1 = (v: number) => Math.round(v * 10) / 10;
+   419→   419→  return { stakeA: r1((DUTCH_TOTAL * invA) / sum), stakeB: r1((DUTCH_TOTAL * invB) / sum) };
+   420→   420→}
+   421→   421→
+   422→   422→/** هش SHA-256 سند کارت — قابل راستی‌آزمایی */
+   423→   423→export function slipHash(input: {
+   424→   424→  externalId: string | null;
+   425→   425→  homeTeam: string;
+   426→   426→  awayTeam: string;
+   427→   427→  kickoff: string;
+   428→   428→  labelA: string;
+   429→   429→  labelB: string;
+   430→   430→  oddsA: number;
+   431→   431→  oddsB: number;
+   432→   432→  stakeA: number;
+   433→   433→  stakeB: number;
+   434→   434→}): string {
+   435→   435→  const canonical = [
+   436→   436→    input.externalId ?? "NO-ESPN-ID",
+   437→   437→    input.homeTeam,
+   438→   438→    input.awayTeam,
+   439→   439→    new Date(input.kickoff).toISOString(),
+   440→   440→    input.labelA,
+   441→   441→    input.labelB,
+   442→   442→    input.oddsA.toFixed(2),
+   443→   443→    input.oddsB.toFixed(2),
+   444→   444→    input.stakeA.toFixed(1),
+   445→   445→    input.stakeB.toFixed(1),
+   446→   446→  ].join("|");
+   447→   447→  return crypto.createHash("sha256").update(canonical, "utf8").digest("hex");
+   448→   448→}
+   449→   449→
+   450→   450→/** خانه‌های پوشش هر تیپ روی ماتریس ۶×۶ (برای کارت تلگرام و نمایش کارنامه) */
+   451→   451→function coveredCells(lambdaHome: number, lambdaAway: number, legs: SettlementLegDTO[], externalId: string | null): string[] {
+   452→   452→  const matrix = buildScoreMatrix(lambdaHome || 1.35, lambdaAway || 1.25);
+   453→   453→  const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+   454→   454→  const cells: string[] = [];
+   455→   455→  for (let h = 0; h < matrix.length; h++) {
+   456→   456→    for (let a = 0; a < matrix[h].length; a++) {
+   457→   457→      if (keys.length > 0 && keys.every((k) => legCovers(k, h, a))) cells.push(`${h}-${a}`);
+   458→   458→    }
+   459→   459→  }
+   460→   460→  void externalId;
+   461→   461→  return cells.slice(0, 12);
+   462→   462→}
+   463→   463→
+   464→   464→// ═══════════ v10.0 — ارزش عددی پیناکل + احتمال مدل + پنجره زمانی ═══════════
+   465→   465→
+   466→   466→/** احتمال مدل برای یک تیپ از ماتریس امتیاز دیکسون-کولز (جمع خانه‌های پوشش) */
+   467→   467→function legProbability(lambdaHome: number, lambdaAway: number, legs: SettlementLegDTO[]): number | null {
+   468→   468→  const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+   469→   469→  if (keys.length === 0) return null;
+   470→   470→  const matrix = buildScoreMatrix(lambdaHome || 1.35, lambdaAway || 1.25);
+   471→   471→  let p = 0;
+   472→   472→  for (let h = 0; h < matrix.length; h++) {
+   473→   473→    for (let a = 0; a < matrix[h].length; a++) {
+   474→   474→      if (keys.every((k) => legCovers(k, h, a))) p += matrix[h][a];
+   475→   475→    }
+   476→   476→  }
+   477→   477→  return Math.round(p * 10000) / 10000;
+   478→   478→}
+   479→   479→
+   480→   480→/**
+   481→   481→ * ارزش عددی نسبت به خط مرجع (سوال مستقیم کارفرما: «چرا عددی ندارد؟»):
+   482→   482→ *   edge٪ = (prob مدل × ضریب ثبت − ۱) × ۱۰۰
+   483→   483→ * خط مرجع: پیناکل وقتی خط شارپ واقعی موجود است؛ وگرنه خط منصفانه موتور (MARKET_FAIR)
+   484→   484→ * خروجی همیشه عدد دارد — «—» فقط برای بازار خارج ماتریس (کرنر/کارت).
+   485→   485→ */
+   486→   486→function computeEdge(modelProb: number | null, odds: number): number | null {
+   487→   487→  if (modelProb === null || modelProb <= 0 || odds <= 1) return null;
+   488→   488→  return Math.round((modelProb * odds - 1) * 1000) / 10;
+   489→   489→}
+   490→   490→
+   491→   491→/**
+   492→   492→ * صدور کارت به کارنامه — Idempotent با هش SHA-256.
+   493→   493→ * اگر کارت با همین هش قبلاً صادر شده باشد، همان ردیف بازگردانده می‌شود.
+   494→   494→ * v9.0: نگهداری λ ترکیبی نهایی + کد الگو (حلقه کالیبراسیون) + نشان تایید سوپروایزر
+   495→   495→ * و پرچم ثبت خودکار سرور (autoIssued) برای خط لوله Zero-Click.
+   496→   496→ */
+   497→   497→export async function issueSlip(
+   498→   498→  item: IssueSlipItemDTO,
+   499→   499→  opts?: { autoIssued?: boolean }
+   500→   500→): Promise<{ created: boolean; slip: IssuedSlipDTO }> {
+   501→   501→  const externalId = item.match.externalId ?? null;
+   502→   502→  const stakes =
+   503→   503→    item.stakeA && item.stakeB && item.stakeA + item.stakeB > 0
+   504→   504→      ? { stakeA: item.stakeA, stakeB: item.stakeB }
+   505→   505→      : equalProfitStakes(item.oddsA, item.oddsB);
+   506→   506→
+   507→   507→  const hash = slipHash({
+   508→   508→    externalId,
+   509→   509→    homeTeam: item.match.homeTeam,
+   510→   510→    awayTeam: item.match.awayTeam,
+   511→   511→    kickoff: item.match.kickoff,
+   512→   512→    labelA: item.labelA,
+   513→   513→    labelB: item.labelB,
+   514→   514→    oddsA: item.oddsA,
+   515→   515→    oddsB: item.oddsB,
+   516→   516→    stakeA: stakes.stakeA,
+   517→   517→    stakeB: stakes.stakeB,
+   518→   518→  });
+   519→   519→
+   520→   520→  const existing = await db.issuedSlip.findUnique({ where: { hash } });
+   521→   521→  if (existing) return { created: false, slip: mapSlip(existing) };
+   522→   522→
+   523→   523→  // ─── v10.0 — احتمال مدل، ارزش عددی و پنجره زمانی طلایی ثبت ───
+   524→   524→  const lH = item.lambdaHome ?? 1.35;
+   525→   525→  const lA = item.lambdaAway ?? 1.25;
+   526→   526→  const probA = legProbability(lH, lA, item.legsA ?? []);
+   527→   527→  const probB = legProbability(lH, lA, item.legsB ?? []);
+   528→   528→
+   529→   529→  // ─── v10.0.1 — خط شارپ واقعی پیناکل برای انتخاب مستقیم (پاسخ «چرا عددی ندارد؟») ───
+   530→   530→  // ارزش نسبت به خط مرجع:
+   531→   531→  //   · PINNACLE موجود → (ضریب ثبت ÷ خط پیناکل − ۱) × ۱۰۰ — مزیت قیمت نسبت به خط شارپ
+   532→   532→  //   · در غیر این صورت → (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰ — EV نسبت به خط منصفانه موتور
+   533→   533→  const pinPrices = item.pinnaclePrices ?? {};
+   534→   534→  const pinPriceOf = (legs: SettlementLegDTO[]): number | null => {
+   535→   535→    const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+   536→   536→    if (keys.length !== 1) return null; // تیپ ترکیبی چندبازاره — خط مستقیم پیناکل ندارد
+   537→   537→    const p = pinPrices[keys[0]];
+   538→   538→    return typeof p === "number" && p > 1.01 ? p : null;
+   539→   539→  };
+   540→   540→  const pinA = pinPriceOf(item.legsA ?? []);
+   541→   541→  const pinB = pinPriceOf(item.legsB ?? []);
+   542→   542→  const priceAdvantage = (odds: number, pin: number): number => Math.round((odds / pin - 1) * 1000) / 10;
+   543→   543→
+   544→   544→  const edgeA = pinA !== null ? priceAdvantage(item.oddsA, pinA) : computeEdge(probA, item.oddsA);
+   545→   545→  const edgeB = pinB !== null ? priceAdvantage(item.oddsB, pinB) : computeEdge(probB, item.oddsB);
+   546→   546→  const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+   547→   547→  const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+   548→   548→  const tipKindA: TipKind | null = edgeA !== null ? deriveTipKind((item.legsA ?? []).map((l) => l.key), item.oddsA) : null;
+   549→   549→  const tipKindB: TipKind | null = edgeB !== null ? deriveTipKind((item.legsB ?? []).map((l) => l.key), item.oddsB) : null;
+   550→   550→  const koMs = new Date(item.match.kickoff).getTime();
+   551→   551→  const winA = tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
+   552→   552→  const winB = tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
+   553→   553→
+   554→   554→  const row = await db.issuedSlip.create({
+   555→   555→    data: {
+   556→   556→      hash,
+   557→   557→      externalId,
+   558→   558→      matchId: item.match.id,
+   559→   559→      league: item.match.league,
+   560→   560→      homeTeam: item.match.homeTeam,
+   561→   561→      awayTeam: item.match.awayTeam,
+   562→   562→      kickoff: new Date(item.match.kickoff),
+   563→   563→      labelA: item.labelA,
+   564→   564→      labelB: item.labelB,
+   565→   565→      legsA: JSON.stringify(item.legsA ?? []),
+   566→   566→      legsB: JSON.stringify(item.legsB ?? []),
+   567→   567→      oddsA: item.oddsA,
+   568→   568→      oddsB: item.oddsB,
+   569→   569→      stakeA: stakes.stakeA,
+   570→   570→      stakeB: stakes.stakeB,
+   571→   571→      cellsA: JSON.stringify(coveredCells(lH, lA, item.legsA ?? [], externalId)),
+   572→   572→      cellsB: JSON.stringify(coveredCells(lH, lA, item.legsB ?? [], externalId)),
+   573→   573→      guaranteedProfit: item.guaranteedProfit,
+   574→   574→      marginPct: item.marginPct,
+   575→   575→      archetype: item.archetype ?? null,
+   576→   576→      archetypeCode: item.archetypeCode ?? null,
+   577→   577→      lambdaHome: item.lambdaHome ?? null,
+   578→   578→      lambdaAway: item.lambdaAway ?? null,
+   579→   579→      espnUrl: item.match.espnUrl ?? espnUrlOf(externalId),
+   580→   580→      supervisorApproved: item.supervisorApproved !== false,
+   581→   581→      autoIssued: opts?.autoIssued === true,
+   582→   582→      supervisorScore: item.supervisorScore ?? null,
+   583→   583→      vetoReason: item.vetoReason ?? null,
+   584→   584→      jointLossRiskPct: item.jointLossRiskPct ?? null,
+   585→   585→      doubleWinProbPct: item.doubleWinProbPct ?? null,
+   586→   586→      modelProbA: probA,
+   587→   587→      modelProbB: probB,
+   588→   588→      pinnacleOddsA: pinA,
+   589→   589→      pinnacleOddsB: pinB,
+   590→   590→      edgeA,
+   591→   591→      edgeB,
+   592→   592→      edgeSourceA,
+   593→   593→      edgeSourceB,
+   594→   594→      tipKindA,
+   595→   595→      tipKindB,
+   596→   596→      timingWindowA: winA?.windowKey ?? null,
+   597→   597→      timingWindowB: winB?.windowKey ?? null,
+   598→   598→      timingStartA: winA?.startAt ?? null,
+   599→   599→      timingEndA: winA?.endAt ?? null,
+   600→   600→      timingStartB: winB?.startAt ?? null,
+   601→   601→      timingEndB: winB?.endAt ?? null,
+   602→   602→      status: "PENDING",
+   603→   603→    },
+   604→   604→  });
+   605→   605→  return { created: true, slip: mapSlip(row) };
+   606→   606→}
+   607→   607→
+   608→   608→// ═══════════ v10.0.2 — بازپررسی یادگیری کارت‌های قدیمی (Idempotent Backfill) ═══════════
+   609→   609→
+   610→   610→/** throttle بازپررسی — حداکثر هر ۳۰ دقیقه یک‌بار (فراخوانی از خط لوله سرور) */
+   611→   611→let lastBackfillAt = 0;
+   612→   612→const BACKFILL_TTL_MS = 30 * 60_000;
+   613→   613→
+   614→   614→/**
+   615→   615→ * backfillSlipLearning — پرکردن ستون‌های یادگیری کارت‌های صادرشده پیش از v10:
+   616→   616→ *   · modelProbA/B و edgeA/B (ارزش عددی نسبت به پیناکل واقعی یا خط منصفانه)
+   617→   617→ *   · tipKind + پنجره زمانی طلایی ثبت
+   618→   618→ *   · ردیف ژورنال تسویه (recordSettlementLearning — Idempotent با slipId)
+   619→   619→ * همه محاسبات از λ ذخیره‌شده کارت بازتولید می‌شود — هیچ عدد ساختگی نیست.
+   620→   620→ */
+   621→   621→export async function backfillSlipLearning(force = false): Promise<{ scanned: number; updated: number; journalled: number }> {
+   622→   622→  if (!force && Date.now() - lastBackfillAt < BACKFILL_TTL_MS) {
+   623→   623→    return { scanned: 0, updated: 0, journalled: 0 };
+   624→   624→  }
+   625→   625→  lastBackfillAt = Date.now();
+   626→   626→
+   627→   627→  // کارت‌های تسویه‌شده بدون ارزش عددی (نسخه‌های ≤ v9) — سقف هر پاس ۶۰ ردیف
+   628→   628→  const targets = await db.issuedSlip.findMany({
+   629→   629→    where: {
+   630→   630→      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP", "MANUAL_REVIEW"] },
+   631→   631→      OR: [
+   632→   632→        { edgeA: null },
+   633→   633→        { edgeB: null },
+   634→   634→        { timingWindowA: null },
+   635→   635→        { timingWindowB: null },
+   636→   636→        { jointLossRiskPct: null },
+   637→   637→        { doubleWinProbPct: null },
+   638→   638→      ],
+   639→   639→    },
+   640→   640→    orderBy: { kickoff: "desc" },
+   641→   641→    take: 60,
+   642→   642→  });
+   643→   643→  if (targets.length === 0) return { scanned: 0, updated: 0, journalled: 0 };
+   644→   644→
+   645→   645→  let updated = 0;
+   646→   646→  let journalled = 0;
+   647→   647→  for (const s of targets) {
+   648→   648→    try {
+   649→   649→      const legsA: SettlementLegDTO[] = safeParseLegs(s.legsA);
+   650→   650→      const legsB: SettlementLegDTO[] = safeParseLegs(s.legsB);
+   651→   651→      const lH = s.lambdaHome ?? 1.35;
+   652→   652→      const lA = s.lambdaAway ?? 1.25;
+   653→   653→      const probA = s.modelProbA ?? legProbability(lH, lA, legsA);
+   654→   654→      const probB = s.modelProbB ?? legProbability(lH, lA, legsB);
+   655→   655→
+   656→   656→      // خط شارپ واقعی پیناکل — از رکورد OddsRecord مرتبط با بازی (وقتی فید موجود باشد)
+   657→   657→      let pinPrices: Record<string, number> = {};
+   658→   658→      if (s.matchId) {
+   659→   659→        const oddsRows = await db.oddsRecord.findMany({ where: { matchId: s.matchId } });
+   660→   660→        const pin = oddsRows.find((o) => o.bookmaker === "PINNACLE");
+   661→   661→        if (pin) {
+   662→   662→          pinPrices = {
+   663→   663→            HOME: pin.oddsHome,
+   664→   664→            DRAW: pin.oddsDraw,
+   665→   665→            AWAY: pin.oddsAway,
+   666→   666→            DC_1X: 1 / (1 / pin.oddsHome + 1 / pin.oddsDraw),
+   667→   667→            DC_X2: 1 / (1 / pin.oddsAway + 1 / pin.oddsDraw),
+   668→   668→            O25: pin.oddsOver25,
+   669→   669→            U25: pin.oddsUnder25,
+   670→   670→          };
+   671→   671→        }
+   672→   672→      }
+   673→   673→      const pinPriceOf = (legs: SettlementLegDTO[]): number | null => {
+   674→   674→        const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+   675→   675→        if (keys.length !== 1) return null;
+
+[showing lines 36-675 of 944; use offset=676 with limit to continue reading]
