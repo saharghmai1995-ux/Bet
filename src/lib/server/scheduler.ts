@@ -1,21 +1,24 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// زمان‌بند سرور (Server-Side Automation Loop) — v19.0 NeoBet Official Broadcast
+// زمان‌بند سرور (Server-Side Automation Loop) — v20.0 NeoBet Official Broadcast
 //
-// پاسخ به مستقیم‌ترین دستور کارفرما: «سیستم و ارسال پیام‌ها به تلگرام نباید
-// وابسته به مرورگر باشد» — v19.0 معماری دو-اجرایی با خط لوله مشترک:
+// معماری دو-اجرایی با خط لوله مشترک (بدون وابستگی به مرورگر):
 //   · خط لوله کامل پخش در broadcast-cycle.ts مشترک است
-//   · این زمان‌بند (درون Next.js) هر ۹۰ ثانیه یک پاس اجرا می‌کند
-//   · دیمن مستقل mini-services/broadcast-daemon (:3011) هم همان پاس را اجرا می‌کند
-//     — حتی وقتی سرور Next در حال کامپایل/ری‌استارت است، پخش متوقف نمی‌شود
-// ضد تکرار: ادعای اتمی INSERT-first روی TelegramOutbox.dedupeKey (v19.0) —
-// هر تعداد پردازه موازی = صفر ارسال دوباره.
+//   · دیمن مستقل mini-services/broadcast-daemon (:3011) — اجراکننده اصلی هر ۹۰ ثانیه
+//   · این زمان‌بند (درون Next.js) — پشتیبان هر ۶۰۰ ثانیه (۱۰ دقیقه)
+//
+// v20.0 — تیک داخل Next از ۹۰ثانیه به ۶۰۰ثانیه کاهش یافت:
+// ریشه OOM کشتن next-server (RSS ۲GB): اجرای خط لوله کامل (اسکن ESPN + رندر
+// sharp + پخش) هر ۹۰ ثانیه داخل پروسه dev که خودش پین‌های سبک داشبورد را
+// هرچند ثانیه سرویس می‌کند. حالا دیمن نقش اصلی (۹۰s) و این زمان‌بند نقش
+// پشتیبان کم‌فشار (۶۰۰s) دارد — با ادعای اتمی مشترک، صفر ارسال دوباره.
+// قابل تنظیم با env: NEOBET_SCHEDULER_TICK_MS
 // heartbeat در Setting — برای نمایش «اتوماسیون سرور فعال» در UI
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSchedulerStatus, patchSchedulerStatus } from "./scheduler-status";
 import { setSetting } from "./telegram-service";
 
-const TICK_INTERVAL_MS = 90_000;
+const TICK_INTERVAL_MS = Math.max(300_000, Number(process.env.NEOBET_SCHEDULER_TICK_MS ?? 600_000));
 
 interface SchedulerState {
   timer: ReturnType<typeof setInterval> | null;
@@ -93,7 +96,7 @@ export function startScheduler(): void {
     }, WATCHDOG_INTERVAL_MS);
   }
 
-  console.log(`[scheduler] v19.0 server automation active — tick every ${TICK_INTERVAL_MS / 1000}s (browser-independent + shared broadcast-cycle + atomic insert-first claims + always-warm watchdog)`);
+  console.log(`[scheduler] v20.0 server automation active — backstop tick every ${TICK_INTERVAL_MS / 1000}s (primary executor = broadcast-daemon :3011 every 90s · browser-independent · atomic claims · always-warm watchdog)`);
 }
 
 export function stopScheduler(): void {

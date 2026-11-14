@@ -3,6 +3,9 @@ import { db } from "@/lib/db";
 import { parseEspnExternalId } from "@/lib/server/odds-providers";
 import { runDixonColes } from "@/lib/engine/poisson";
 import type { LineupAbsPreviewDTO, LineupPlayerDTO, LineupShockDTO } from "@/lib/types";
+// v20.1 — کش کوتاه‌مدت داشبورد: هر poll چندثانیه‌ای دیگر ESPN/موتور کامل اجرا نمی‌کند
+// (ریشه رشد RSS و OOM — پاسخ تکراری از کش با تأخیر ~۰ms)
+import { pollCacheGet, pollCacheSet, pollCacheKey } from "@/lib/server/poll-cache";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -299,6 +302,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: "matchId الزامی است" }, { status: 400 });
     }
 
+    // v20.1 — کش ۲۰ثانیه‌ای per-(matchId,depth,absent*) — سناریوهای what-if مستقل باقی می‌مانند
+    const lineupCacheKey = pollCacheKey("lineup", {
+      matchId,
+      depth,
+      absentName: body.absentName ?? "",
+      absentSide: body.absentSide ?? "",
+    });
+    const lineupCached = pollCacheGet<LineupShockDTO>(lineupCacheKey, 20_000);
+    if (lineupCached) return NextResponse.json(lineupCached);
+
     const match = await db.match.findUnique({ where: { id: matchId } });
     if (!match) {
       return NextResponse.json({ success: false, error: "بازی یافت نشد" }, { status: 404 });
@@ -592,6 +605,7 @@ export async function POST(req: NextRequest) {
       topPlayers,
     };
 
+    pollCacheSet(lineupCacheKey, result);
     return NextResponse.json(result);
   } catch (error) {
     console.error("POST /api/lineup error:", error);

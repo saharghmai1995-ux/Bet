@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+// v20.1 — کش کوتاه‌مدت داشبورد: هر poll چندثانیه‌ای دیگر ESPN/موتور کامل اجرا نمی‌کند
+import { pollCacheGet, pollCacheSet, pollCacheKey } from "@/lib/server/poll-cache";
 import { db } from "@/lib/db";
 import { ensureSeeded } from "@/lib/seed";
 import { computeMatchEngine } from "@/lib/engine/matchEngine";
@@ -139,6 +141,15 @@ export async function POST(req: NextRequest) {
     if (!matchId) {
       return NextResponse.json({ success: false, error: "matchId الزامی است" }, { status: 400 });
     }
+
+    // v20.1 — کش ۳۰ثانیه‌ای per-(matchId,secondMatchId,bankroll) — پاسخ تکراری از حافظه
+    const portfolioCacheKey = pollCacheKey("portfolio", {
+      matchId,
+      secondMatchId: body.secondMatchId ?? "",
+      bankroll,
+    });
+    const portfolioCached = pollCacheGet<unknown>(portfolioCacheKey, 30_000);
+    if (portfolioCached) return NextResponse.json(portfolioCached as never);
 
     const mcInputCache = new Map<string, unknown>();
     const primary = await db.match.findUnique({ where: { id: matchId } });
@@ -590,6 +601,7 @@ export async function POST(req: NextRequest) {
       betTypeRouter,
     };
 
+    pollCacheSet(portfolioCacheKey, result);
     return NextResponse.json(result);
   } catch (error) {
     console.error("POST /api/agent/portfolio error:", error);
