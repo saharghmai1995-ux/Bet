@@ -1105,10 +1105,53 @@ export async function getLedger(): Promise<LedgerDTO> {
     vetoedTotal,
   };
 
+  // ═══ v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown) ═══
+  // افراز مجزا: هر کارت فقط در خط تولید خودش شمرده می‌شود (productLine)؛
+  // کارت‌های بدون productLine = زوج‌تیپ دوچرخه (خط SINGLE پیش‌فرض).
+  type RegimeKey = "DUAL_HEDGE" | "COMBO" | "CORRECT_SCORE" | "BANKER" | "ACCUMULATOR" | "SNIPER";
+  const regimeOf = (pl: string | null): RegimeKey => {
+    switch (pl) {
+      case "COMBO": return "COMBO";
+      case "CS_CLUSTER":
+      case "CORRECT_SCORE": return "CORRECT_SCORE";
+      case "BANKER": return "BANKER";
+      case "ACCUMULATOR": return "ACCUMULATOR";
+      case "SNIPER": return "SNIPER";
+      default: return "DUAL_HEDGE";
+    }
+  };
+  const REGIME_DEFS: { key: RegimeKey; labelFa: string; labelEn: string; icon: string }[] = [
+    { key: "DUAL_HEDGE", labelFa: "زوج‌تیپ دوقلو", labelEn: "Dual-Hedge", icon: "⚖️" },
+    { key: "COMBO", labelFa: "کمبوی رسمی", labelEn: "Official Combo", icon: "🧩" },
+    { key: "CORRECT_SCORE", labelFa: "خوشه نتیجه دقیق", labelEn: "Correct Score Cluster", icon: "🎯" },
+    { key: "BANKER", labelFa: "بنکر ستون فقرات", labelEn: "Single Bankers", icon: "🏦" },
+    { key: "ACCUMULATOR", labelFa: "آکومولاتور ۲-۳ تایی", labelEn: "Smart Accumulators", icon: "🔗" },
+    { key: "SNIPER", labelFa: "تک‌تیرانداز ارزش", labelEn: "Odds Snipers", icon: "🎯" },
+  ];
+  const settledApproved = approvedSlips.filter((s) => ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status));
+  const regimes = REGIME_DEFS.map((def) => {
+    const rows = settledApproved.filter((s) => regimeOf(s.productLine ?? null) === def.key);
+    const settledN = rows.length;
+    const winsN = rows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+    const net = Math.round(rows.reduce((a, r) => a + (r.netProfit ?? 0), 0) * 100) / 100;
+    return {
+      key: def.key,
+      labelFa: def.labelFa,
+      labelEn: def.labelEn,
+      icon: def.icon,
+      settled: settledN,
+      wins: winsN,
+      winRatePct: settledN > 0 ? Math.round((winsN / settledN) * 1000) / 10 : null,
+      netProfit: net,
+      avgProfitPerWin: winsN > 0 ? Math.round((net / winsN) * 100) / 100 : null,
+    };
+  }).filter((r) => r.key !== "SNIPER" || r.settled > 0); // اسنایپر فقط وقتی کارت واقعی دارد نمایش داده می‌شود
+
   return {
     success: true,
     slips: slipsView,
     stats,
+    regimes,
     shadow,
     retroBook,
     silverHarvest,

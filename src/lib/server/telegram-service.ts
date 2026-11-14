@@ -849,6 +849,19 @@ export async function previewDispatchQueue(): Promise<{ queue: DispatchQueueItem
  */
 async function repairPrematureCardFlags(): Promise<number> {
   try {
+    // ═══ v19.0 — بازیابی ادعاهای مرده (Dead Claim Reclaim) ═══
+    // اگر پردازه در میانه رندر/ارسال کرش کند، ردیف CLAIMED با ok=false در جدول
+    // می‌ماند و آن پست تا ابد قفل می‌شود. اجاره ادعا ۱۵ دقیقه است: ردیف‌های
+    // CLAIMED قدیمی‌تر حذف می‌شوند تا تیک بعدی دوباره ادعا کند (بدون هیچ امکان
+    // ارسال تکراری — چون در پنجره ۱۵ دقیقه‌ای فقط یک مسیر می‌تواند ادعا کند).
+    const deadCutoff = new Date(Date.now() - 15 * 60_000);
+    const dead = await db.telegramOutbox.deleteMany({
+      where: { ok: false, detail: "CLAIMED", createdAt: { lt: deadCutoff } },
+    });
+    if (dead.count > 0) {
+      console.log(`[telegram] v19.0 dead-claim reclaim: ${dead.count} expired CLAIMED rows released`);
+    }
+
     const flagged = await db.issuedSlip.findMany({
       where: { status: { in: ["PENDING", "LIVE"] }, telegramCard: true, supervisorApproved: true, retroIssued: false },
       select: { id: true, kickoff: true },

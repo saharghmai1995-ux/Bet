@@ -105,6 +105,70 @@ function LegendRow({ color, label, value }: { color: string; label: React.ReactN
   );
 }
 
+// ═══ v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown Banner) ═══
+// جدول/نوار افرازی بالای مرکز فرماندهی: سود خالص هر استراتژی به‌صورت شفاف —
+// افراز مجزا (هر کارت فقط در خط تولید خودش) · اعداد فقط از کارنامه واقعی ESPN.
+type RegimeItem = NonNullable<LedgerDTO["regimes"]>[number];
+
+const REGIME_TONES: Record<string, string> = {
+  DUAL_HEDGE: "border-cyan-500/25 bg-cyan-500/[0.05] text-cyan-300",
+  COMBO: "border-emerald-500/25 bg-emerald-500/[0.05] text-emerald-300",
+  CORRECT_SCORE: "border-amber-500/25 bg-amber-500/[0.05] text-amber-300",
+  BANKER: "border-sky-500/25 bg-sky-500/[0.05] text-sky-300",
+  ACCUMULATOR: "border-fuchsia-500/25 bg-fuchsia-500/[0.05] text-fuchsia-300",
+  SNIPER: "border-rose-500/25 bg-rose-500/[0.05] text-rose-300",
+};
+
+function RegimeRoiBanner({ regimes }: { regimes: RegimeItem[] | null }) {
+  if (!regimes || regimes.length === 0) return null;
+  const totalNet = regimes.reduce((a, r) => a + r.netProfit, 0);
+  return (
+    <div
+      className="border-b border-white/8 bg-white/[0.015] px-4 py-3"
+      role="table"
+      aria-label="افراز سودآوری ۵ رژیم تولید کارت"
+    >
+      <p className="mb-2 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
+        <Medal className="size-3.5 text-amber-400" aria-hidden />
+        ویترین سودآوری ۵ رژیم (افراز مجزا — فقط کارت‌های تاییدشده و تسویه ESPN)
+        <b className="font-num text-foreground" dir="ltr">
+          {totalNet >= 0 ? "+" : "−"}{faNum(Math.abs(totalNet), 1)}u
+        </b>
+      </p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+        {regimes.map((r) => {
+          const tone = REGIME_TONES[r.key] ?? "border-white/10 bg-white/[0.03]";
+          return (
+            <div key={r.key} className={cn("rounded-lg border px-2.5 py-2", tone)}>
+              <p className="flex items-center gap-1 text-[10px] font-bold">
+                <span aria-hidden>{r.icon}</span>
+                {r.labelFa}
+              </p>
+              <p className="mt-1 font-num text-sm font-extrabold" dir="ltr">
+                {r.netProfit >= 0 ? "+" : "−"}{faNum(Math.abs(r.netProfit), 1)}u
+              </p>
+              <p className="mt-0.5 text-[9px] leading-3 text-muted-foreground">
+                {r.settled > 0 ? (
+                  <>
+                    وین‌ریت <b className="font-num" dir="ltr">{faNum(r.winRatePct ?? 0, 0)}٪</b>
+                    {" · "}میانگین هر برد{" "}
+                    <b className="font-num" dir="ltr">
+                      {r.avgProfitPerWin != null ? (r.avgProfitPerWin >= 0 ? "+" : "−") + faNum(Math.abs(r.avgProfitPerWin), 1) : "—"}
+                    </b>
+                    {" · "}{faNum(r.settled, 0)} کارت
+                  </>
+                ) : (
+                  "هنوز کارت تسویه‌شده‌ای در این رژیم نیست"
+                )}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /**
  * نمونه‌برداری یکنواخت — همیشه نقطه اول و آخر حفظ می‌شود.
  * v13.5.1 — رفع باگ نمایش: فیلتر «حذف تکراری‌های مجاور» حذف شد؛ آن فیلتر
@@ -638,6 +702,9 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           </span>
         </div>
       </div>
+
+      {/* ═══ v19.0 — ویترین ۵ رژیم (سود خالص هر خط تولید — افراز مجزا) ═══ */}
+      <RegimeRoiBanner regimes={ledger?.regimes ?? null} />
 
       {/* نبض کارنامه — v18.0: تشخیص شفاف «چرا آمار تغییر می‌کند/نمی‌کند» + دفتر سایه زنده */}
       <LedgerPulse ledger={ledger} savedByVeto={savedByVeto} />

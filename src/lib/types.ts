@@ -790,6 +790,22 @@ export interface LedgerDTO {
   success: boolean;
   slips: IssuedSlipDTO[];
   stats: SettlementStatsDTO;
+  /**
+   * v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown):
+   * سود خالص/وین‌ریت/میانگین سود هر برد هر یک از ۵ استراتژی — با افراز مجزا
+   * (هر کارت فقط در خط تولید خودش شمرده می‌شود) — اعداد کاملاً از کارنامه واقعی ESPN.
+   */
+  regimes: {
+    key: "DUAL_HEDGE" | "COMBO" | "CORRECT_SCORE" | "BANKER" | "ACCUMULATOR" | "SNIPER";
+    labelFa: string;
+    labelEn: string;
+    icon: string;
+    settled: number;
+    wins: number;
+    winRatePct: number | null;
+    netProfit: number;
+    avgProfitPerWin: number | null;
+  }[];
   /** v11.0 — دفتر سایه: آمار تسویه کاغذی کارت‌های وتوشده سوپروایزر (بدون تلگرام) */
   shadow: {
     total: number;
