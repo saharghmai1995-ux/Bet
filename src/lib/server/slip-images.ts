@@ -32,6 +32,8 @@ import {
 } from "./card-render";
 import { fetchTeamLogoBuffer } from "./stadium-store";
 import { fetchEspnEvents, normTeam } from "./live-sources";
+// v20.0 — سود تضمینی پوششی واقعی برای پوستر (نه marginPct ذخیره‌شده)
+import { coverProfitOf } from "./cover-profit";
 import { computeMatchEngine } from "@/lib/engine/matchEngine";
 import { score100Of } from "@/lib/supervisor";
 import { TIMING_WINDOWS, type TimingWindowKey } from "@/lib/timing-window";
@@ -134,7 +136,11 @@ async function cardBase(slip: IssuedSlip) {
     labelBEn: englishSelectionLabel(legsB, slip.archetypeCode),
     oddsB: slip.oddsB,
     stakeB: slip.stakeB,
-    guaranteedPct: slip.marginPct,
+    // v20.0 — سود تضمینی پوششی «محاسبه‌شده» از ضریب/استیک واقعی کارت — هرگز marginPct ذخیره‌شده چاپ نمی‌شود
+    guaranteedPct: coverProfitOf(slip).guaranteePct,
+    // v18.0/v20.0 — سطح تاج کارت: GOLD (طلایی ۱۰۰u) یا SILVER_SHADOW (نقره‌ای نصف ۵۰u)
+    // قالب رندر بر اساس این فیلد دو هویت بصری کاملاً متفاوت می‌سازد
+    crownTier: slip.crownTier,
     edgeA: slip.edgeA ?? null,
     edgeB: slip.edgeB ?? null,
     edgeSource: slip.edgeSourceA ?? "MARKET_FAIR",

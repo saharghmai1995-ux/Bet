@@ -731,16 +731,16 @@ function crtOverlay(w: number, h: number): string {
 }
 
 /** هدر آرکید HUD — NEOBET QUANT PRO • @AINEOBET (سبک نوار بالای بازی‌های ۱۶ بیتی) */
-function brandHeader(w: number, accent: string, right = BRAND_HANDLE): string {
+function brandHeader(w: number, accent: string, right = BRAND_HANDLE, tierColor: string = C.gold): string {
   return `
   <rect x="0" y="0" width="${w}" height="92" fill="${A.hud}"/>
   <rect x="0" y="88" width="${w}" height="4" fill="${accent}"/>
   <rect x="0" y="92" width="${w}" height="3" fill="rgba(0,0,0,0.65)"/>
-  <rect x="34" y="22" width="48" height="48" fill="${C.gold}"/>
+  <rect x="34" y="22" width="48" height="48" fill="${tierColor}"/>
   <rect x="34" y="22" width="48" height="8" fill="rgba(255,255,255,0.35)"/>
   <rect x="34" y="62" width="48" height="8" fill="rgba(0,0,0,0.35)"/>
   <text x="58" y="56" text-anchor="middle" font-family="${C.sans}" font-size="27" font-weight="bold" fill="#0a0f1c">N</text>
-  <text x="96" y="44" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${C.gold}" letter-spacing="3">${BRAND_TITLE}</text>
+  <text x="96" y="44" font-family="${C.sans}" font-size="26" font-weight="bold" fill="${tierColor}" letter-spacing="3">${BRAND_TITLE}</text>
   <text x="96" y="70" font-family="${C.sans}" font-size="12.5" fill="${A.dim}" letter-spacing="3.5">${BRAND_SUB}</text>
   <rect x="${w - 128}" y="26" width="52" height="18" fill="#c86bff"/>
   <text x="${w - 102}" y="39" text-anchor="middle" font-family="${C.sans}" font-size="10.5" font-weight="bold" fill="#12061f" letter-spacing="1">16-BIT</text>
@@ -863,6 +863,8 @@ export interface MatchCardInput {
   awayTeam: string;
   league: string;
   kickoffIso: string;
+  /** v20.0 — سطح تاج: "GOLD" | "SILVER_SHADOW" | null — دو هویت بصری کاملاً متفاوت */
+  crownTier?: string | null;
   labelAEn: string;
   oddsA: number;
   stakeA: number;
@@ -1023,7 +1025,14 @@ function statBadge(x: number, y: number, w: number, icon: "crown" | "shield" | "
 
 export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer> {
   const dw = input.doubleWin;
-  const accent = dw ? C.gold : C.cyan;
+  // ═══ v20.0 — Two-Tier Visual Identity: طلایی ۱۰۰u در برابر نقره‌ای ۵۰u ═══
+  // کارت طلایی: پالت طلایی گرم + نوار GOLD CROWN TIER 1
+  // کارت نقره‌ای: پالت پلاتینیوم سرد + نوار SILVER TIER 2 + مُهر HALF-KELLY 50u
+  const isSilver = input.crownTier === "SILVER_SHADOW";
+  const SILVER = "#cdd6e4";
+  const tierColor = isSilver ? SILVER : C.gold;
+  const tierLabel = isSilver ? "SILVER TIER 2 · SHADOW ALPHA HUNTER · HALF-KELLY 50u" : "GOLD CROWN TIER 1 · FULL 100u TICKET";
+  const accent = isSilver ? SILVER : dw ? C.gold : C.cyan;
   const st = input.stats;
   const homeLogo = logoDataUrl(input.homeLogo ?? null);
   const awayLogo = logoDataUrl(input.awayLogo ?? null);
@@ -1071,7 +1080,11 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
       : null;
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE, tierColor)}
+  <!-- v20.0 — نوار هویت سطح تاج: طلایی/نقره‌ای (بدون تداخل با چیپ لیگ) -->
+  <rect x="0" y="95" width="${W}" height="15" fill="rgba(4,8,16,0.88)"/>
+  <rect x="0" y="95" width="${W}" height="2" fill="${tierColor}" opacity="0.9"/>
+  <text x="740" y="107" text-anchor="middle" font-family="${C.sans}" font-size="12.5" font-weight="bold" fill="${tierColor}" letter-spacing="3.5">${esc(tierLabel)}</text>
 
   <!-- لیگ + زمان -->
   <rect x="90" y="108" width="${textWidth(leagueEn, leagueSize, 600) + 56}" height="44" rx="22" fill="rgba(6,10,20,0.75)" stroke="rgba(56,214,245,0.5)" stroke-width="1.5"/>
@@ -1148,16 +1161,16 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
   }
 
   <!-- ═══ نوار شیشه‌ای پایینی — سود تضمینی + بهترین زمان ثبت ═══ -->
-  ${glassBox(90, 1096, 900, 132, C.gold, 20)}
-  <text x="${W / 2}" y="1134" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">GUARANTEED COVER PROFIT · ${esc(input.timingTitle)}</text>
-  <text x="290" y="1190" text-anchor="middle" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${C.gold}">+${input.guaranteedPct.toFixed(1)}%</text>
+  ${glassBox(90, 1096, 900, 132, tierColor, 20)}
+  <text x="${W / 2}" y="1134" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${tierColor}" letter-spacing="2.5">${isSilver ? "SILVER HALF-KELLY GUARANTEE" : (st && (st.archetypeCode === "BANKER" || st.archetypeCode === "ACC") ? "WIN-SCENARIO PROFIT · SINGLE COLUMN" : "GUARANTEED COVER PROFIT")} · ${esc(input.timingTitle)}</text>
+  <text x="290" y="1190" text-anchor="middle" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${tierColor}">${input.guaranteedPct >= 0 ? "+" : "−"}${Math.abs(input.guaranteedPct).toFixed(1)}%</text>
   <rect x="408" y="1156" width="128" height="34" rx="17" fill="${input.timingState === "OPEN" ? "rgba(61,220,151,0.18)" : "rgba(245,197,66,0.16)"}" stroke="${input.timingState === "OPEN" ? C.emerald : C.gold}" stroke-width="1.6"/>
   <text x="472" y="1179" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${input.timingState === "OPEN" ? C.emerald : C.gold}" letter-spacing="1">${input.timingState === "OPEN" ? "WINDOW OPEN" : input.timingState === "WAITING" ? "UPCOMING" : input.timingState === "LATE" ? "CLOSING" : "KICKED OFF"}</text>
   <text x="775" y="1190" text-anchor="middle" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">${esc(tLines.join(" · "))}</text>
 
   <!-- ═══ خط آموزشی استراتژی v13.2 ═══ -->
-  <rect x="90" y="1240" width="900" height="86" rx="14" fill="rgba(6,10,20,0.72)" stroke="rgba(56,214,245,0.35)" stroke-width="1.4"/>
-  <text x="118" y="1269" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${C.cyan}" letter-spacing="1.6">📚 STRATEGY · ${esc(strategy.title)}</text>
+  <rect x="90" y="1240" width="900" height="86" rx="14" fill="rgba(6,10,20,0.72)" stroke="${isSilver ? "rgba(205,214,228,0.35)" : "rgba(56,214,245,0.35)"}" stroke-width="1.4"/>
+  <text x="118" y="1269" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${isSilver ? SILVER : C.cyan}" letter-spacing="1.6">${isSilver ? "SILVER DOCTRINE ·" : "📚 STRATEGY ·"} ${esc(strategy.title)}</text>
   <text x="118" y="1293" font-family="${C.sans}" font-size="15.5" fill="${C.inkDim}">${tspans(strategyLines, 118, 1293, 20)}</text>
 
   <!-- هش -->
@@ -1312,14 +1325,14 @@ export async function renderResultPNG(input: ResultImageInput): Promise<Buffer> 
   ${glassBox(145, 610, 385, 425, C.gold, 24)}
   <text x="337" y="668" text-anchor="middle" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">TIP A · GOLDEN LEG</text>
   <text x="337" y="742" text-anchor="middle" font-family="${C.sans}" font-size="21" fill="${C.inkDim}">${esc(input.homeTeam)} side</text>
-  <text x="337" y="828" text-anchor="middle" font-family="${C.mono}" font-size="52" font-weight="bold" fill="${C.gold}">${input.profitA !== null ? sign(input.profitA) : sign(profit / 2)} u</text>
+  <text x="337" y="828" text-anchor="middle" font-family="${C.mono}" font-size="52" font-weight="bold" fill="${C.gold}">${input.profitA != null ? sign(input.profitA) : sign(profit / 2)} u</text>
   <text x="337" y="880" text-anchor="middle" font-family="${C.mono}" font-size="19" fill="${C.inkDim}">${esc(`${(input.stakeAHint ?? 0).toFixed(1)} u @ ${(input.oddsAHint ?? 0).toFixed(2)}`)}</text>
   <text x="337" y="968" text-anchor="middle" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.emerald}" letter-spacing="2">BOTH WON · SAME MATCH</text>
 
   ${glassBox(550, 610, 385, 425, C.gold, 24)}
   <text x="742" y="668" text-anchor="middle" font-family="${C.sans}" font-size="20" font-weight="bold" fill="${C.gold}" letter-spacing="2.5">TIP B · GOLDEN LEG</text>
   <text x="742" y="742" text-anchor="middle" font-family="${C.sans}" font-size="21" fill="${C.inkDim}">${esc(input.awayTeam)} side</text>
-  <text x="742" y="828" text-anchor="middle" font-family="${C.mono}" font-size="52" font-weight="bold" fill="${C.gold}">${input.profitB !== null ? sign(input.profitB) : sign(profit / 2)} u</text>
+  <text x="742" y="828" text-anchor="middle" font-family="${C.mono}" font-size="52" font-weight="bold" fill="${C.gold}">${input.profitB != null ? sign(input.profitB) : sign(profit / 2)} u</text>
   <text x="742" y="880" text-anchor="middle" font-family="${C.mono}" font-size="19" fill="${C.inkDim}">${esc(`${(input.stakeBHint ?? 0).toFixed(1)} u @ ${(input.oddsBHint ?? 0).toFixed(2)}`)}</text>
   <text x="742" y="968" text-anchor="middle" font-family="${C.sans}" font-size="16" font-weight="bold" fill="${C.emerald}" letter-spacing="2">ZERO RISK TAKEN</text>`
       : `
@@ -1390,7 +1403,7 @@ export async function renderDailyReportPNG(input: DailyReportInput): Promise<Buf
   const netSize = fitSize(`${sign(input.dayNetProfit)} units`, 480, 44, 22, 700);
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <!-- هدر تاریخ -->
   ${glassBox(90, 130, 900, 130, accent, 20)}
@@ -1611,7 +1624,7 @@ export async function renderComboPosterPNG(input: ComboPosterInput): Promise<Buf
     .join("");
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <text x="${W / 2}" y="196" text-anchor="middle" font-family="${C.sans}" font-size="38" font-weight="bold" fill="${C.emerald}" letter-spacing="3">SMART COMBO ENGINE</text>
   <text x="${W / 2}" y="236" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">independent anchor legs · Monte-Carlo joint confidence</text>
@@ -1668,7 +1681,7 @@ export async function renderSniperPosterPNG(input: SniperPosterInput): Promise<B
   const mktSize = fitSize(input.marketLabel, 820, 30, 16, 700);
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <text x="${W / 2}" y="210" text-anchor="middle" font-family="${C.sans}" font-size="42" font-weight="bold" fill="${accent}" letter-spacing="5">HIGH-ODDS SNIPER</text>
   <text x="${W / 2}" y="250" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">reverse-poisson value hunt · single shot · small stake</text>
@@ -1740,7 +1753,7 @@ export async function renderLockedTeaserPNG(input: LockedTeaserInput): Promise<B
   const awayLogo = logoDataUrl(input.awayLogo ?? null);
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <rect x="${W / 2 - 220}" y="150" width="440" height="46" rx="23" fill="${input.freeGift ? "rgba(61,220,151,0.16)" : "rgba(245,197,66,0.16)"}" stroke="${accent}" stroke-opacity="0.7" stroke-width="1.8"/>
   <text x="${W / 2}" y="181" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${accent}" letter-spacing="3">${input.freeGift ? "FREE GIFT CARD · TODAY" : "VIP TEASER · LOCKED"}</text>
@@ -1806,7 +1819,7 @@ export async function renderDailyRadarPNG(input: DailyRadarInput): Promise<Buffe
     <text x="${x + 105}" y="${810 + 150}" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${C.inkDim}">${esc(label)}</text>`;
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <text x="${W / 2}" y="200" text-anchor="middle" font-family="${C.sans}" font-size="40" font-weight="bold" fill="${accent}" letter-spacing="4">DAILY MATCHDAY RADAR</text>
   <text x="${W / 2}" y="242" text-anchor="middle" font-family="${C.sans}" font-size="19" fill="${C.inkDim}">${esc(input.dateLabelEn)} · full transparency report</text>
@@ -1917,7 +1930,7 @@ export async function renderVipAdPNG(input: VipAdInput): Promise<Buffer> {
     .join("");
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <!-- تیتر بزرگ + زیرتیتر -->
   <text x="${W / 2}" y="270" text-anchor="middle" font-family="${C.sans}" font-size="${headlineSize}" font-weight="800" fill="${C.ink}" letter-spacing="1.5">${esc(input.headline)}</text>
@@ -2167,7 +2180,7 @@ export async function renderWeeklyDigestPNG(input: WeeklyDigestInput): Promise<B
     .join("");
 
   const overlay = `
-  ${brandHeader(W, accent)}
+  ${brandHeader(W, accent, BRAND_HANDLE)}
 
   <text x="${W / 2}" y="206" text-anchor="middle" font-family="${C.sans}" font-size="42" font-weight="800" fill="${accent}" letter-spacing="3">WEEKLY AUDIT REPORT</text>
   <text x="${W / 2}" y="252" text-anchor="middle" font-family="${C.sans}" font-size="20" fill="${A.dim}">${esc(input.weekLabelEn)} · official ESPN settlements only</text>

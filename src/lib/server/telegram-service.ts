@@ -35,6 +35,8 @@ import { translateNewsBatch, newsDateFa } from "./news-translate";
 import { faNum } from "@/lib/format";
 import { marketEnLabel, SETTLEMENT_RULE_EN, SETTLEMENT_RULE_FA } from "@/lib/engine/orthogonal";
 import { score100Of } from "@/lib/supervisor";
+// v20.0 — محاسبه واقعی سود تضمینی پوششی در کپشن (پاسخ «چرا محاسبه نمی‌شود؟»)
+import { coverProfitOf, signedPct, signedUnit } from "./cover-profit";
 import type { IssuedSlip } from "@prisma/client";
 
 // ═════════════════════ تنظیمات (Setting + env) ═════════════════════
@@ -141,6 +143,13 @@ export async function unclaimSetting(key: string, value: string): Promise<void> 
 const dedupeKeyOf = {
   card: (id: string) => `CARD:${id}`,
   result: (id: string) => `RESULT:${id}`,
+  // ═══ v20.0 — ادعای سطح-بازی (هر بازی فقط یک‌بار) ═══
+  // دستور کارفرما: «کارتهای تکراری به تلگرام ارسال نشود هر بازی فقط 1بار ارسال شود».
+  // هر مسیر انتشار کارت‌نوع (CARD به VIP + GIFT/TEASER به عمومی) اول ادعای
+  // MT-CARD:<matchKey> را می‌گیرد — اولین مسیرِ برنده ارسال می‌کند، بقیه skip.
+  // نتیجه/اثبات FT هم همین‌طور: MT-RESULT:<matchKey> (RESULT یا UNBLUR — فقط یکی).
+  mtCard: (matchKey: string) => `MT-CARD:${matchKey}`,
+  mtResult: (matchKey: string) => `MT-RESULT:${matchKey}`,
   news: (day: string, slot: number) => `NEWS:${day}:${slot}`,
   bet: (day: string, slot: number) => `BET:${day}:${slot}`,
   brief: (day: string) => `BRIEF:${day}`,
@@ -154,6 +163,36 @@ const dedupeKeyOf = {
   teaser: (id: string) => `TEASER:${id}`,
   winrate: (day: string, bucket: number) => `WINRATE:${day}:${bucket}`,
 };
+
+/**
+ * v20.0 — کلید یکتای سطح-بازی برای «هر بازی فقط یک‌بار»:
+ * اولویت با externalId ESPN؛ بدون آن، ترکیب تیم‌ها + روز کیک‌آف تهران.
+ */
+export function matchKeyOf(slip: Pick<IssuedSlip, "externalId" | "homeTeam" | "awayTeam" | "kickoff">): string {
+  if (slip.externalId && slip.externalId.trim()) return slip.externalId.trim();
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(new Date(slip.kickoff));
+  return `${slip.homeTeam.trim().toLowerCase()}|${slip.awayTeam.trim().toLowerCase()}|${day}`;
+}
+
+/** آیا این بازی قبلاً یک پست کارت‌نوع داشته؟ (کارت VIP یا گیفت/تیزر عمومی) */
+async function matchCardAlreadyPosted(matchKey: string): Promise<boolean> {
+  try {
+    const row = await db.telegramOutbox.findFirst({ where: { dedupeKey: { startsWith: `MT-CARD:${matchKey}` } }, select: { id: true } });
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
+
+/** آیا این بازی قبلاً یک پست نتیجه‌نوع داشته؟ (نتیجه FT یا اثبات UNBLUR) */
+async function matchResultAlreadyPosted(matchKey: string): Promise<boolean> {
+  try {
+    const row = await db.telegramOutbox.findFirst({ where: { dedupeKey: { startsWith: `MT-RESULT:${matchKey}` } }, select: { id: true } });
+    return Boolean(row);
+  } catch {
+    return false;
+  }
+}
 
 async function claimBroadcast(
   dedupeKey: string,
@@ -265,21 +304,83 @@ async function tgSendPhotoTo(
   if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
   // v13.2 — سپر توکن ناقص (بخش hash بدون bot_id) — ریشه باگ «انتشار انجام نمیشه»
   if (!isValidBotTokenFormat(token)) return { ok: false, detail: "INVALID_TOKEN_FORMAT" };
+  // ═══ v20.0 — سپر «هیچ پیامی بدون تصویر کامل ارسال نشود» ═══
+  // امضای PNG + حداقل حجم ۲۰KB — بافر ناقص/خراب هرگز به تلگرام نمی‌رود.
+  if (!isValidPng(photo)) return { ok: false, detail: "PHOTO_INCOMPLETE" };
   try {
-    const form = new FormData();
-    form.append("chat_id", chatId);
-    if (!captionless) {
-      form.append("caption", caption.slice(0, 1024));
-      form.append("parse_mode", "HTML");
+    // v20.0 — کپشن عکس همیشه «کاملاً HTML-معتبر و ≤۱۰۰۰ کاراکتر در مرز خط» —
+    // ریشه ریشه‌ای «پیام بدون تصویر»: caption.slice(0,1024) تگ HTML را نصف می‌کرد
+    // → تلگرام sendPhoto را با parse-error رد می‌کرد → فالبک متنی بی‌تصویر می‌رفت.
+    const cap = captionless ? "" : safePhotoCaption(caption);
+    let result = await tgSendPhotoAttempt(token, chatId, photo, cap, filename, captionless);
+    // v20.0 — یک ری‌تای ارسال (خطای شبکه/آپلود گذرا) — همان بافر معتبر، بدون متن جایگزین
+    if (!result.ok && !/parse|entities|caption/i.test(result.detail)) {
+      await new Promise((r) => setTimeout(r, 1500));
+      result = await tgSendPhotoAttempt(token, chatId, photo, cap, filename, captionless);
     }
-    form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), filename);
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: form });
-    const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
-    if (json.ok) return { ok: true, detail: `photo:${json.result?.message_id ?? "?"}${captionless ? ":broadcast" : ""}` };
-    return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
+    return result;
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : "network error" };
   }
+}
+
+/** v20.0 — اعتبارسنجی سخت PNG: امضای ۸ بایتی + حداقل ۲۰KB */
+function isValidPng(buf: Buffer | null | undefined): boolean {
+  if (!buf || buf.length < 20480) return false;
+  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return false;
+  return true;
+}
+
+/**
+ * v20.0 — کپشن ایمن عکس: برش فقط در مرز خط + بستن تگ‌های باز + سقف ۱۰۰۰ کاراکتر.
+ * خروجی همیشه HTML-معتبر است (تلگرام هرگز parse-error نمی‌گیرد → پیام بی‌تصویر صفر).
+ */
+export function safePhotoCaption(text: string, limit = 1000): string {
+  let s = String(text ?? "");
+  if (s.length <= limit) return s;
+  // برش در مرز خط — هیچ تگی نصف نمی‌شود
+  s = s.slice(0, limit);
+  const lastNl = s.lastIndexOf("\n");
+  if (lastNl > 200) s = s.slice(0, lastNl);
+  // شمارش تگ‌های باز تلگرام و بستن به ترتیب معکوس (HTML تلگرام فقط ۵ تگ پشتیبانی می‌کند)
+  const TAGS = ["b", "i", "u", "s", "code", "pre", "a", "blockquote"];
+  const stack: string[] = [];
+  const re = /<\/?([a-z]+)[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    const tag = m[1].toLowerCase();
+    if (!TAGS.includes(tag)) continue;
+    if (m[0][1] === "/") {
+      const idx = stack.lastIndexOf(tag);
+      if (idx >= 0) stack.length = idx;
+    } else if (!m[0].endsWith("/>")) {
+      stack.push(tag);
+    }
+  }
+  for (const tag of stack.reverse()) s += `</${tag}>`;
+  return s;
+}
+
+async function tgSendPhotoAttempt(
+  token: string,
+  chatId: string,
+  photo: Buffer,
+  caption: string,
+  filename: string,
+  captionless: boolean
+): Promise<{ ok: boolean; detail: string }> {
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  if (!captionless && caption) {
+    form.append("caption", caption);
+    form.append("parse_mode", "HTML");
+  }
+  form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), filename);
+  const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: form });
+  const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
+  if (json.ok) return { ok: true, detail: `photo:${json.result?.message_id ?? "?"}${captionless ? ":broadcast" : ""}` };
+  return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
 }
 
 async function tgSendPhoto(
@@ -433,7 +534,16 @@ export function buildCardMessage(slip: IssuedSlip): string {
     const range = start && end ? ` | ساعت دقیق پیشنهادی ثبت: ${fmt(new Date(start))} تا ${fmt(new Date(end))} (تهران)` : "";
     lines.push(`⏱️ بهترین زمان ثبت این تیپ: <b>${esc(winName)}</b>${range}`);
   }
-  lines.push(`💰 سود تضمینی پوشش: <b>+${slip.guaranteedProfit.toFixed(1)}%</b> (مجموع استیک ۱۰۰ واحد)`);
+  // ═══ v20.0 — سود تضمینی پوششی «محاسبه‌شده» از اعداد واقعی کارت (نه مقدار ذخیره‌شده) ═══
+  const cover = coverProfitOf(slip);
+  if (cover.hedged) {
+    lines.push(
+      `💰 سود تضمینی پوششی (بدترین سناریو): <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)} واحد از ${cover.staked.toFixed(0)} استیک)`
+    );
+    lines.push(`   🧮 برد تیپ A: ${signedUnit(cover.profitIfA)} واحد · برد تیپ B: ${signedUnit(cover.profitIfB ?? 0)} واحد — هر نتیجه‌ای همین است`);
+  } else {
+    lines.push(`💰 سود در صورت برد (تک‌ستونه — پوشش ندارد): <b>${signedUnit(cover.profitIfA)}</b> واحد · ریسک کامل: −${cover.staked.toFixed(0)}`);
+  }
   lines.push(`🔐 هش راستی‌آزمایی SHA-256:\n<code>${slip.hash.slice(0, 32)}</code>`);
   if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">لینک راستی‌آزمایی رسمی ESPN</a>`);
   lines.push("");
@@ -467,7 +577,9 @@ export function buildTeaserMessage(slip: IssuedSlip): string {
   lines.push("");
   lines.push(`🔹 <b>تیپ A</b> (ضریب ${slip.oddsA.toFixed(2)}): ${esc(slip.labelA)}`);
   lines.push(`💵 مبلغ داچینگ A: <b>${slip.stakeA.toFixed(1)}</b> واحد`);
-  lines.push(`💰 سود تضمینی داچینگ: <b>+${slip.guaranteedProfit.toFixed(1)}%</b>`);
+  // v20.0 — سود تضمینی پوششی واقعی (محاسبه‌شده از ضریب/استیک، نه marginPct ذخیره‌شده)
+  const cover = coverProfitOf(slip);
+  lines.push(`💰 سود تضمینی پوششی: <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)} واحد)`);
   lines.push("");
   lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): 🔒 <b>[مخصوص اعضای کانال VIP]</b>`);
   lines.push(`💵 مبلغ داچینگ B: 🔒 <b>[مخصوص اعضای کانال VIP]</b>`);
@@ -557,6 +669,15 @@ export async function publishSlipToTelegram(
     return { ok: false, detail: "TELEGRAM_NOT_CONFIGURED", preview };
   }
 
+  // ═══ v20.0 — ادعای سطح-بازی: هر بازی فقط یک‌بار پست کارت‌نوع می‌گیرد ═══
+  // اگر CARD/GIFT/TEASER قبلاً برای این بازی رفته باشد، هیچ مسیر دومی دوباره نمی‌فرستد.
+  const mKey = matchKeyOf(slip);
+  if (mode === "CARD" && !opts?.force && (await matchCardAlreadyPosted(mKey))) {
+    await logOutbox(slip.id, mode, true, "MATCH_ALREADY_POSTED");
+    await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: true } }).catch(() => {});
+    return { ok: false, detail: "MATCH_ALREADY_POSTED", preview };
+  }
+
   // v18.4 — claim اتمی: اگر مسیر موازی همین کارت را در حال ارسال/ارسال‌شده است، skip
   if (mode === "CARD" && !opts?.force) {
     const claimed = await claimSlipFlag(slip.id, "telegramCard");
@@ -568,23 +689,39 @@ export async function publishSlipToTelegram(
       await releaseSlipFlag(slip.id, "telegramCard");
       return { ok: false, detail: "ALREADY_SENT_OR_CLAIMED", preview };
     }
+    // v20.0 — لایه سوم: ادعای سطح-بازی MT-CARD:<matchKey> (ضدتکرار بین مسیرها)
+    if (!(await claimBroadcast(dedupeKeyOf.mtCard(mKey), slip.id, "MT_CARD"))) {
+      await releaseSlipFlag(slip.id, "telegramCard");
+      await releaseBroadcast(dedupeKeyOf.card(slip.id));
+      await logOutbox(slip.id, mode, true, "MATCH_ALREADY_POSTED");
+      await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: true } }).catch(() => {});
+      return { ok: false, detail: "MATCH_ALREADY_POSTED", preview };
+    }
   }
 
   try {
-    const photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
-
-    let result: { ok: boolean; detail: string };
-    if (photo) {
-      result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
-      // v13.2 — فالبک پیام متنی: اگر ارسال تصویر شکست، پیام HTML کامل همچنان به کانال می‌رود
-      if (!result.ok) {
-        const fb = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
-        if (fb.ok) result = fb;
+    // ═══ v20.0 — هیچ پیامی بدون تصویر کامل ارسال نمی‌شود ═══
+    // فالبک متنی حذف شد: رندر ناموفق → هیچ پستی نمی‌رود؛ ادعا آزاد و تیک بعدی
+    // (۹۰ ثانیه بعد) دوباره تلاش می‌کند. کپشن هم در tgSendPhotoTo ایمن می‌شود.
+    let photo: Buffer | null = null;
+    for (let attempt = 0; attempt < 2 && photo === null; attempt++) {
+      try {
+        photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
+      } catch (err) {
+        console.warn(`[telegram] card render attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
       }
-    } else {
-      // تصویر تولید نشد — پیام متنی HTML همچنان کامل ارسال می‌شود
-      result = await tgCall("sendMessage", { chat_id: await channelId(), text: preview, parse_mode: "HTML", disable_web_page_preview: true });
     }
+    if (!photo) {
+      if (mode === "CARD") {
+        await releaseSlipFlag(slip.id, "telegramCard");
+        await releaseBroadcast(dedupeKeyOf.card(slip.id));
+        await releaseBroadcast(dedupeKeyOf.mtCard(mKey));
+      }
+      await logOutbox(slip.id, mode, false, "RENDER_FAILED_NO_POST");
+      return { ok: false, detail: "RENDER_FAILED_NO_POST", preview };
+    }
+
+    const result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
 
     await logOutbox(slip.id, mode, result.ok, result.detail);
     if (result.ok) {
@@ -600,6 +737,7 @@ export async function publishSlipToTelegram(
     if (mode === "CARD") {
       await releaseSlipFlag(slip.id, "telegramCard");
       await releaseBroadcast(dedupeKeyOf.card(slip.id));
+      await releaseBroadcast(dedupeKeyOf.mtCard(mKey));
     }
     return { ...result, preview };
   } catch (err) {
@@ -607,6 +745,7 @@ export async function publishSlipToTelegram(
     if (mode === "CARD") {
       await releaseSlipFlag(slip.id, "telegramCard");
       await releaseBroadcast(dedupeKeyOf.card(slip.id));
+      await releaseBroadcast(dedupeKeyOf.mtCard(mKey));
     }
     throw err;
   }
@@ -633,6 +772,13 @@ export async function sendSettlementNotification(slip: IssuedSlip, opts?: { forc
   const chatId = await publicChannelId();
   if (!chatId) return false;
 
+  // ═══ v20.0 — ادعای سطح-بازی نتیجه: هر بازی فقط یک‌بار پست نتیجه‌نوع می‌گیرد ═══
+  const mKey = matchKeyOf(slip);
+  if (!opts?.force && (await matchResultAlreadyPosted(mKey))) {
+    await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } }).catch(() => {});
+    return false;
+  }
+
   // v18.4 — claim اتمی مالکیت ارسال نتیجه (بدون این، دو مسیر موازی دوبار می‌فرستند)
   if (!opts?.force) {
     const claimed = await claimSlipFlag(slip.id, "telegramResult");
@@ -642,29 +788,37 @@ export async function sendSettlementNotification(slip: IssuedSlip, opts?: { forc
       await releaseSlipFlag(slip.id, "telegramResult");
       return false;
     }
+    // v20.0 — لایه سوم: ادعای سطح-بازی MT-RESULT:<matchKey> (نتیجه یا اثبات UNBLUR — فقط یکی)
+    if (!(await claimBroadcast(dedupeKeyOf.mtResult(mKey), slip.id, "MT_RESULT"))) {
+      await releaseSlipFlag(slip.id, "telegramResult");
+      await releaseBroadcast(dedupeKeyOf.result(slip.id));
+      await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } }).catch(() => {});
+      return false;
+    }
   }
 
   const caption = buildResultMessage(slip);
 
-  // v10.0 — تصویربرداری قطعی: برد طلایی همزمان (Double-Win) طراحی طلایی اختصاصی دارد
-  // v18.4 — رندر در try/catch: شکست sharp هرگز خط لوله را نمی‌کشد — فالبک متنی ارسال می‌شود
+  // ═══ v20.0 — هیچ پیامی بدون تصویر کامل ارسال نمی‌شود ═══
+  // فالبک متنی حذف شد؛ رندر دو بار تلاش می‌شود و با اعتبارسنجی PNG در tgSendPhotoTo
+  // (امضای + حداقل حجم) پشتیبانی می‌شود. شکست کامل → بدون پست، ادعا آزاد، تیک بعدی ریتیپ.
   let photo: Buffer | null = null;
-  try {
-    photo = await renderSlipResultPNG(slip);
-  } catch (err) {
-    console.warn("[telegram] result poster render failed (text fallback):", err instanceof Error ? err.message : err);
+  for (let attempt = 0; attempt < 2 && photo === null; attempt++) {
+    try {
+      photo = await renderSlipResultPNG(slip);
+    } catch (err) {
+      console.warn(`[telegram] result poster render attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+  if (!photo) {
+    await releaseSlipFlag(slip.id, "telegramResult");
+    await releaseBroadcast(dedupeKeyOf.result(slip.id));
+    await releaseBroadcast(dedupeKeyOf.mtResult(mKey));
+    await logOutbox(slip.id, "RESULT", false, "RENDER_FAILED_NO_POST");
+    return false;
   }
 
-  let ok = false;
-  if (photo) {
-    ok = (await tgSendPhotoTo(chatId, photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`)).ok;
-    // v13.2 — فالبک پیام متنی برای اعلام نتیجه (تصویر 429 یا شکست رندر)
-    if (!ok) {
-      ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
-    }
-  } else {
-    ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
-  }
+  const ok = (await tgSendPhotoTo(chatId, photo, caption, `${slip.status.toLowerCase()}-${slip.hash.slice(0, 10)}.png`)).ok;
 
   await logOutbox(slip.id, "RESULT", ok, ok ? "sent" : "send-failed");
   if (ok) {
@@ -675,6 +829,7 @@ export async function sendSettlementNotification(slip: IssuedSlip, opts?: { forc
     // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی از دست نرود
     await releaseSlipFlag(slip.id, "telegramResult");
     await releaseBroadcast(dedupeKeyOf.result(slip.id));
+    await releaseBroadcast(dedupeKeyOf.mtResult(mKey));
   }
   return ok;
 }
@@ -886,13 +1041,13 @@ async function repairPrematureCardFlags(): Promise<number> {
         repaired += 1;
         continue;
       }
-      const day = tehranDayRange(slip.kickoff);
-      if (lastSend.createdAt.getTime() < day.start.getTime() || lastSend.createdAt.getTime() >= day.end.getTime()) {
-        await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: false } });
-        repaired += 1;
-      }
+      // ═══ v20.0 — سیاست «هر بازی فقط یک‌بار» ═══
+      // شاخه بازپخشِ «روز بازی» حذف شد — ریشه مستقیم کارت تکراری: ارسال موفقِ یک بازی
+      // نهایی است و هرگز دوباره پخش نمی‌شود. پرچم telegramCard فقط وقتی ریست می‌شود
+      // که هیچ ارسال موفقی برای آن slip در کل تاریخچه ثبت نشده باشد.
+      console.log(`[telegram] v20.0 repair: slip ${slip.id} already broadcast once — kept (match-once policy)`);
     }
-    if (repaired > 0) console.log(`[telegram] v18.3 premature-card repair: ${repaired} flags reset for match-day re-broadcast`);
+    if (repaired > 0) console.log(`[telegram] v20.0 premature-card repair: ${repaired} flags reset (no successful send ever)`);
     return repaired;
   } catch (err) {
     console.warn("premature card repair failed:", err instanceof Error ? err.message : err);
@@ -1066,7 +1221,7 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
     `\n\n🧮 <b>مبنای واحد برای حساب شخصی شما:</b> هر کارت با مجموع استیک ۱۰۰ واحد ثبت می‌شود؛ ۱ واحد = ۱٪ بانک‌رول خودتان.` +
     `\nمثال با موجودی ۱۰ دلار: ۱ واحد = ۰٫۱ دلار → سود ${st.netProfit >= 0 ? "+" : ""}${st.netProfit.toFixed(1)} واحد = ${st.netProfit >= 0 ? "+" : "−"}${Math.abs(st.netProfit * 0.1).toFixed(2)} دلار (مقیاس‌پذیر با هر موجودی).`;
 
-  let res: { ok: boolean; detail: string };
+  let res: { ok: boolean; detail: string } = { ok: false, detail: "RENDER_FAILED_NO_POST" };
   try {
     const photo = await renderWinRateReportPNG({
       winRatePct: st.winRatePct,
@@ -1081,13 +1236,7 @@ export async function sendWinRateReport(force = false): Promise<boolean> {
     });
     res = await tgSendPhotoTo(chatId, photo, caption, `winrate-report-${Date.now()}.png`);
   } catch (err) {
-    console.warn("winrate image render failed:", err);
-    res = await tgCall("sendMessage", {
-      chat_id: chatId,
-      text: caption,
-      parse_mode: "HTML",
-      disable_web_page_preview: true,
-    });
+    console.warn("winrate image render failed (no text fallback):", err);
   }
   if (res.ok) {
     setLastWinRateAt(Date.now());
@@ -1184,15 +1333,12 @@ async function sendDailyDigestInner(force = false): Promise<boolean> {
     const [pub, vip] = await Promise.all([publicChannelId(), channelId()]);
     const targets = [...new Set([pub, vip].filter((x): x is string => Boolean(x)))];
     for (const chatId of targets) {
-      let ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-digest-${today}.png`)).ok;
-      if (!ok) {
-        ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
-      }
+      // v20.0 — هیچ پست بی‌تصویری: شکست sendPhoto → بدون جایگزین متنی
+      const ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-digest-${today}.png`)).ok;
       if (ok) res = { ok: true, detail: `sent:${chatId}` };
     }
   } catch (err) {
-    console.warn("daily digest render failed:", err);
-    res = await tgCall("sendMessage", { chat_id: await channelId(), text: captionFallback(settled, winRate, net), parse_mode: "HTML", disable_web_page_preview: true });
+    console.warn("daily digest render failed (no text fallback):", err);
   }
   if (res.ok) {
     await setSetting(KEY_LAST_DIGEST_DAY, today);
@@ -1204,14 +1350,6 @@ async function sendDailyDigestInner(force = false): Promise<boolean> {
 }
 
 export const sendDailyDigest = withFunnelLock(sendDailyDigestInner);
-
-/** فالبک متنی برآیند روزانه (وقتی رندر تصویر شکست خورد) */
-function captionFallback(settled: number, winRate: number, net: number): string {
-  return (
-    `📊 <b>NEOBET QUANT PRO • @AINEOBET — Daily Settlement Digest</b>\n` +
-    `${settled} کارت امروز تسویه شد · وین‌ریت ${winRate.toFixed(1)}٪ · سود خالص روز: ${net >= 0 ? "+" : ""}${net.toFixed(1)} واحد`
-  );
-}
 
 // پالت hex برای KPIهای گزارش روزانه (مستقل از ثابت‌های card-render)
 const C_cyan = "#38d6f5";
@@ -1273,36 +1411,63 @@ async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; det
   }
 
   // اولویت ۱: دژ نفوذناپذیر (ریسک < ۷٪) با بالاترین امتیاز؛ اولویت ۲: بالاترین امتیاز سوپروایزر
+  // v20.0 — «هر بازی فقط یک‌بار»: بازی‌هایی که قبلاً پست کارت‌نوع دارند از کاندیداها حذف می‌شوند
   const scoreOf = (s: IssuedSlip) => s.supervisorScore ?? -999;
-  const fortress = candidates.filter((s) => (s.jointLossRiskPct ?? 99) < 7);
-  const pick = fortress.length > 0 ? fortress.sort((a, b) => scoreOf(b) - scoreOf(a))[0] : candidates.sort((a, b) => scoreOf(b) - scoreOf(a))[0];
+  const fresh: IssuedSlip[] = [];
+  for (const s of [...candidates].sort((a, b) => scoreOf(b) - scoreOf(a))) {
+    if (!(await matchCardAlreadyPosted(matchKeyOf(s)))) fresh.push(s);
+  }
+  const pick = fresh.length > 0 ? fresh[0] : candidates.sort((a, b) => scoreOf(b) - scoreOf(a))[0];
   const isFortress = (pick.jointLossRiskPct ?? 99) < 7;
 
-  const photo = await renderSlipCardPNG(pick);
+  // v20.0 — ادعای سطح-بازی MT-CARD برای گیفت (مسیر VIP و گیفت/تیزر فقط یکی برای هر بازی)
+  const pickMatchKey = matchKeyOf(pick);
+  const mtClaimed = fresh.length > 0 && (await claimBroadcast(dedupeKeyOf.mtCard(pickMatchKey), pick.id, "MT_CARD"));
+  if (fresh.length > 0 && !mtClaimed) {
+    await releaseBroadcast(giftClaim);
+    return { ok: false, detail: "MATCH_ALREADY_POSTED" };
+  }
+
+  // v20.0 — هیچ پیامی بدون تصویر کامل: رندر دو بار تلاش می‌شود؛ شکست → بدون پست
+  let photo: Buffer | null = null;
+  for (let attempt = 0; attempt < 2 && photo === null; attempt++) {
+    try {
+      photo = await renderSlipCardPNG(pick);
+    } catch (err) {
+      console.warn(`[telegram] gift card render attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+  if (!photo) {
+    if (mtClaimed) await releaseBroadcast(dedupeKeyOf.mtCard(pickMatchKey));
+    await releaseBroadcast(giftClaim);
+    return { ok: false, detail: "RENDER_FAILED_NO_POST" };
+  }
+
   const kickoffEn = new Intl.DateTimeFormat("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tehran" }).format(new Date(pick.kickoff));
+  // v20.0 — سود تضمینی پوششی واقعی (محاسبه‌شده از ضریب/استیک، نه marginPct ذخیره‌شده)
+  const cover = coverProfitOf(pick);
+  const coverLine = cover.hedged
+    ? `💰 Guaranteed dutch cover: <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)}u) on a ${cover.staked.toFixed(0)}-unit ticket`
+    : `💰 Win-scenario profit: <b>${signedUnit(cover.profitIfA)}u</b> · single-column ticket (no hedge)`;
   const caption =
     `${isFortress ? "🏰 <b>FREE VIP CARD OF THE DAY — FORTRESS MODE (joint-loss risk &lt; 7%)</b>" : "🎁 <b>FREE VIP CARD OF THE DAY — Supervisor-Approved</b>"}\n` +
     `🏆 <b>${esc(pick.homeTeam)}</b> × <b>${esc(pick.awayTeam)}</b> · ${esc(pick.league)} · ⏰ ${kickoffEn} Tehran\n` +
     `🔹 Tip A @${pick.oddsA.toFixed(2)}: ${esc(pick.labelA)} · stake ${pick.stakeA.toFixed(1)}u\n` +
     `🟢 Tip B @${pick.oddsB.toFixed(2)}: ${esc(pick.labelB)} · stake ${pick.stakeB.toFixed(1)}u\n` +
-    `💰 Guaranteed dutch cover: <b>+${pick.marginPct.toFixed(1)}%</b> on a 100-unit ticket\n` +
+    `${coverLine}\n` +
     `🔐 Pre-match SHA-256: <code>${pick.hash.slice(0, 24)}</code>\n` +
     `———————\n` +
     `🎁 <b>کارت رایگان امروز — تایید سوپروایزر${isFortress ? " · دژ نفوذناپذیر (ریسک زیر ۷٪)" : ""}</b>\n` +
     `هر روز فقط ۱ کارت کامل و باز در کانال عمومی منتشر می‌شود؛ بقیه کارت‌ها مخصوص اعضای VIP است.\n` +
     `👑 عضویت VIP: @Aineobet_bot`;
 
-  let ok = false;
-  if (photo) {
-    ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-gift-${pick.hash.slice(0, 10)}.png`)).ok;
-    if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
-  } else {
-    ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
-  }
+  // v20.0 — photo-only: شکست sendPhoto → بدون پست متنی
+  const ok = (await tgSendPhotoTo(chatId, photo, caption, `daily-gift-${pick.hash.slice(0, 10)}.png`)).ok;
   if (ok) {
     await setSetting(KEY_FUNNEL_GIFT_DAY, today);
     await commitBroadcast(giftClaim, true, `public:${chatId}${isFortress ? ":fortress" : ""}`);
   } else {
+    if (mtClaimed) await releaseBroadcast(dedupeKeyOf.mtCard(pickMatchKey));
     await releaseBroadcast(giftClaim);
   }
   return { ok, detail: ok ? (isFortress ? "fortress-gift-sent" : "gift-sent") : "send-failed" };
@@ -1483,10 +1648,8 @@ async function sendHourlyVipAdInner(force = false): Promise<{ ok: boolean; detai
       bullets: ad.bullets,
       generatedAtIso: new Date().toISOString(),
     });
-    let ok = (await tgSendPhotoTo(chatId, photo, ad.faCaption, `vip-ad-${ad.key.toLowerCase()}.png`)).ok;
-    if (!ok) {
-      ok = (await tgCall("sendMessage", { chat_id: chatId, text: ad.faCaption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
-    }
+    // v20.0 — هیچ پست بی‌تصویری: شکست sendPhoto → بدون جایگزین متنی
+    const ok = (await tgSendPhotoTo(chatId, photo, ad.faCaption, `vip-ad-${ad.key.toLowerCase()}.png`)).ok;
     if (ok) {
       await setSetting(KEY_MARKETING_LAST_AD, stamp);
       await commitBroadcast(adClaim, true, `public:${chatId}:${ad.key}`);
@@ -1531,8 +1694,10 @@ export async function sendPublicRadar(force = false): Promise<boolean> {
     where: { supervisorApproved: true, status: { in: ["PENDING", "LIVE"] } },
     orderBy: { kickoff: "asc" },
   });
-  const topLine = next
-    ? `${next.homeTeam} vs ${next.awayTeam} · guaranteed +${next.marginPct.toFixed(1)}% dutch cover`
+  // v20.0 — سود تضمینی پوششی واقعی (محاسبه‌شده از ضریب/استیک)
+  const nextCover = next ? coverProfitOf(next) : null;
+  const topLine = next && nextCover
+    ? `${next.homeTeam} vs ${next.awayTeam} · guaranteed ${signedPct(nextCover.guaranteePct)} dutch cover`
     : "Scanner is waiting for the next ESPN matchday window";
 
   const dateLabelEn = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "2-digit", month: "short", timeZone: "Asia/Tehran" }).format(new Date());
@@ -1549,10 +1714,8 @@ export async function sendPublicRadar(force = false): Promise<boolean> {
     `🔍 ${st.scanned} matches scanned · 🛡️ ${st.vetoed} high-risk vetoed by the Supervisor · 👑 ${st.golden} golden signals issued for VIP.\n` +
     `Free gift card + locked VIP teasers drop at T-60 before kickoff. Same SHA-256, unblurred after FT.`;
 
-  let res = await tgSendPhotoTo(chatId, photo, caption, `daily-radar-${today}.png`);
-  if (!res.ok) {
-    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
-  }
+  // v20.0 — هیچ پست بی‌تصویری: شکست sendPhoto → بدون جایگزین متنی
+  const res = await tgSendPhotoTo(chatId, photo, caption, `daily-radar-${today}.png`);
   if (res.ok) {
     await setSetting(KEY_FUNNEL_RADAR_DAY, today);
     await commitBroadcast(radarClaim, true, `public:${chatId}`);
@@ -1589,18 +1752,49 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
   let teasers = 0;
 
   for (const slip of candidates) {
+    // ═══ v20.0 — «هر بازی فقط یک‌بار»: ادعای سطح-بازی MT-CARD قبل از گیفت/تیزر ═══
+    // اگر این بازی قبلاً کارت‌نوع رفته (CARD به VIP یا گیفت قبلی)، دیگر تیزر/گیفت دوم نمی‌گیرد.
+    const mKey = matchKeyOf(slip);
+    if (await matchCardAlreadyPosted(mKey)) continue;
+    const mtClaim = dedupeKeyOf.mtCard(mKey);
     // v19.0 — ادعای اتمی per-slip برای گیفت/تیزر (INSERT-first) — مسیر موازی هرگز دوبار نمی‌فرستد
     const isGift = giftDay !== today && (await claimBroadcast(dedupeKeyOf.gift(today), slip.id, "FUNNEL_GIFT"));
     if (!isGift && !(await claimBroadcast(dedupeKeyOf.teaser(slip.id), slip.id, "FUNNEL_TEASER"))) continue;
+    // v20.0 — ادعای MT بعد از per-slip claim (شکست MT → آزادسازی per-slip)
+    if (!(await claimBroadcast(mtClaim, slip.id, "MT_CARD"))) {
+      await releaseBroadcast(dedupeKeyOf.gift(today));
+      await releaseBroadcast(dedupeKeyOf.teaser(slip.id));
+      continue;
+    }
+    // v20.0 — هیچ پیامی بدون تصویر کامل: رندر دو بار تلاش می‌شود؛ شکست → بدون پست
+    let photo: Buffer | null = null;
+    for (let attempt = 0; attempt < 2 && photo === null; attempt++) {
+      try {
+        photo = isGift ? await renderSlipCardPNG(slip) : await renderSlipTeaserPNG(slip);
+      } catch (err) {
+        console.warn(`[telegram] teaser render attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+      }
+    }
+    if (!photo) {
+      await releaseBroadcast(dedupeKeyOf.gift(today));
+      await releaseBroadcast(dedupeKeyOf.teaser(slip.id));
+      await releaseBroadcast(mtClaim);
+      continue;
+    }
+
+    // v20.0 — سود تضمینی پوششی واقعی (محاسبه‌شده از ضریب/استیک، نه marginPct ذخیره‌شده)
+    const cover = coverProfitOf(slip);
     try {
       if (isGift) {
-        const photo = await renderSlipCardPNG(slip);
+        const coverLine = cover.hedged
+          ? `💰 Guaranteed dutch profit: <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)}u)`
+          : `💰 Win-scenario profit: <b>${signedUnit(cover.profitIfA)}u</b> · single-column`;
         const caption =
           `🎁 <b>FREE GIFT CARD — 100% OPEN, NO LOCK</b>\n` +
           `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
           `🔹 Tip A @${slip.oddsA.toFixed(2)}: ${esc(slip.labelA)} · stake ${slip.stakeA.toFixed(1)}u\n` +
           `🟢 Tip B @${slip.oddsB.toFixed(2)}: ${esc(slip.labelB)} · stake ${slip.stakeB.toFixed(1)}u\n` +
-          `💰 Guaranteed dutch profit: <b>+${slip.marginPct.toFixed(1)}%</b>\n` +
+          `${coverLine}\n` +
           `🔐 SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
           `Every settlement is auto-graded on the official ESPN final score.`;
         const ok = (await tgSendPhotoTo(chatId, photo, caption, `gift-${slip.hash.slice(0, 10)}.png`)).ok;
@@ -1610,16 +1804,14 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
           await commitBroadcast(dedupeKeyOf.gift(today), true, `public:${chatId}`);
         } else {
           await releaseBroadcast(dedupeKeyOf.gift(today));
+          await releaseBroadcast(mtClaim);
         }
       } else {
-        // v13.5 — رفع باگ ورودی: renderLockedTeaserPNG قبلاً با IssuedSlip خام صدا زده می‌شد
-        // (kickoffEn/labelAEn/hashShort وجود نداشت → پوستر «undefined» چاپ می‌کرد).
-        // اکنون از رندر تیزر رسمی (کارت کامل با تیپ B قفل) استفاده می‌شود.
-        const photo = await renderSlipTeaserPNG(slip);
+        // v13.5 — رفع باگ ورودی: از رندر تیزر رسمی (کارت کامل با تیپ B قفل) استفاده می‌شود.
         const caption =
           `🔒 <b>VIP TEASER — UNBLURRED AFTER FT</b>\n` +
           `🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b> · ${esc(slip.league)}\n` +
-          `💰 Guaranteed cover profit: <b>+${slip.marginPct.toFixed(1)}%</b> · Tip A @${slip.oddsA.toFixed(2)} revealed — Tip B locked.\n` +
+          `💰 Guaranteed cover profit: <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)}u) · Tip A @${slip.oddsA.toFixed(2)} revealed — Tip B locked.\n` +
           `🔐 Pre-match SHA-256: <code>${slip.hash.slice(0, 24)}</code>\n` +
           `Join VIP to unlock the complementary leg before kickoff.`;
         const ok = (await tgSendPhotoTo(chatId, photo, caption, `teaser-${slip.hash.slice(0, 10)}.png`)).ok;
@@ -1628,10 +1820,15 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
           await commitBroadcast(dedupeKeyOf.teaser(slip.id), true, `public:${chatId}`);
         } else {
           await releaseBroadcast(dedupeKeyOf.teaser(slip.id));
+          await releaseBroadcast(mtClaim);
         }
       }
     } catch (err) {
       console.warn("funnel teaser failed:", err instanceof Error ? err.message : err);
+      // v20.0 — شکست → همه ادعاها آزاد تا تیک بعدی ریتیپ کند
+      await releaseBroadcast(dedupeKeyOf.gift(today));
+      await releaseBroadcast(dedupeKeyOf.teaser(slip.id));
+      await releaseBroadcast(mtClaim);
     }
   }
   return { gift, teasers };
@@ -1662,12 +1859,39 @@ export async function sendPublicUnblur(): Promise<number> {
 
   let sent = 0;
   for (const slip of slips) {
+    // ═══ v20.0 — «هر بازی فقط یک‌بار» برای پست نتیجه‌نوع: RESULT یا UNBLUR — فقط یکی ═══
+    const mKey = matchKeyOf(slip);
+    if (await matchResultAlreadyPosted(mKey)) continue;
+    const mtResultClaim = dedupeKeyOf.mtResult(mKey);
+    const mtGot = await claimBroadcast(mtResultClaim, slip.id, "MT_RESULT");
+    if (!mtGot) continue;
     // v19.0 — ادعای اتمی per-slip اثبات عمومی (INSERT-first)
     const unblurClaim = dedupeKeyOf.unblur(slip.id);
-    if (!(await claimBroadcast(unblurClaim, slip.id, "FUNNEL_UNBLUR"))) continue;
+    if (!(await claimBroadcast(unblurClaim, slip.id, "FUNNEL_UNBLUR"))) {
+      await releaseBroadcast(mtResultClaim);
+      continue;
+    }
     try {
-      const unblurred = await renderSlipCardPNG(slip);
-      const result = await renderSlipResultPNG(slip);
+      // v20.0 — هیچ پیامی بدون تصویر کامل: رندر دوبار تلاش؛ شکست کامل → بدون پست
+      let unblurred: Buffer | null = null;
+      for (let attempt = 0; attempt < 2 && unblurred === null; attempt++) {
+        try {
+          unblurred = await renderSlipCardPNG(slip);
+        } catch (err) {
+          console.warn(`[telegram] unblur render attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+        }
+      }
+      if (!unblurred) {
+        await releaseBroadcast(unblurClaim);
+        await releaseBroadcast(mtResultClaim);
+        continue;
+      }
+      let result: Buffer | null = null;
+      try {
+        result = await renderSlipResultPNG(slip);
+      } catch {
+        result = null;
+      }
       const r = slipResultLabel(slip.status);
       const caption =
         `🔓 <b>UNBLURRED — SAME SHA-256, NOW OPEN</b>\n` +
@@ -1677,15 +1901,17 @@ export async function sendPublicUnblur(): Promise<number> {
         `The VIP leg that was blurred is now fully visible. Zero edits, zero deletions — full transparency.`;
       const okPhoto = (await tgSendPhotoTo(chatId, unblurred, caption, `unblur-${slip.hash.slice(0, 10)}.png`)).ok;
       if (okPhoto) {
-        await tgSendPhotoTo(chatId, result, caption, `proof-${slip.hash.slice(0, 10)}.png`);
+        if (result) await tgSendPhotoTo(chatId, result, caption, `proof-${slip.hash.slice(0, 10)}.png`);
         sent += 1;
         await commitBroadcast(unblurClaim, true, `public:${chatId}`);
       } else {
         await releaseBroadcast(unblurClaim);
+        await releaseBroadcast(mtResultClaim);
       }
     } catch (err) {
       console.warn("funnel unblur failed:", err instanceof Error ? err.message : err);
       await releaseBroadcast(unblurClaim);
+      await releaseBroadcast(mtResultClaim);
     }
   }
   return sent;
@@ -1751,10 +1977,8 @@ async function sendNightlyPnlInner(force = false): Promise<boolean> {
     `Day net: <b>${total >= 0 ? "+" : ""}${total.toFixed(1)} units</b> on ${settled} real ESPN-settled tickets · win-rate ${winRate.toFixed(1)}%.\n` +
     `Strictly disjoint accounting — no ticket is ever counted in two lines. No simulation, no paper trades.`;
 
-  let res = await tgSendPhotoTo(chatId, photo, caption, `nightly-pnl-${today}.png`);
-  if (!res.ok) {
-    res = await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true });
-  }
+  // v20.0 — هیچ پست بی‌تصویری
+  const res = await tgSendPhotoTo(chatId, photo, caption, `nightly-pnl-${today}.png`);
   if (res.ok) {
     await setSetting(KEY_FUNNEL_PNL_DAY, today);
     await commitBroadcast(pnlClaim, true, `public:${chatId}`);
@@ -1988,7 +2212,6 @@ async function sendVipMorningBriefInner(force = false): Promise<{ ok: boolean; d
     `🤖 پیام‌های این کانال کامل خودکار است — صدور، تسویه ESPN و گزارش‌ها.`;
 
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `vip-brief-${today}.png`)).ok;
-  if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
     await setSetting(KEY_VIP_BRIEF_DAY, today);
     await commitBroadcast(briefClaim, true, `vip:${chatId}:cards=${cards.length}:vetoed=${vetoedToday}`);
@@ -2042,7 +2265,6 @@ async function sendBetTermLessonInner(force = false, slot = 0): Promise<{ ok: bo
     `👑 اعضای VIP همه کارت‌ها + راهنمای کامل اجرا را دریافت می‌کنند — عضویت: @Aineobet_bot`;
 
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `bet-lesson-${(dayIndex + slot) % BET_TERMS.length}.png`)).ok;
-  if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
     await commitBroadcast(claimKey, true, `public:${chatId}:${term.term}`);
   } else if (!force) {
@@ -2106,7 +2328,6 @@ async function sendFootballNewsInner(force = false, slot = 0): Promise<{ ok: boo
     `\n👑 برای دریافت کارت‌های تاییدشده سوپروایزر: @Aineobet_bot`;
 
   let ok = (await tgSendPhotoTo(chatId, photo, caption, `news-board-${tehranDayKey()}-${slot}.png`)).ok;
-  if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
   if (ok) {
     await commitBroadcast(claimKey, true, `public:${chatId}:items=${Math.min(6, items.length)}:fa=1`);
   } else if (!force) {
@@ -2187,7 +2408,6 @@ async function sendWeeklyDigestInner(force = false): Promise<{ ok: boolean; deta
   let okAny = false;
   for (const chatId of targets) {
     let ok = (await tgSendPhotoTo(chatId, photo, caption, `weekly-digest-${weekKey}.png`)).ok;
-    if (!ok) ok = (await tgCall("sendMessage", { chat_id: chatId, text: caption, parse_mode: "HTML", disable_web_page_preview: true })).ok;
     if (ok) okAny = true;
   }
   if (okAny) {
