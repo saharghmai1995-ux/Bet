@@ -88,16 +88,22 @@ export function useAutopilot() {
 
       // ─── ۲) T-60: ترکیب/آمار واقعی ESPN — v6.0: فراخوانی سبک در اسکن پس‌زمینه
       // (LIGHT = حداکثر یک درخواست summary؛ واکشی کامل بازیکنان فقط در تب T-60 با تقاضای کاربر)
+      // v20.0 — در اسکن سبک بدون تغییر مادی، ترکیب قبلی معتبر است (کاهش بار سرور)
       setStage(m.id, "t60", "RUNNING");
-      try {
-        const lineup = await postJson<LineupShockDTO>("/api/lineup", { matchId: m.id, depth: "LIGHT" });
-        if (lineup.success) {
-          patchAutopilot(m.id, { lineup });
-          store.setShock(m.id, lineup.home.shockDelta, lineup.away.shockDelta);
+      const existingLineup = useQuantStore.getState().autopilot[m.id]?.lineup ?? null;
+      if (!opts.full && existingLineup && !materialChange) {
+        setStage(m.id, "t60", "SKIPPED");
+      } else {
+        try {
+          const lineup = await postJson<LineupShockDTO>("/api/lineup", { matchId: m.id, depth: "LIGHT" });
+          if (lineup.success) {
+            patchAutopilot(m.id, { lineup });
+            store.setShock(m.id, lineup.home.shockDelta, lineup.away.shockDelta);
+          }
+          setStage(m.id, "t60", "DONE");
+        } catch {
+          setStage(m.id, "t60", "ERROR");
         }
-        setStage(m.id, "t60", "DONE");
-      } catch {
-        setStage(m.id, "t60", "ERROR");
       }
 
       // ─── ۳) مناظره گاو/خرس/قاضی — v5.0: موتور کمّی محلی (صفر توکن، صفر LLM) ───
@@ -359,7 +365,63 @@ export function useAutopilot() {
     void loadRules();
     const rulesTimer = setInterval(() => void loadRules(), 5 * 60_000);
 
-    // اسکن کامل به محض آماده‌شدن فید بازی‌ها
+    // ═══ v20.0 — هیدراتاسیون از اسنپ‌شات‌های گرم سرور (De-Browserized Dashboard) ═══
+    // ریشه وابستگی داشبورد به مرورگر: پرتفوی/مناظره فقط با اسکن کلاینت ساخته می‌شد.
+    // حالا warmer سرور (دیمن :3011 هر ۹۰ثانیه + زمان‌بند Next) همان خط لوله را
+    // مستقل از مرورگر اجرا و در EngineSnapshot ذخیره می‌کند؛ داشبورد با یک GET
+    // هیدرات می‌شود و اسکن کلاینت فقط برای بازی‌های بدون اسنپ‌شات fallback می‌شود.
+    const hydrateFromServer = async () => {
+      try {
+        const res = await fetch("/api/engine/snapshots", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          success: boolean;
+          snapshots?: { matchId: string; lineup: LineupShockDTO | null; debate: DebateResultDTO | null; portfolio: PortfolioResultDTO | null; updatedAt: string }[];
+        };
+        if (!data.success || !data.snapshots?.length) return;
+        const store = useQuantStore.getState();
+        let hydrated = 0;
+        for (const snap of data.snapshots) {
+          // فقط بازی‌های موجود در فید فعلی هیدرات می‌شوند
+          if (!store.matches.some((m) => m.id === snap.matchId)) continue;
+          if (store.autopilot[snap.matchId]?.portfolio) continue; // از قبل پر است
+          store.patchAutopilot(snap.matchId, {
+            stages: { ingest: "DONE", t60: snap.lineup ? "DONE" : "SKIPPED", debate: snap.debate ? "DONE" : "SKIPPED", pair: snap.portfolio ? "DONE" : "ERROR", signal: snap.portfolio?.pairs?.length ? "DONE" : "ERROR" },
+            lineup: snap.lineup,
+            debate: snap.debate,
+            portfolio: snap.portfolio,
+            error: null,
+            startedAt: Date.now(),
+            finishedAt: Date.now(),
+          });
+          if (snap.lineup) {
+            useQuantStore.getState().setShock(snap.matchId, snap.lineup.home.shockDelta, snap.lineup.away.shockDelta);
+          }
+          if (snap.debate) useQuantStore.getState().setDebate(snap.matchId, snap.debate);
+          hydrated += 1;
+        }
+        if (hydrated > 0) {
+          console.log(`[autopilot] v20.0 hydrated ${hydrated} match state(s) from server engine snapshots`);
+          // اسکن کلاینت فوری لازم نیست — سرور تازه گرم کرده (اسکن بعدی سبک پس از بازه عادی)
+          const st = useQuantStore.getState();
+          if (!st.scanning && Object.keys(st.autopilot).length >= st.matches.length) {
+            const now = Date.now();
+            useQuantStore.getState().setScanMeta({
+              scanning: false,
+              lastScanAt: now,
+              nextScanAt: now + Math.max(10, st.config.scanIntervalSec) * 1000,
+            });
+          }
+        }
+      } catch {
+        // خطای شبکه — اسکن کلاینت مسیر fallback است
+      }
+    };
+    void hydrateFromServer();
+    // هیدراتاسیون دوره‌ای سبک — بازی‌های جدیدی که warmer سرور گرم کرده
+    const hydrateTimer = setInterval(() => void hydrateFromServer(), 90_000);
+
+    // اسکن کامل به محض آماده‌شدن فید بازی‌ها — فقط اگر هیدراتاسیون پوشش نداد
     const unsub = useQuantStore.subscribe((state) => {
       if (!bootRef.current) return;
       if (state.matches.length > 0 && Object.keys(state.autopilot).length === 0 && !scanningRef.current) {
@@ -369,6 +431,7 @@ export function useAutopilot() {
     return () => {
       unsub();
       clearInterval(rulesTimer);
+      clearInterval(hydrateTimer);
     };
   }, [runScan]);
 

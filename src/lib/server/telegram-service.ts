@@ -729,7 +729,14 @@ export async function publishSlipToTelegram(
       }
       // telegramCard در claim ست شده — فقط تایید نهایی
       // v19.0 — commit ردیف ادعای outbox (ok=true) تا repair پرچم‌ها ارسال موفق را ببیند
-      if (mode === "CARD") await commitBroadcast(dedupeKeyOf.card(slip.id), true, result.detail);
+      // v20.0.1 — ═══ فیکس بحرانی سنتینل «هر بازی فقط یک‌بار» ═══
+      // ردیف MT-CARD:<matchKey> باید به ok=true کامیت شود؛ در غیر این صورت ردیف
+      // CLAIMED بعد از ۱۵ دقیقه توسط dead-claim reclaim حذف می‌شود و سنتینل ضدتکرار
+      // سطح-بازی نابود می‌شد (ریشه ارسال تکراری کارت در طول روز).
+      if (mode === "CARD") {
+        await commitBroadcast(dedupeKeyOf.card(slip.id), true, result.detail);
+        await commitBroadcast(dedupeKeyOf.mtCard(mKey), true, "MATCH_POSTED");
+      }
       return { ...result, preview };
     }
     // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی مسیر کار را از دست ندهد
@@ -823,7 +830,9 @@ export async function sendSettlementNotification(slip: IssuedSlip, opts?: { forc
   if (ok) {
     await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } });
     // v19.0 — commit ردیف ادعا (ok=true)
+    // v20.0.1 — کامیت سنتینل سطح-بازی MT-RESULT (مقاوم به reclaim ۱۵ دقیقه‌ای)
     await commitBroadcast(dedupeKeyOf.result(slip.id), true, "sent");
+    await commitBroadcast(dedupeKeyOf.mtResult(mKey), true, "RESULT_POSTED");
   } else {
     // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی از دست نرود
     await releaseSlipFlag(slip.id, "telegramResult");
@@ -1469,6 +1478,8 @@ async function sendDailyGiftCardInner(force = false): Promise<{ ok: boolean; det
   if (ok) {
     await setSetting(KEY_FUNNEL_GIFT_DAY, today);
     await commitBroadcast(giftClaim, true, `public:${chatId}${isFortress ? ":fortress" : ""}`);
+    // v20.0.1 — سنتینل سطح-بازی گیفت هم کامیت شود (مقاوم به reclaim ۱۵ دقیقه‌ای)
+    if (mtClaimed) await commitBroadcast(dedupeKeyOf.mtCard(pickMatchKey), true, "MATCH_POSTED");
   } else {
     if (mtClaimed) await releaseBroadcast(dedupeKeyOf.mtCard(pickMatchKey));
     await releaseBroadcast(giftClaim);
@@ -1805,6 +1816,8 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
           gift = true;
           await setSetting(KEY_FUNNEL_GIFT_DAY, today);
           await commitBroadcast(dedupeKeyOf.gift(today), true, `public:${chatId}`);
+          // v20.0.1 — سنتینل MT هم کامیت (مقاوم به reclaim ۱۵ دقیقه‌ای)
+          await commitBroadcast(mtClaim, true, "MATCH_POSTED");
         } else {
           await releaseBroadcast(dedupeKeyOf.gift(today));
           await releaseBroadcast(mtClaim);
@@ -1821,6 +1834,8 @@ export async function sendFunnelTeasers(force = false): Promise<{ gift: boolean;
         if (ok) {
           teasers += 1;
           await commitBroadcast(dedupeKeyOf.teaser(slip.id), true, `public:${chatId}`);
+          // v20.0.1 — سنتینل MT هم کامیت (مقاوم به reclaim ۱۵ دقیقه‌ای)
+          await commitBroadcast(mtClaim, true, "MATCH_POSTED");
         } else {
           await releaseBroadcast(dedupeKeyOf.teaser(slip.id));
           await releaseBroadcast(mtClaim);
@@ -1907,6 +1922,8 @@ export async function sendPublicUnblur(): Promise<number> {
         if (result) await tgSendPhotoTo(chatId, result, caption, `proof-${slip.hash.slice(0, 10)}.png`);
         sent += 1;
         await commitBroadcast(unblurClaim, true, `public:${chatId}`);
+        // v20.0.1 — سنتینل MT-RESULT هم کامیت (مقاوم به reclaim ۱۵ دقیقه‌ای)
+        await commitBroadcast(mtResultClaim, true, "RESULT_POSTED");
       } else {
         await releaseBroadcast(unblurClaim);
         await releaseBroadcast(mtResultClaim);

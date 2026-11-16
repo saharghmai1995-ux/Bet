@@ -405,3 +405,19 @@ model DoctrineEntry {
   active      Boolean  @default(true)
   updatedAt   DateTime @updatedAt
 }
+
+// ─── v20.0 — اسنپ‌شات هسته موتور (De-Browserized Dashboard Hydration) ───
+// ریشه «داشبورد وابسته به مرورگر است»: خط لوله lineup → مناظره → پرتفوی فقط
+// در مرورگر اجرا می‌شد. حالا warmer سرور (دیمن :3011 + زمان‌بند Next) این
+// سه‌گانه را مستقل از مرورگر محاسبه و اینجا ذخیره می‌کند؛ داشبورد با یک GET
+// هیدرات می‌شود — سیستم همیشه گرم و پایدار حتی با مرورگر بسته.
+model EngineSnapshot {
+  id        String   @id @default(cuid())
+  matchId   String   @unique
+  lineup    String? // JSON LineupShockDTO
+  debate    String? // JSON DebateResultDTO
+  portfolio String? // JSON PortfolioResultDTO
+  warmSrc   String   @default("SERVER") // SERVER_DAEMON | SERVER_SCHEDULER
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}

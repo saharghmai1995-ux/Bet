@@ -114,6 +114,16 @@ export async function runBroadcastCycle(options?: {
     console.warn("[broadcast-cycle] engine sync failed:", err instanceof Error ? err.message : err);
   }
 
+  // ═══ ۰.۵) v20.0 — گرم‌کننده سه‌گانه داشبورد (lineup → مناظره → پرتفوی) ═══
+  // ریشه «داشبورد وابسته به مرورگر»: این خط لوله فقط در مرورگر اجرا می‌شد. حالا دیمن
+  // مستقل آن را در EngineSnapshot ذخیره می‌کند تا داشبورد بدون مرورگرِ باز هم گرم بماند.
+  try {
+    const { warmEngineSnapshots } = await import("./engine-warmer");
+    await warmEngineSnapshots("SERVER_DAEMON");
+  } catch (err) {
+    console.warn("[broadcast-cycle] engine warm failed:", err instanceof Error ? err.message : err);
+  }
+
   // ─── ۱) صف انتشار تلگرام (کارت‌های تایید سوپروایزر + نتایج FT) ───
   // v16.0 — سقف هر پاس: ۴ کارت / ۳ نتیجه — فلش‌کارت‌های «بازی‌های روز» قبل از کیک‌آف
   // کامل مخابره می‌شوند؛ v19.0 — ادعای اتمی INSERT-first ضد تکرار بین پردازه‌ها.

@@ -183,11 +183,11 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v19.0 High-ROI @AINEOBET — Value-Edge Odds & Jackpot Liberation
+                  <Sparkles className="size-2.5" /> v20.0 Verified Audit & Closed-Loop Calibration @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                مسیریاب غیرخطی ۵ رژیمی (🏦 بنکر · 🧩 کمبو · 🎯 خوشه نتیجه دقیق · ⚖️ زوج‌تیپ · 🔗 آکومولاتور) + تابع مطلوبیت شارپ/کلِی غیرخطی + آنتروپی شانون ماتریس ۶×۶ + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
+                حسابداری صادقانه کارنامه (منبع واحد حقیقت) + تسویه درست میزبان/میهمان + حلقه کالیبراسیون خودکار دسته‌ها + مسیریاب غیرخطی ۵ رژیمی (🏦 بنکر · 🧩 کمبو · 🎯 خوشه نتیجه دقیق · ⚖️ زوج‌تیپ · 🔗 آکومولاتور) + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -400,7 +400,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v19.0 High-ROI Value Engine Edition · گیت‌های وتو آزادشده (ریسک ≤ ۱۵.۸٪ · λ_Fav ≥ ۱.۱۰ · λ_Dog ≤ ۱.۳۵ · سود ضعیف ≥ ۰.۵٪) + ضرایب ارزش‌محور با لبه بازار ۱.۱۶/احتمال (میانگین سود هر برد +۲۲ تا +۲۸ واحد) + سپر استاپ‌لاس زنده دقیقه ۶۵ (تله میانی −۴۵u به‌جای −۱۰۰u) + ویترین سودآوری ۵ رژیم پر با کارت‌های تسویه‌شده واقعی + سیستم دو‌سطحی تاج (👑 طلایی ۱۰۰u · 🥈 نقره‌ای ۵۰u Half-Kelly) + لیگ‌های سمّی + آنتروپی شانون ماتریس ۶×۶ + قیف کانال عمومی↔VIP (@aineobet) + شتاب‌دهنده نامتقارن ۶۵/۳۵ + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + حلقه فعال درس‌های کالیبراسیون
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v20.0 Verified Audit & Closed-Loop Calibration Edition · حسابداری صادقانه کارنامه (منبع واحد حقیقت — بدون حذف رژیم زیان‌ده، باخت کامل −۱۰۰u/−۵۰u واقعی) + تسویه درست میزبان/میهمان (فیکس Tenerife) + حذف ردیف‌های ساختگی ACC و ضریب تکراری ۳.۹۵/۱.۸۲ + حلقه کالیبراسیون خودکار دسته‌ها (تعلیق خودکار ROI منفی) + بلک‌لیست قطعی دوستانه‌ها + مسیریاب غیرخطی ۵ رژیم + ضرایب ارزش‌محور یکتای هر بازی + سیستم دو‌سطحی تاج (👑 طلایی ۱۰۰u · 🥈 نقره‌ای ۵۰u Half-Kelly) + قیف کانال عمومی↔VIP (@aineobet) + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

@@ -3,9 +3,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v19.0 High-ROI 5-Regime Value Engine — ۱۰۰٪ ESPN Verified",
+  title: "NEOBET QUANT PRO • @AINEOBET | v20.0 Verified Audit & Closed-Loop Calibration — ۱۰۰٪ ESPN Verified",
   description:
-    "مسیریاب غیرخطی ۵ رژیمی Bet-Type (بنکر، کمبوی رسمی، خوشه نتیجه دقیق، زوج‌تیپ، آکومولاتور) + تابع مطلوبیت Non-Linear Sharpe & Kelly + آنتروپی شانون ماتریس ۶×۶ + دیتای زنده واقعی ESPN/TheSportsDB/Open-Meteo/The Odds API، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
+    "حسابداری صادقانه بدون فیک (Zero-Fake Accounting) + تسویه درست میزبان/میهمان + حلقه کالیبراسیون خودکار دسته‌ها + مسیریاب غیرخطی ۵ رژیمی Bet-Type (بنکر، کمبوی رسمی، خوشه نتیجه دقیق، زوج‌تیپ، آکومولاتور) + دیتای زنده واقعی ESPN، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },

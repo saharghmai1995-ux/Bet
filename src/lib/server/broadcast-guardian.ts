@@ -12,12 +12,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import http from "node:http";
 
 const HEALTH_URL = "http://127.0.0.1:3011/health";
 const CHECK_MS = 60_000;
 const RESTART_DEBOUNCE_MS = 45_000;
 const SERVICE_DIR = "/home/z/my-project/mini-services/broadcast-daemon";
+/** v20.0.1 — رصدپذیری دیمن: خروجی دیمن دیگر دور ریخته نمی‌شود؛ فایل لاگ دائمی */
+const DAEMON_LOG = "/home/z/my-project/mini-services/broadcast-daemon/daemon.log";
 
 interface GuardianState {
   timer: ReturnType<typeof setInterval> | null;
@@ -51,11 +54,18 @@ function pingHealth(timeoutMs = 8_000): Promise<boolean> {
 }
 
 function spawnDaemon(): void {
-  // detached + stdio ignore — پروسه مستقل از والد بالا می‌آید (معادل nohup + setsid)
+  // detached — پروسه مستقل از والد بالا می‌آید (معادل nohup + setsid)
+  // v20.0.1 — stdout/stderr به فایل لاگ دائمی می‌رود (راستی‌آزمایی چرخه‌ها/خطاها)
+  try {
+    fs.appendFileSync(DAEMON_LOG, `\n──── guardian restart @ ${new Date().toISOString()} ────\n`);
+  } catch {
+    // لاگ اختیاری است — شکستش دیمن را نمی‌کشد
+  }
+  const out = fs.openSync(DAEMON_LOG, "a");
   const child = spawn("bun", ["run", "dev"], {
     cwd: SERVICE_DIR,
     detached: true,
-    stdio: "ignore",
+    stdio: ["ignore", out, out],
     env: { ...process.env },
   });
   child.unref();

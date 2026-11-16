@@ -49,6 +49,15 @@ async function runTick(): Promise<void> {
         console.warn("[scheduler] auto-sync failed:", err instanceof Error ? err.message : err);
       }
 
+      // ─── ۱.۵) v20.0 — گرم‌کننده سه‌گانه داشبورد (پشتیبان دیمن :3011) ───
+      // lineup → مناظره → پرتفوی بدون مرورگر، ذخیره در EngineSnapshot برای هیدراتاسیون
+      try {
+        const { warmEngineSnapshots } = await import("./engine-warmer");
+        await warmEngineSnapshots("SERVER_SCHEDULER");
+      } catch (err) {
+        console.warn("[scheduler] engine warm failed:", err instanceof Error ? err.message : err);
+      }
+
       // ─── ۲) چرخه پخش مشترک v19.0: کارت‌ها + نتایج + تمام اسلات‌های فانل ───
       const { runBroadcastCycle } = await import("./broadcast-cycle");
       await runBroadcastCycle();
