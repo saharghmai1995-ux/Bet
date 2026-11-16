@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from "@/lib/db";
+import { computeMasterLedgerMetrics } from "./master-metrics";
 import {
   renderSlipCardPNG,
   renderSlipResultPNG,
@@ -620,13 +621,11 @@ export function buildResultMessage(slip: IssuedSlip): string {
     lines.push(`💰 سود تیپ A: <b>+${(slip.profitA ?? 0).toFixed(1)}</b> · سود تیپ B: <b>+${(slip.profitB ?? 0).toFixed(1)}</b>`);
     lines.push(`🎯 جمع سود خالص (Jackpot): <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
   } else if (slip.status === "MIDDLE_TRAP") {
-    // v19.0 — سپر توقف ضرر زنده: تله میانی در دقیقه ۶۵ کش‌اوت شد و ۵۵ واحد نجات داده شد
-    const shield = slip.stopLossShield;
-    const loss = slip.netProfit ?? -100;
-    lines.push(`📉 زیان کل: <b>${loss.toFixed(1)}</b> واحد — ثبت صادقانه و شفاف`);
-    if (shield) {
-      lines.push(`🛡️ <b>سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵ واحد)</b> — به‌جای -۱۰۰، فقط ${loss.toFixed(1)} واحد زیان ثبت شد؛ باقیمانده پوزیشن با کش‌اوت زنده هج‌بات بسته شد.`);
-    }
+    // ═══ v20.0 — باخت صادقانه و کامل (حذف روایت سپر استاپ‌لاس ساختگی) ═══
+    // سند §۳: کش‌اوت ۵۵٪ در دقیقه ۶۵ وجود ندارد — کل استیک کارت از دست می‌رود (-۱۰۰ طلایی / -۵۰ نقره‌ای)
+    const loss = slip.netProfit ?? -(slip.stakeA + slip.stakeB);
+    lines.push(`📉 زیان کامل کارت: <b>${loss.toFixed(1)}</b> واحد از استیک ${(slip.stakeA + slip.stakeB).toFixed(1)} — ثبت صادقانه و شفاف (کل استیک از دست رفت)`);
+    lines.push(`🧮 محاسبه صادقانه: استیک ${(slip.stakeA + slip.stakeB).toFixed(1)} × ۱۰۰٪ زیان = <b>${loss.toFixed(1)}</b> واحد`);
   } else {
     lines.push(`💰 سود خالص: <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
     lines.push(`🧮 فرمول: ${(slip.status === "WON_A" ? `stakeA×oddsA−۱۰۰ = ${slip.stakeA.toFixed(1)}×${slip.oddsA.toFixed(2)}−۱۰۰` : `stakeB×oddsB−۱۰۰ = ${slip.stakeB.toFixed(1)}×${slip.oddsB.toFixed(2)}−۱۰۰`)}`);
@@ -855,21 +854,24 @@ export async function sendConfigTestMessage(): Promise<{ ok: boolean; detail: st
 async function channelWinRateStats() {
   // v11.0 — فقط کارت‌های واقعی تاییدشده؛ تسویه کاغذی دفتر سایه در وین‌ریت کانال دخالت نمی‌کند
   // v13.2 — فقط کارت‌های واقعی تاییدشده؛ کارت‌های بازخوانی (retroIssued) و دفتر سایه در وین‌ریت کانال دخالت نمی‌کنند
-  const settled = await db.issuedSlip.findMany({
-    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, supervisorApproved: true, retroIssued: false },
+  // ═══ v20.0 — منبع واحد حقیقت: وین‌ریت کانال دقیقاً همان computeMasterLedgerMetrics داشبورد است ═══
+  // (رفع تعریف برد ناهمخوان قبلی: (settled − middleTrap)/settled)
+  const rows = await db.issuedSlip.findMany({
+    where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] }, supervisorApproved: true, retroIssued: false, crownTier: { not: "SILVER_SHADOW" } },
     select: { status: true, netProfit: true, stakeA: true, stakeB: true },
   });
-  const st = { settled: settled.length, wonA: 0, wonB: 0, doubleWin: 0, middleTrap: 0, netProfit: 0, staked: 0 };
-  for (const s of settled) {
-    if (s.status === "WON_A") st.wonA += 1;
-    else if (s.status === "WON_B") st.wonB += 1;
-    else if (s.status === "DOUBLE_WIN") st.doubleWin += 1;
-    else if (s.status === "MIDDLE_TRAP") st.middleTrap += 1;
-    st.netProfit += s.netProfit ?? 0;
-    st.staked += s.stakeA + s.stakeB;
-  }
-  const winRatePct = st.settled > 0 ? Math.round(((st.settled - st.middleTrap) / st.settled) * 1000) / 10 : 0;
-  const netPct = st.staked > 0 ? Math.round((st.netProfit / st.staked) * 1000) / 10 : 0;
+  const master = computeMasterLedgerMetrics(rows);
+  const st = {
+    settled: master.settled,
+    wonA: master.wonA,
+    wonB: master.wonB,
+    doubleWin: master.doubleWin,
+    middleTrap: master.middleTrap,
+    netProfit: master.netProfit,
+    staked: master.totalStaked,
+  };
+  const winRatePct = master.winRatePct ?? 0;
+  const netPct = master.yieldPct ?? 0;
   // ─── v11.0 — دفتر سایه: شفافیت counterfactual وتوها (خط جداگانه گزارش) ───
   // v13.5.1 — سایه فقط وتوهای زنده است؛ کارت‌های بازخوانی (retroIssued) داخل سایه شمرده نمی‌شوند
   const shadowRows = await db.issuedSlip.findMany({
@@ -1271,11 +1273,12 @@ const KEY_LAST_DIGEST_DAY = "last_daily_digest_day";
  * KPIها: تعداد تسویه · وین‌ریت · جکپات · سود خالص واحدِ همان روز.
  * v18.4 — قفل funnel (اجرای موازی زمان‌بند + مسیر دستی = ریشه تکرار برآیند).
  */
-async function sendDailyDigestInner(force = false): Promise<boolean> {
+async function sendDailyDigestInner(force = false, dayKey?: string): Promise<boolean> {
   const status = await telegramStatus();
   if (!status.configured || !status.channelSet) return false;
 
-  const today = tehranDayKey();
+  // v20.0 — پشتیبانی جبران اسلات گم‌شده بعداز نیمه‌شب تهران: dayKey می‌تواند روزِ دیروز باشد
+  const today = dayKey ?? tehranDayKey();
   // v19.0 — ادعای اتمی روزانه (INSERT-first) — ریشه ریشه‌ای تکرار برآیند روزانه
   const digestClaim = dedupeKeyOf.digest(today);
   if (!force && !(await claimBroadcast(digestClaim, null, "DAILY_DIGEST"))) return false;
@@ -1922,13 +1925,14 @@ export async function sendPublicUnblur(): Promise<number> {
  * سود خالص واقعی روز با «افراز مجزا» — دسته الف تک‌بازی / ب میکس / ج تیپ‌های ضریب بالا.
  * صفر دوباره‌شماری: هر کارت فقط در خط تولید خودش شمرده می‌شود.
  */
-async function sendNightlyPnlInner(force = false): Promise<boolean> {
+async function sendNightlyPnlInner(force = false, dayKey?: string): Promise<boolean> {
   const token = await botToken();
   if (!token) return false;
   const chatId = await publicChannelId();
   if (!chatId) return false;
 
-  const today = tehranDayKey();
+  // v20.0 — پشتیبانی جبران اسلات گم‌شده بعداز نیمه‌شب تهران
+  const today = dayKey ?? tehranDayKey();
   // v19.0 — ادعای اتمی شبانه (INSERT-first): PNL:<day>
   const pnlClaim = dedupeKeyOf.pnl(today);
   if (!force && !(await claimBroadcast(pnlClaim, null, "FUNNEL_PNL"))) return false;

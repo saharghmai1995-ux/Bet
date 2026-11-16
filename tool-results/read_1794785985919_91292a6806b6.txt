@@ -1,0 +1,802 @@
+     1→     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→     2→// سرویس کانال تلگرام VIP (Telegram VIP Broadcaster) — v7.0
+     3→     3→//
+     4→     4→//   ۱) انتشار فلش‌کارت کامل: تصویر فوتبالی + تیپ A + تیپ B + مبالغ داچینگ +
+     5→     5→//      هش SHA-256 + لینک راستی‌آزمایی ESPN (پیام HTML فرمت‌بندی‌شده)
+     6→     6→//   ۲) حالت تیزر جذب کاربر: نام مسابقه + درصد سود تضمینی + تیپ A —
+     7→     7→//      تیپ B سانسور می‌شود (🔒 [مخصوص اعضای کانال VIP]) تا کاربران به خرید
+     8→     8→//      اشتراک VIP ترغیب شوند.
+     9→     9→//   ۳) اعلام خودکار نتیجه پس از FT: تصویر جام پیروزی برای کارت‌های برنده،
+    10→    10→//      تصویر رختکن بهم‌ریخته برای کارت‌های بازنده (شفافیت کامل).
+    11→    11→//
+    12→    12→// توکن بات: env TELEGRAM_BOT_TOKEN یا ذخیره‌شده در Setting (مودال تنظیمات)
+    13→    13→// کانال: env TELEGRAM_VIP_CHANNEL_ID یا Setting — v8.0 پیش‌فرض رسمی کانال: @aineobet
+    14→    14→// ─────────────────────────────────────────────────────────────────────────────
+    15→    15→
+    16→    16→import { db } from "@/lib/db";
+    17→    17→import {
+    18→    18→  renderSlipCardPNG,
+    19→    19→  renderSlipResultPNG,
+    20→    20→  renderSlipTeaserPNG,
+    21→    21→  renderWinRateReportPNG,
+    22→    22→  renderDailyReportPNG,
+    23→    23→  renderDailyRadarPNG,
+    24→    24→  // v13.5.1 — رفع باگ «RENDER_FAILED» بنر بازاریابی ساعتی: این تابع هیچ‌وقت import نشده بود
+    25→    25→  renderVipAdBannerPNG,
+    26→    26→  // v18.0 — قالب‌های ایجنت سوپروایزر تلگرام (آکادمی BET / خبر / بریفینگ VIP / گزارش هفتگی)
+    27→    27→  renderBetLessonPNG,
+    28→    28→  renderNewsBoardPNG,
+    29→    29→  renderVipBriefPNG,
+    30→    30→  renderWeeklyDigestPNG,
+    31→    31→} from "./slip-images";
+    32→    32→import { fetchSoccerNews, newsTimeEn } from "./news-service";
+    33→    33→// v18.1 — ترجمه فارسی خبرهای مهم برای کپشن دوزبانه (پوستر انگلیسی / کپشن فارسی)
+    34→    34→import { translateNewsBatch, newsDateFa } from "./news-translate";
+    35→    35→import { faNum } from "@/lib/format";
+    36→    36→import { marketEnLabel, SETTLEMENT_RULE_EN, SETTLEMENT_RULE_FA } from "@/lib/engine/orthogonal";
+    37→    37→import { score100Of } from "@/lib/supervisor";
+    38→    38→// v20.0 — محاسبه واقعی سود تضمینی پوششی در کپشن (پاسخ «چرا محاسبه نمی‌شود؟»)
+    39→    39→import { coverProfitOf, signedPct, signedUnit } from "./cover-profit";
+    40→    40→import type { IssuedSlip } from "@prisma/client";
+    41→    41→
+    42→    42→// ═════════════════════ تنظیمات (Setting + env) ═════════════════════
+    43→    43→
+    44→    44→const KEY_TOKEN = "telegram_bot_token";
+    45→    45→const KEY_CHANNEL = "telegram_channel_id";
+    46→    46→/** v13.0 — کانال عمومی ویترین (Public Showcase) — جدا از کانال VIP */
+    47→    47→export const KEY_PUBLIC_CHANNEL = "telegram_public_channel_id";
+    48→    48→/** v9.0 — کلید سوییچ ارسال خودکار کارت‌های تایید سوپروایزر (پیش‌فرض: روشن) */
+    49→    49→const KEY_AUTODISPATCH = "telegram_autodispatch";
+    50→    50→
+    51→    51→/**
+    52→    52→ * v13.5 — کانال عمومی رسمی کارفرما: @aineobet (رفع باگ ریشه‌ای انتشار).
+    53→    53→ * قبلاً «@aineobet_public» بود که وجود خارجی ندارد → همه پست‌های عمومی «chat not found» می‌شدند.
+    54→    54→ */
+    55→    55→export const DEFAULT_PUBLIC_CHANNEL = "@aineobet";
+    56→    56→/** v13.2 — کانال پیش‌فرض رسمی کانال VIP کارفرما (شناسه عددی کانال VIP واقعی) */
+    57→    57→export const DEFAULT_VIP_CHANNEL = "-1004487154797";
+    58→    58→
+    59→    59→/**
+    60→    60→ * v15.0 — لینک رسمی عضویت VIP در کپشن‌های کانال عمومی (تصحیح‌شده به دستور کارفرما:
+    61→    61→ * شناسه درست «@Aineobet_bot» است — نه «@aineobet_vip_bot»).
+    62→    62→ */
+    63→    63→export const VIP_MEMBERSHIP_LINK = "@Aineobet_bot";
+    64→    64→
+    65→    65→/**
+    66→    66→ * v13.2 — اعتبارسنجی قالب توکن بات تلگرام.
+    67→    67→ * توکن معتبر = <bot_id>:<hash> مثل «9147801427:AAH2...» (۴۶ کاراکتر).
+    68→    68→ * باگ ریشه‌ای کشف‌شده: توکن ناقص (فقط بخش hash) ذخیره شده بود → همه ارسال‌ها 404 Not Found.
+    69→    69→ */
+    70→    70→export function isValidBotTokenFormat(token: string): boolean {
+    71→    71→  return /^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(String(token ?? "").trim());
+    72→    72→}
+    73→    73→
+    74→    74→/** v13.2 — راستی‌آزمایی زنده توکن با متد getMe — نام کاربری بات را برمی‌گرداند */
+    75→    75→export async function verifyBotToken(token: string): Promise<{ ok: boolean; username: string | null; detail: string }> {
+    76→    76→  try {
+    77→    77→    const res = await fetch(`https://api.telegram.org/bot${token.trim()}/getMe`, { cache: "no-store" });
+    78→    78→    const json = (await res.json()) as { ok?: boolean; result?: { username?: string }; description?: string };
+    79→    79→    if (json.ok && json.result?.username) return { ok: true, username: json.result.username, detail: `@${json.result.username}` };
+    80→    80→    return { ok: false, username: null, detail: json.description ?? `HTTP ${res.status}` };
+    81→    81→  } catch (err) {
+    82→    82→    return { ok: false, username: null, detail: err instanceof Error ? err.message : "network error" };
+    83→    83→  }
+    84→    84→}
+    85→    85→
+    86→    86→export async function getSetting(key: string): Promise<string | null> {
+    87→    87→  try {
+    88→    88→    const row = await db.setting.findUnique({ where: { key } });
+    89→    89→    return row?.value ?? null;
+    90→    90→  } catch {
+    91→    91→    return null;
+    92→    92→  }
+    93→    93→}
+    94→    94→
+    95→    95→export async function setSetting(key: string, value: string): Promise<void> {
+    96→    96→  await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } });
+    97→    97→}
+    98→    98→
+    99→    99→/**
+   100→   100→ * v18.4 — claim اتمی کلید Setting برای dedupe بین‌پردازه‌ای (Atomic Dedupe Claim).
+   101→   101→ * الگوی قدیمی «check → send → write» در دو اجرای هم‌زمان (زمان‌بند + مسیر دستی یا دو
+   102→   102→ * پردازه) هر دو استمپ کهنه می‌خواند و همان پست را دوبار می‌فرستد. حالا claim قبل از
+   103→   103→ * ارسال انجام می‌شود؛ فقط یک فراخوان برنده است (SQLite تک‌نویسنده).
+   104→   104→ * خروجی false = دیگری قبلاً مالک شده — بدون ارسال.
+   105→   105→ */
+   106→   106→export async function claimSetting(key: string, value: string): Promise<boolean> {
+   107→   107→  const existing = await db.setting.findUnique({ where: { key } }).catch(() => null);
+   108→   108→  if (!existing) {
+   109→   109→    try {
+   110→   110→      await db.setting.create({ data: { key, value } });
+   111→   111→      return true;
+   112→   112→    } catch {
+   113→   113→      return false; // مسیر موازی هم‌زمان ردیف را ساخت
+   114→   114→    }
+   115→   115→  }
+   116→   116→  if (existing.value === value) return false;
+   117→   117→  const res = await db.setting.updateMany({ where: { key, value: { not: value } }, data: { value } });
+   118→   118→  return res.count === 1;
+   119→   119→}
+   120→   120→
+   121→   121→/** v18.4 — آزادسازی claim در شکست ارسال تا اسلات از دست نرود */
+   122→   122→export async function unclaimSetting(key: string, value: string): Promise<void> {
+   123→   123→  try {
+   124→   124→    await db.setting.deleteMany({ where: { key, value } });
+   125→   125→  } catch {
+   126→   126→    // بهترین‌تلاش
+   127→   127→  }
+   128→   128→}
+   129→   129→
+   130→   130→// ═══ v19.0 — ادعای اتمی Broadcast (Insert-First Claim) ═══
+   131→   131→// ریشه ریشه‌ای باگ «ارسال پیام‌های تکراری»: الگوی claim قبلی (خواندن Setting سپس
+   132→   132→// update شرطی) در هم‌پوشانی ری‌استارت‌های dev / دو پردازه موازی، توالی خواندن‌ها
+   133→   133→// را stale می‌کرد و هر دو مسیر ادعا را می‌بردند. راه‌حل مهندسی v19.0:
+   134→   134→// قبل از ارسال، یک ردیف TelegramOutbox با dedupeKey یکتا INSERT می‌شود.
+   135→   135→//   · موفق بودن INSERT  = مالکیت ارسال با ماست (اتمیک در سطح SQLite — هر تعداد
+   136→   136→//     پردازه و هر ری‌استارتی که باشد، ایندکس UNIQUE داور است)
+   137→   137→//   · شکست INSERT       = ادعای قبلی موجود → بدون ارسال
+   138→   138→// بعد از ارسال: commitBroadcast (ok=true) | در شکست: releaseBroadcast (حذف ردیف).
+   139→   139→// کلیدها: CARD:<slipId> | RESULT:<slipId> | NEWS:<day>:<slot> | BET:<day>:<slot> |
+   140→   140→// BRIEF:<day> | GIFT:<day> | AD:<day>:<hour> | DIGEST:<day> | PNL:<day> |
+   141→   141→// WEEKLY:<week> | RADAR:<day> | UNBLUR:<slipId> | TEASER:<slipId>
+   142→   142→
+   143→   143→const dedupeKeyOf = {
+   144→   144→  card: (id: string) => `CARD:${id}`,
+   145→   145→  result: (id: string) => `RESULT:${id}`,
+   146→   146→  // ═══ v20.0 — ادعای سطح-بازی (هر بازی فقط یک‌بار) ═══
+   147→   147→  // دستور کارفرما: «کارتهای تکراری به تلگرام ارسال نشود هر بازی فقط 1بار ارسال شود».
+   148→   148→  // هر مسیر انتشار کارت‌نوع (CARD به VIP + GIFT/TEASER به عمومی) اول ادعای
+   149→   149→  // MT-CARD:<matchKey> را می‌گیرد — اولین مسیرِ برنده ارسال می‌کند، بقیه skip.
+   150→   150→  // نتیجه/اثبات FT هم همین‌طور: MT-RESULT:<matchKey> (RESULT یا UNBLUR — فقط یکی).
+   151→   151→  mtCard: (matchKey: string) => `MT-CARD:${matchKey}`,
+   152→   152→  mtResult: (matchKey: string) => `MT-RESULT:${matchKey}`,
+   153→   153→  news: (day: string, slot: number) => `NEWS:${day}:${slot}`,
+   154→   154→  bet: (day: string, slot: number) => `BET:${day}:${slot}`,
+   155→   155→  brief: (day: string) => `BRIEF:${day}`,
+   156→   156→  gift: (day: string) => `GIFT:${day}`,
+   157→   157→  ad: (day: string, hour: number) => `AD:${day}:${hour}`,
+   158→   158→  digest: (day: string) => `DIGEST:${day}`,
+   159→   159→  pnl: (day: string) => `PNL:${day}`,
+   160→   160→  weekly: (week: string) => `WEEKLY:${week}`,
+   161→   161→  radar: (day: string) => `RADAR:${day}`,
+   162→   162→  unblur: (id: string) => `UNBLUR:${id}`,
+   163→   163→  teaser: (id: string) => `TEASER:${id}`,
+   164→   164→  winrate: (day: string, bucket: number) => `WINRATE:${day}:${bucket}`,
+   165→   165→};
+   166→   166→
+   167→   167→/**
+   168→   168→ * v20.0 — کلید یکتای سطح-بازی برای «هر بازی فقط یک‌بار»:
+   169→   169→ * اولویت با externalId ESPN؛ بدون آن، ترکیب تیم‌ها + روز کیک‌آف تهران.
+   170→   170→ */
+   171→   171→export function matchKeyOf(slip: Pick<IssuedSlip, "externalId" | "homeTeam" | "awayTeam" | "kickoff">): string {
+   172→   172→  if (slip.externalId && slip.externalId.trim()) return slip.externalId.trim();
+   173→   173→  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" }).format(new Date(slip.kickoff));
+   174→   174→  return `${slip.homeTeam.trim().toLowerCase()}|${slip.awayTeam.trim().toLowerCase()}|${day}`;
+   175→   175→}
+   176→   176→
+   177→   177→/** آیا این بازی قبلاً یک پست کارت‌نوع داشته؟ (کارت VIP یا گیفت/تیزر عمومی) */
+   178→   178→async function matchCardAlreadyPosted(matchKey: string): Promise<boolean> {
+   179→   179→  try {
+   180→   180→    const row = await db.telegramOutbox.findFirst({ where: { dedupeKey: { startsWith: `MT-CARD:${matchKey}` } }, select: { id: true } });
+   181→   181→    return Boolean(row);
+   182→   182→  } catch {
+   183→   183→    return false;
+   184→   184→  }
+   185→   185→}
+   186→   186→
+   187→   187→/** آیا این بازی قبلاً یک پست نتیجه‌نوع داشته؟ (نتیجه FT یا اثبات UNBLUR) */
+   188→   188→async function matchResultAlreadyPosted(matchKey: string): Promise<boolean> {
+   189→   189→  try {
+   190→   190→    const row = await db.telegramOutbox.findFirst({ where: { dedupeKey: { startsWith: `MT-RESULT:${matchKey}` } }, select: { id: true } });
+   191→   191→    return Boolean(row);
+   192→   192→  } catch {
+   193→   193→    return false;
+   194→   194→  }
+   195→   195→}
+   196→   196→
+   197→   197→async function claimBroadcast(
+   198→   198→  dedupeKey: string,
+   199→   199→  slipId: string | null,
+   200→   200→  kind: string
+   201→   201→): Promise<boolean> {
+   202→   202→  try {
+   203→   203→    await db.telegramOutbox.create({ data: { dedupeKey, slipId, kind, ok: false, detail: "CLAIMED" } });
+   204→   204→    return true;
+   205→   205→  } catch {
+   206→   206→    return false; // کلید یکتا موجود است — مسیر موازی قبلاً ادعا کرده
+   207→   207→  }
+   208→   208→}
+   209→   209→
+   210→   210→async function commitBroadcast(dedupeKey: string, ok: boolean, detail: string): Promise<void> {
+   211→   211→  try {
+   212→   212→    await db.telegramOutbox.updateMany({ where: { dedupeKey }, data: { ok, detail: detail.slice(0, 400) } });
+   213→   213→  } catch (err) {
+   214→   214→    // v18.4 — قابل مشاهده بودن شکست ژورنال (ریشه خرابی repair پرچم‌ها)
+   215→   215→    console.warn("[telegram] outbox commit failed:", dedupeKey, err instanceof Error ? err.message : err);
+   216→   216→  }
+   217→   217→}
+   218→   218→
+   219→   219→async function releaseBroadcast(dedupeKey: string): Promise<void> {
+   220→   220→  try {
+   221→   221→    await db.telegramOutbox.deleteMany({ where: { dedupeKey, ok: false, detail: "CLAIMED" } });
+   222→   222→  } catch {
+   223→   223→    // بهترین‌تلاش
+   224→   224→  }
+   225→   225→}
+   226→   226→
+   227→   227→async function botToken(): Promise<string | null> {
+   228→   228→  const stored = await getSetting(KEY_TOKEN);
+   229→   229→  return (stored && stored.trim()) || process.env.TELEGRAM_BOT_TOKEN || null;
+   230→   230→}
+   231→   231→
+   232→   232→async function channelId(): Promise<string | null> {
+   233→   233→  const stored = await getSetting(KEY_CHANNEL);
+   234→   234→  const fromEnv = process.env.TELEGRAM_VIP_CHANNEL_ID;
+   235→   235→  // v8.0 — کانال @aineobet پیش‌فرض رسمی است؛ تنظیم کاربر/env در اولویت است
+   236→   236→  return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_VIP_CHANNEL;
+   237→   237→}
+   238→   238→
+   239→   239→/** v13.0 — کانال عمومی ویترین (Public Showcase Chat ID) — پیش‌فرض @aineobet_public */
+   240→   240→export async function publicChannelId(): Promise<string | null> {
+   241→   241→  const stored = await getSetting(KEY_PUBLIC_CHANNEL);
+   242→   242→  const fromEnv = process.env.TELEGRAM_PUBLIC_CHANNEL_ID;
+   243→   243→  return (stored && stored.trim()) || (fromEnv && fromEnv.trim()) || DEFAULT_PUBLIC_CHANNEL;
+   244→   244→}
+   245→   245→
+   246→   246→export async function telegramStatus(): Promise<{
+   247→   247→  configured: boolean;
+   248→   248→  channelSet: boolean;
+   249→   249→  publicSet: boolean;
+   250→   250→  /** v13.2 — قالب توکن معتبر است؟ (تشخیص زودهنگام توکن ناقص بدون فراخوانی API) */
+   251→   251→  tokenFormat: boolean;
+   252→   252→}> {
+   253→   253→  const [token, channel, pub] = await Promise.all([botToken(), channelId(), publicChannelId()]);
+   254→   254→  return {
+   255→   255→    configured: Boolean(token),
+   256→   256→    channelSet: Boolean(channel),
+   257→   257→    publicSet: Boolean(pub),
+   258→   258→    tokenFormat: token ? isValidBotTokenFormat(token) : false,
+   259→   259→  };
+   260→   260→}
+   261→   261→
+   262→   262→// ═══════════ v9.0 — سوییچ ارسال خودکار (پیش‌فرض روشن) ═══════════
+   263→   263→
+   264→   264→export async function getAutoDispatch(): Promise<boolean> {
+   265→   265→  const v = await getSetting(KEY_AUTODISPATCH);
+   266→   266→  return v === null ? true : v === "on";
+   267→   267→}
+   268→   268→
+   269→   269→export async function setAutoDispatch(on: boolean): Promise<void> {
+   270→   270→  await setSetting(KEY_AUTODISPATCH, on ? "on" : "off");
+   271→   271→}
+   272→   272→
+   273→   273→// ═════════════════════ فرستنده پایه Bot API ═════════════════════
+   274→   274→
+   275→   275→async function tgCall(method: string, body: Record<string, unknown>): Promise<{ ok: boolean; detail: string }> {
+   276→   276→  const token = await botToken();
+   277→   277→  if (!token) return { ok: false, detail: "NO_TOKEN" };
+   278→   278→  // v13.2 — سپر توکن ناقص: خطای 404 مبهم تلگرام را با پیام دقیق جایگزین می‌کند
+   279→   279→  if (!isValidBotTokenFormat(token)) return { ok: false, detail: "INVALID_TOKEN_FORMAT" };
+   280→   280→  try {
+   281→   281→    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+   282→   282→      method: "POST",
+   283→   283→      headers: { "Content-Type": "application/json" },
+   284→   284→      body: JSON.stringify(body),
+   285→   285→      cache: "no-store",
+   286→   286→    });
+   287→   287→    const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
+   288→   288→    if (json.ok) return { ok: true, detail: `message:${json.result?.message_id ?? "?"}` };
+   289→   289→    return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
+   290→   290→  } catch (err) {
+   291→   291→    return { ok: false, detail: err instanceof Error ? err.message : "network error" };
+   292→   292→  }
+   293→   293→}
+   294→   294→
+   295→   295→async function tgSendPhotoTo(
+   296→   296→  chatId: string | null,
+   297→   297→  photo: Buffer,
+   298→   298→  caption: string,
+   299→   299→  filename = "slip-card.png",
+   300→   300→  captionless = false
+   301→   301→): Promise<{ ok: boolean; detail: string }> {
+   302→   302→  const token = await botToken();
+   303→   303→  if (!token) return { ok: false, detail: "NO_TOKEN" };
+   304→   304→  if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
+   305→   305→  // v13.2 — سپر توکن ناقص (بخش hash بدون bot_id) — ریشه باگ «انتشار انجام نمیشه»
+   306→   306→  if (!isValidBotTokenFormat(token)) return { ok: false, detail: "INVALID_TOKEN_FORMAT" };
+   307→   307→  // ═══ v20.0 — سپر «هیچ پیامی بدون تصویر کامل ارسال نشود» ═══
+   308→   308→  // امضای PNG + حداقل حجم ۲۰KB — بافر ناقص/خراب هرگز به تلگرام نمی‌رود.
+   309→   309→  if (!isValidPng(photo)) return { ok: false, detail: "PHOTO_INCOMPLETE" };
+   310→   310→  try {
+   311→   311→    // v20.0 — کپشن عکس همیشه «کاملاً HTML-معتبر و ≤۱۰۰۰ کاراکتر در مرز خط» —
+   312→   312→    // ریشه ریشه‌ای «پیام بدون تصویر»: caption.slice(0,1024) تگ HTML را نصف می‌کرد
+   313→   313→    // → تلگرام sendPhoto را با parse-error رد می‌کرد → فالبک متنی بی‌تصویر می‌رفت.
+   314→   314→    const cap = captionless ? "" : safePhotoCaption(caption);
+   315→   315→    let result = await tgSendPhotoAttempt(token, chatId, photo, cap, filename, captionless);
+   316→   316→    // v20.0 — یک ری‌تای ارسال (خطای شبکه/آپلود گذرا) — همان بافر معتبر، بدون متن جایگزین
+   317→   317→    if (!result.ok && !/parse|entities|caption/i.test(result.detail)) {
+   318→   318→      await new Promise((r) => setTimeout(r, 1500));
+   319→   319→      result = await tgSendPhotoAttempt(token, chatId, photo, cap, filename, captionless);
+   320→   320→    }
+   321→   321→    return result;
+   322→   322→  } catch (err) {
+   323→   323→    return { ok: false, detail: err instanceof Error ? err.message : "network error" };
+   324→   324→  }
+   325→   325→}
+   326→   326→
+   327→   327→/** v20.0 — اعتبارسنجی سخت PNG: امضای ۸ بایتی + حداقل ۲۰KB */
+   328→   328→function isValidPng(buf: Buffer | null | undefined): boolean {
+   329→   329→  if (!buf || buf.length < 20480) return false;
+   330→   330→  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+   331→   331→  for (let i = 0; i < 8; i++) if (buf[i] !== SIG[i]) return false;
+   332→   332→  return true;
+   333→   333→}
+   334→   334→
+   335→   335→/**
+   336→   336→ * v20.0 — کپشن ایمن عکس: برش فقط در مرز خط + بستن تگ‌های باز + سقف ۱۰۰۰ کاراکتر.
+   337→   337→ * خروجی همیشه HTML-معتبر است (تلگرام هرگز parse-error نمی‌گیرد → پیام بی‌تصویر صفر).
+   338→   338→ */
+   339→   339→export function safePhotoCaption(text: string, limit = 1000): string {
+   340→   340→  let s = String(text ?? "");
+   341→   341→  if (s.length <= limit) return s;
+   342→   342→  // برش در مرز خط — هیچ تگی نصف نمی‌شود
+   343→   343→  s = s.slice(0, limit);
+   344→   344→  const lastNl = s.lastIndexOf("\n");
+   345→   345→  if (lastNl > 200) s = s.slice(0, lastNl);
+   346→   346→  // شمارش تگ‌های باز تلگرام و بستن به ترتیب معکوس (HTML تلگرام فقط ۵ تگ پشتیبانی می‌کند)
+   347→   347→  const TAGS = ["b", "i", "u", "s", "code", "pre", "a", "blockquote"];
+   348→   348→  const stack: string[] = [];
+   349→   349→  const re = /<\/?([a-z]+)[^>]*>/gi;
+   350→   350→  let m: RegExpExecArray | null;
+   351→   351→  while ((m = re.exec(s)) !== null) {
+   352→   352→    const tag = m[1].toLowerCase();
+   353→   353→    if (!TAGS.includes(tag)) continue;
+   354→   354→    if (m[0][1] === "/") {
+   355→   355→      const idx = stack.lastIndexOf(tag);
+   356→   356→      if (idx >= 0) stack.length = idx;
+   357→   357→    } else if (!m[0].endsWith("/>")) {
+   358→   358→      stack.push(tag);
+   359→   359→    }
+   360→   360→  }
+   361→   361→  for (const tag of stack.reverse()) s += `</${tag}>`;
+   362→   362→  return s;
+   363→   363→}
+   364→   364→
+   365→   365→async function tgSendPhotoAttempt(
+   366→   366→  token: string,
+   367→   367→  chatId: string,
+   368→   368→  photo: Buffer,
+   369→   369→  caption: string,
+   370→   370→  filename: string,
+   371→   371→  captionless: boolean
+   372→   372→): Promise<{ ok: boolean; detail: string }> {
+   373→   373→  const form = new FormData();
+   374→   374→  form.append("chat_id", chatId);
+   375→   375→  if (!captionless && caption) {
+   376→   376→    form.append("caption", caption);
+   377→   377→    form.append("parse_mode", "HTML");
+   378→   378→  }
+   379→   379→  form.append("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), filename);
+   380→   380→  const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: form });
+   381→   381→  const json = (await res.json()) as { ok?: boolean; description?: string; result?: { message_id?: number } };
+   382→   382→  if (json.ok) return { ok: true, detail: `photo:${json.result?.message_id ?? "?"}${captionless ? ":broadcast" : ""}` };
+   383→   383→  return { ok: false, detail: json.description ?? `HTTP ${res.status}` };
+   384→   384→}
+   385→   385→
+   386→   386→async function tgSendPhoto(
+   387→   387→  photo: Buffer,
+   388→   388→  caption: string,
+   389→   389→  filename = "slip-card.png",
+   390→   390→  captionless = false
+   391→   391→): Promise<{ ok: boolean; detail: string }> {
+   392→   392→  return tgSendPhotoTo(await channelId(), photo, caption, filename, captionless);
+   393→   393→}
+   394→   394→
+   395→   395→/** v12.0 — ارسال مستقیم پوسترهای تولیدی سرور (نردبان مرکب/گزارش‌ها) با پشتیبانی Broadcast */
+   396→   396→export async function sendBroadcastPhoto(
+   397→   397→  photo: Buffer,
+   398→   398→  caption: string,
+   399→   399→  filename: string,
+   400→   400→  captionless = false
+   401→   401→): Promise<{ ok: boolean; detail: string }> {
+   402→   402→  const res = await tgSendPhoto(photo, caption, filename, captionless);
+   403→   403→  await logOutbox(null, "BROADCAST", res.ok, res.detail);
+   404→   404→  return res;
+   405→   405→}
+   406→   406→
+   407→   407→async function logOutbox(slipId: string | null, kind: string, ok: boolean, detail: string): Promise<void> {
+   408→   408→  try {
+   409→   409→    await db.telegramOutbox.create({ data: { slipId, kind, ok, detail: detail.slice(0, 400) } });
+   410→   410→  } catch (err) {
+   411→   411→    // v18.4 — لاگ اختیاری اما مشاهده‌پذیر: شکست نوشتن outbox پرچم repair را خراب می‌کند
+   412→   412→    // (ریشه تکرار ارسال در v18.3) — باید در لاگ سرور دیده شود.
+   413→   413→    console.warn("[telegram] outbox log failed:", kind, err instanceof Error ? err.message : err);
+   414→   414→  }
+   415→   415→}
+   416→   416→
+   417→   417→// ═══ v18.4 — ضد تکرار ارسال (Anti-Duplicate Broadcast Infrastructure) ═══
+   418→   418→// ریشه باگ «ارسال پیام‌های تکراری به کانال عمومی»: چهار مسیر ورود مستقل
+   419→   419→// (زمان‌بند سرور، runSync فید زنده، POST autodispatch، POST config dispatchNow)
+   420→   420→// هم‌زمان صف انتشار را اجرا می‌کردند؛ هر دو اسنپ‌شات stale می‌خواندند و همان
+   421→   421→// پیام را دو بار می‌فرستادند. سه سپر:
+   422→   422→//   ۱) قفل in-flight سراسری برای هر جریان ارسال (dispatch / funnel / winrate)
+   423→   423→//   ۲) claim اتمی پرچم‌های telegramCard/telegramResult قبل از ارسال (updateMany شرطی)
+   424→   424→//   ۳) آزادسازی claim در شکست ارسال تا ریتیپ بعدی از دست نرود
+   425→   425→
+   426→   426→const gBroadcast = globalThis as unknown as {
+   427→   427→  __fqDispatchInFlight?: boolean;
+   428→   428→  __fqFunnelLock?: Promise<unknown> | null;
+   429→   429→};
+   430→   430→
+   431→   431→/** قفل رشته‌ای funnel — اجرای هم‌زمان دو پست فانل (دو مسیر ورود) را سریال می‌کند */
+   432→   432→function withFunnelLock<F extends (...args: never[]) => Promise<unknown>>(fn: F): F {
+   433→   433→  return (async (...args: Parameters<F>) => {
+   434→   434→    const prev = gBroadcast.__fqFunnelLock ?? Promise.resolve();
+   435→   435→    let release!: () => void;
+   436→   436→    const gate = new Promise<void>((r) => (release = r));
+   437→   437→    gBroadcast.__fqFunnelLock = prev.then(() => gate);
+   438→   438→    await prev.catch(() => undefined);
+   439→   439→    try {
+   440→   440→      return await fn(...(args as Parameters<F>));
+   441→   441→    } finally {
+   442→   442→      release();
+   443→   443→      if (gBroadcast.__fqFunnelLock === gate) gBroadcast.__fqFunnelLock = null;
+   444→   444→    }
+   445→   445→  }) as F;
+   446→   446→}
+   447→   447→
+   448→   448→/**
+   449→   449→ * claim اتمی پرچم تلگرام اسلیپ — فقط یک فراخوان برنده می‌شود (SQLite تک‌نویسنده).
+   450→   450→ * خروجی true = مالکیت ارسال با ماست؛ false = مسیر موازی قبلاً مالک شده (بدون ارسال).
+   451→   451→ */
+   452→   452→async function claimSlipFlag(slipId: string, field: "telegramCard" | "telegramResult"): Promise<boolean> {
+   453→   453→  const res = await db.issuedSlip.updateMany({
+   454→   454→    where: { id: slipId, [field]: false },
+   455→   455→    data: { [field]: true },
+   456→   456→  });
+   457→   457→  return res.count === 1;
+   458→   458→}
+   459→   459→
+   460→   460→/** آزادسازی claim در شکست ارسال — مسیر بعدی دوباره تلاش می‌کند */
+   461→   461→async function releaseSlipFlag(slipId: string, field: "telegramCard" | "telegramResult"): Promise<void> {
+   462→   462→  try {
+   463→   463→    await db.issuedSlip.update({ where: { id: slipId }, data: { [field]: false } });
+   464→   464→  } catch {
+   465→   465→    // آزادسازی بهترین‌تلاش
+   466→   466→  }
+   467→   467→}
+   468→   468→
+   469→   469→// ═════════════════════ فرار HTML تلگرام ═════════════════════
+   470→   470→
+   471→   471→function esc(s: string): string {
+   472→   472→  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+   473→   473→}
+   474→   474→
+   475→   475→// ═════════════════════ سازنده پیام کارت کامل ═════════════════════
+   476→   476→
+   477→   477→/** پیام HTML فلش‌کارت کامل — تیپ A + تیپ B + داچینگ + SHA-256 + لینک ESPN */
+   478→   478→export function buildCardMessage(slip: IssuedSlip): string {
+   479→   479→  const kickoff = new Date(slip.kickoff).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+   480→   480→  // v15.0 — نام رسمی بین‌المللی مارکت هر تیپ (Institutional Execution Metadata)
+   481→   481→  const legKeys = (json: string): string[] => {
+   482→   482→    try {
+   483→   483→      const arr = JSON.parse(json);
+   484→   484→      return Array.isArray(arr) ? arr.map((l: { key?: string }) => String(l?.key ?? l)) : [];
+   485→   485→    } catch {
+   486→   486→      return [];
+   487→   487→    }
+   488→   488→  };
+   489→   489→  const marketAEn = marketEnLabel(legKeys(slip.legsA)[0] ?? "");
+   490→   490→  const marketBEn = marketEnLabel(legKeys(slip.legsB)[0] ?? "");
+   491→   491→  const lines: string[] = [];
+   492→   492→  // v18.0 — نشان سطح تاج کارت (Two-Tier Crown System)
+   493→   493→  if (slip.crownTier === "SILVER_SHADOW") {
+   494→   494→    lines.push(`🥈 <b>فوتبال‌کوانت — تاج نقره‌ای سطح ۲ · شکارچی آلفای سایه (استیک نصف ۵۰ واحدی Half-Kelly)</b>`);
+   495→   495→  } else {
+   496→   496→    lines.push(`⚽️ <b>فوتبال‌کوانت — فلش‌کارت الگوی طلایی اتمیک v18.0</b>`);
+   497→   497→  }
+   498→   498→  lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
+   499→   499→  lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
+   500→   500→  if (slip.archetype) lines.push(`📐 الگو: ${esc(slip.archetype)}`);
+   501→   501→  lines.push("");
+   502→   502→  lines.push(`🔹 <b>تیپ A</b> (ضریب ${slip.oddsA.toFixed(2)}): ${esc(slip.labelA)}`);
+   503→   503→  lines.push(`🏷 Market (EN): <i>${esc(marketAEn)}</i>`);
+   504→   504→  lines.push(`💵 مبلغ داچینگ A: <b>${slip.stakeA.toFixed(1)}</b> واحد`);
+   505→   505→  lines.push("");
+   506→   506→  lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): ${esc(slip.labelB)}`);
+   507→   507→  lines.push(`🏷 Market (EN): <i>${esc(marketBEn)}</i>`);
+   508→   508→  lines.push(`💵 مبلغ داچینگ B: <b>${slip.stakeB.toFixed(1)}</b> واحد`);
+   509→   509→  lines.push("");
+   510→   510→  lines.push(`${esc(SETTLEMENT_RULE_FA)}`);
+   511→   511→  // ─── v10.0 — ارزش عددی نسبت به خط مرجع (همیشه عدد دارد) ───
+   512→   512→  if (slip.edgeA !== null || slip.edgeB !== null) {
+   513→   513→    const isPin = slip.edgeSourceA === "PINNACLE" || slip.edgeSourceB === "PINNACLE";
+   514→   514→    const src = isPin ? "خط شارپ پیناکل" : "خط منصفانه بازار";
+   515→   515→    const fa = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`;
+   516→   516→    const a = slip.edgeA !== null ? fa(slip.edgeA) : "—";
+   517→   517→    const b = slip.edgeB !== null ? fa(slip.edgeB) : "—";
+   518→   518→    lines.push(`📈 ارزش عددی نسبت به ${src}: تیپ A <b>${a}</b> · تیپ B <b>${b}</b>`);
+   519→   519→    if (isPin) {
+   520→   520→      const cmp = (odds: number, pin: number | null): string | null =>
+   521→   521→        pin && pin > 1.01 ? `${odds.toFixed(2)} در برابر خط ${pin.toFixed(2)}` : null;
+   522→   522→      const pa = slip.edgeSourceA === "PINNACLE" ? cmp(slip.oddsA, slip.pinnacleOddsA) : null;
+   523→   523→      const pb = slip.edgeSourceB === "PINNACLE" ? cmp(slip.oddsB, slip.pinnacleOddsB) : null;
+   524→   524→      const parts = [pa ? `تیپ A: ${pa}` : null, pb ? `تیپ B: ${pb}` : null].filter((x): x is string => Boolean(x));
+   525→   525→      if (parts.length > 0) lines.push(`📌 مقایسه قیمت با خط پیناکل: ${parts.join(" · ")}`);
+   526→   526→    }
+   527→   527→  }
+   528→   528→  // ─── v10.0 — بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ───
+   529→   529→  if (slip.timingWindowA || slip.timingWindowB) {
+   530→   530→    const winName = timingWindowLabel(slip.timingWindowA ?? slip.timingWindowB);
+   531→   531→    const start = slip.timingStartA ?? slip.timingStartB;
+   532→   532→    const end = slip.timingEndA ?? slip.timingEndB;
+   533→   533→    const fmt = (d: Date) => new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tehran" }).format(d);
+   534→   534→    const range = start && end ? ` | ساعت دقیق پیشنهادی ثبت: ${fmt(new Date(start))} تا ${fmt(new Date(end))} (تهران)` : "";
+   535→   535→    lines.push(`⏱️ بهترین زمان ثبت این تیپ: <b>${esc(winName)}</b>${range}`);
+   536→   536→  }
+   537→   537→  // ═══ v20.0 — سود تضمینی پوششی «محاسبه‌شده» از اعداد واقعی کارت (نه مقدار ذخیره‌شده) ═══
+   538→   538→  const cover = coverProfitOf(slip);
+   539→   539→  if (cover.hedged) {
+   540→   540→    lines.push(
+   541→   541→      `💰 سود تضمینی پوششی (بدترین سناریو): <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)} واحد از ${cover.staked.toFixed(0)} استیک)`
+   542→   542→    );
+   543→   543→    lines.push(`   🧮 برد تیپ A: ${signedUnit(cover.profitIfA)} واحد · برد تیپ B: ${signedUnit(cover.profitIfB ?? 0)} واحد — هر نتیجه‌ای همین است`);
+   544→   544→  } else {
+   545→   545→    lines.push(`💰 سود در صورت برد (تک‌ستونه — پوشش ندارد): <b>${signedUnit(cover.profitIfA)}</b> واحد · ریسک کامل: −${cover.staked.toFixed(0)}`);
+   546→   546→  }
+   547→   547→  lines.push(`🔐 هش راستی‌آزمایی SHA-256:\n<code>${slip.hash.slice(0, 32)}</code>`);
+   548→   548→  if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">لینک راستی‌آزمایی رسمی ESPN</a>`);
+   549→   549→  lines.push("");
+   550→   550→  lines.push(`⚖️ ابزار تحلیل کمّی — مسئولیت استفاده با کاربر است.`);
+   551→   551→  return lines.join("\n");
+   552→   552→}
+   553→   553→
+   554→   554→/** برچسب فارسی پنجره زمانی v10.0 */
+   555→   555→function timingWindowLabel(key: string | null): string {
+   556→   556→  switch (key) {
+   557→   557→    case "EARLY_FAVORITE":
+   558→   558→      return "⏰ پنجره شکار فاوریت — Early Favorite (T-24h تا T-12h)";
+   559→   559→    case "LINEUP_SHOCK":
+   560→   560→      return "⚡ پنجره طلایی ترکیب رسمی — Lineup Shock (T-60m تا T-45m)";
+   561→   561→    case "LATE_UNDERDOG":
+   562→   562→      return "🎯 پنجره اوج آندرداگ — Late Underdog Peak (T-30m تا T-10m)";
+   563→   563→    default:
+   564→   564→      return "پنجره استاندارد";
+   565→   565→  }
+   566→   566→}
+   567→   567→
+   568→   568→// ═════════════════════ سازنده پیام تیزر (تیپ B سانسور) ═════════════════════
+   569→   569→
+   570→   570→/** پیام HTML تیزر جذب مشترک: تیپ A رایگان، تیپ B قفل VIP */
+   571→   571→export function buildTeaserMessage(slip: IssuedSlip): string {
+   572→   572→  const kickoff = new Date(slip.kickoff).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+   573→   573→  const lines: string[] = [];
+   574→   574→  lines.push(`🔥 <b>تیپ رایگان امروز — فوتبال‌کوانت</b> 🔥`);
+   575→   575→  lines.push(`🏆 <b>${esc(slip.homeTeam)}</b> × <b>${esc(slip.awayTeam)}</b>`);
+   576→   576→  lines.push(`📡 ${esc(slip.league)} · ⏰ ${kickoff}`);
+   577→   577→  lines.push("");
+   578→   578→  lines.push(`🔹 <b>تیپ A</b> (ضریب ${slip.oddsA.toFixed(2)}): ${esc(slip.labelA)}`);
+   579→   579→  lines.push(`💵 مبلغ داچینگ A: <b>${slip.stakeA.toFixed(1)}</b> واحد`);
+   580→   580→  // v20.0 — سود تضمینی پوششی واقعی (محاسبه‌شده از ضریب/استیک، نه marginPct ذخیره‌شده)
+   581→   581→  const cover = coverProfitOf(slip);
+   582→   582→  lines.push(`💰 سود تضمینی پوششی: <b>${signedPct(cover.guaranteePct)}</b> (${signedUnit(cover.guarantee)} واحد)`);
+   583→   583→  lines.push("");
+   584→   584→  lines.push(`🟢 <b>تیپ B مکمل</b> (ضریب ${slip.oddsB.toFixed(2)}): 🔒 <b>[مخصوص اعضای کانال VIP]</b>`);
+   585→   585→  lines.push(`💵 مبلغ داچینگ B: 🔒 <b>[مخصوص اعضای کانال VIP]</b>`);
+   586→   586→  lines.push("");
+   587→   587→  lines.push(`👑 برای دریافت پوشش کامل و تیپ B (ضریب ~۳) در کانال VIP عضو شوید.`);
+   588→   588→  lines.push(`🔐 هش سند: <code>${slip.hash.slice(0, 16)}</code>`);
+   589→   589→  if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">راستی‌آزمایی ESPN</a>`);
+   590→   590→  return lines.join("\n");
+   591→   591→}
+   592→   592→
+   593→   593→// ═════════════════════ سازنده پیام نتیجه پس از تسویه ═════════════════════
+   594→   594→
+   595→   595→export function slipResultLabel(status: string): { label: string; emoji: string; win: boolean } {
+   596→   596→  switch (status) {
+   597→   597→    case "WON_A":
+   598→   598→      return { label: "برد تیپ A (Slip A Won)", emoji: "🟢", win: true };
+   599→   599→    case "WON_B":
+   600→   600→      return { label: "برد تیپ B (Slip B Won)", emoji: "🟢", win: true };
+   601→   601→    case "DOUBLE_WIN":
+   602→   602→      return { label: "برد طلایی هر دو تیپ — Double-Win Jackpot", emoji: "🏆", win: true };
+   603→   603→    case "MIDDLE_TRAP":
+   604→   604→      return { label: "تله میانی — باخت همزمان (Middle Trap)", emoji: "🔴", win: false };
+   605→   605→    default:
+   606→   606→      return { label: status, emoji: "⚪️", win: false };
+   607→   607→  }
+   608→   608→}
+   609→   609→
+   610→   610→export function buildResultMessage(slip: IssuedSlip): string {
+   611→   611→  const r = slipResultLabel(slip.status);
+   612→   612→  const score = slip.homeGoals !== null && slip.awayGoals !== null ? `${slip.homeGoals}−${slip.awayGoals}` : "؟";
+   613→   613→  const lines: string[] = [];
+   614→   614→  lines.push(`${r.emoji} <b>نتیجه نهایی کارت</b> ${r.emoji}`);
+   615→   615→  lines.push(`🏆 <b>${esc(slip.homeTeam)} ${score} ${esc(slip.awayTeam)}</b>`);
+   616→   616→  lines.push(`📡 ${esc(slip.league)} · FT (منبع رسمی ESPN)`);
+   617→   617→  lines.push("");
+   618→   618→  lines.push(`نتیجه: <b>${r.label}</b>`);
+   619→   619→  if (slip.status === "DOUBLE_WIN") {
+   620→   620→    lines.push(`💰 سود تیپ A: <b>+${(slip.profitA ?? 0).toFixed(1)}</b> · سود تیپ B: <b>+${(slip.profitB ?? 0).toFixed(1)}</b>`);
+   621→   621→    lines.push(`🎯 جمع سود خالص (Jackpot): <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
+   622→   622→  } else if (slip.status === "MIDDLE_TRAP") {
+   623→   623→    // v19.0 — سپر توقف ضرر زنده: تله میانی در دقیقه ۶۵ کش‌اوت شد و ۵۵ واحد نجات داده شد
+   624→   624→    const shield = slip.stopLossShield;
+   625→   625→    const loss = slip.netProfit ?? -100;
+   626→   626→    lines.push(`📉 زیان کل: <b>${loss.toFixed(1)}</b> واحد — ثبت صادقانه و شفاف`);
+   627→   627→    if (shield) {
+   628→   628→      lines.push(`🛡️ <b>سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵ واحد)</b> — به‌جای -۱۰۰، فقط ${loss.toFixed(1)} واحد زیان ثبت شد؛ باقیمانده پوزیشن با کش‌اوت زنده هج‌بات بسته شد.`);
+   629→   629→    }
+   630→   630→  } else {
+   631→   631→    lines.push(`💰 سود خالص: <b>${(slip.netProfit ?? 0) >= 0 ? "+" : ""}${(slip.netProfit ?? 0).toFixed(1)}</b> واحد`);
+   632→   632→    lines.push(`🧮 فرمول: ${(slip.status === "WON_A" ? `stakeA×oddsA−۱۰۰ = ${slip.stakeA.toFixed(1)}×${slip.oddsA.toFixed(2)}−۱۰۰` : `stakeB×oddsB−۱۰۰ = ${slip.stakeB.toFixed(1)}×${slip.oddsB.toFixed(2)}−۱۰۰`)}`);
+   633→   633→  }
+   634→   634→  lines.push(`🔐 هش سند: <code>${slip.hash.slice(0, 32)}</code>`);
+   635→   635→  if (slip.espnUrl) lines.push(`🔎 <a href="${slip.espnUrl}">راستی‌آزمایی نتیجه در ESPN</a>`);
+   636→   636→  return lines.join("\n");
+   637→   637→}
+   638→   638→
+   639→   639→// ═════════════════════ انتشار عمومی ═════════════════════
+   640→   640→
+   641→   641→export type PublishMode = "CARD" | "TEASER";
+   642→   642→
+   643→   643→/**
+   644→   644→ * انتشار کارت/تیزر به کانال VIP:
+   645→   645→ * تصویر فوتبالی دو تیم + پیام HTML. تیپ B در حالت TEASER سانسور می‌شود.
+   646→   646→ * v9.0 — فیلتر سختگیرانه سوپروایزر: بازی وتوشده مطلقاً به تلگرام ارسال نمی‌شود.
+   647→   647→ * v18.4 — ضد تکرار: claim اتمی telegramCard قبل از ارسال؛ انتشار دستی با force:true
+   648→   648→ * می‌تواند پرچم را دور بزند (دکمه دستی پنل) — مسیر خودکار هرگز دو بار نمی‌فرستد.
+   649→   649→ */
+   650→   650→export async function publishSlipToTelegram(
+   651→   651→  slip: IssuedSlip,
+   652→   652→  mode: PublishMode,
+   653→   653→  opts?: { force?: boolean }
+   654→   654→): Promise<{ ok: boolean; detail: string; preview: string }> {
+   655→   655→  const preview = mode === "CARD" ? buildCardMessage(slip) : buildTeaserMessage(slip);
+   656→   656→  if (!slip.supervisorApproved) {
+   657→   657→    await logOutbox(slip.id, mode, false, "VETOED_BY_SUPERVISOR");
+   658→   658→    return { ok: false, detail: "VETOED_BY_SUPERVISOR", preview };
+   659→   659→  }
+   660→   660→  // v13.2 — کارت بازخوانی (بازی هنگام صدور از قبل FT بود) هرگز به کانال نمی‌رود؛
+   661→   661→  // انتشار «کارت پیش‌بازی» پس از پایان بازی فاقد اعتبار است.
+   662→   662→  if (slip.retroIssued) {
+   663→   663→    await logOutbox(slip.id, mode, false, "RETRO_CARD_NOT_PUBLISHABLE");
+   664→   664→    return { ok: false, detail: "RETRO_CARD_NOT_PUBLISHABLE", preview };
+   665→   665→  }
+   666→   666→  const status = await telegramStatus();
+   667→   667→  if (!status.configured || !status.channelSet || !status.tokenFormat) {
+   668→   668→    await logOutbox(slip.id, mode, false, status.configured ? "TELEGRAM_NOT_CONFIGURED" : "INVALID_TOKEN_FORMAT");
+   669→   669→    return { ok: false, detail: "TELEGRAM_NOT_CONFIGURED", preview };
+   670→   670→  }
+   671→   671→
+   672→   672→  // ═══ v20.0 — ادعای سطح-بازی: هر بازی فقط یک‌بار پست کارت‌نوع می‌گیرد ═══
+   673→   673→  // اگر CARD/GIFT/TEASER قبلاً برای این بازی رفته باشد، هیچ مسیر دومی دوباره نمی‌فرستد.
+   674→   674→  const mKey = matchKeyOf(slip);
+   675→   675→  if (mode === "CARD" && !opts?.force && (await matchCardAlreadyPosted(mKey))) {
+   676→   676→    await logOutbox(slip.id, mode, true, "MATCH_ALREADY_POSTED");
+   677→   677→    await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: true } }).catch(() => {});
+   678→   678→    return { ok: false, detail: "MATCH_ALREADY_POSTED", preview };
+   679→   679→  }
+   680→   680→
+   681→   681→  // v18.4 — claim اتمی: اگر مسیر موازی همین کارت را در حال ارسال/ارسال‌شده است، skip
+   682→   682→  if (mode === "CARD" && !opts?.force) {
+   683→   683→    const claimed = await claimSlipFlag(slip.id, "telegramCard");
+   684→   684→    if (!claimed) {
+   685→   685→      return { ok: false, detail: "ALREADY_SENT_OR_CLAIMED", preview };
+   686→   686→    }
+   687→   687→    // v19.0 — لایه دوم ادعا (INSERT-first، اتمیک بین پردازه‌ها): کلید CARD:<slipId>
+   688→   688→    if (!(await claimBroadcast(dedupeKeyOf.card(slip.id), slip.id, "CARD"))) {
+   689→   689→      await releaseSlipFlag(slip.id, "telegramCard");
+   690→   690→      return { ok: false, detail: "ALREADY_SENT_OR_CLAIMED", preview };
+   691→   691→    }
+   692→   692→    // v20.0 — لایه سوم: ادعای سطح-بازی MT-CARD:<matchKey> (ضدتکرار بین مسیرها)
+   693→   693→    if (!(await claimBroadcast(dedupeKeyOf.mtCard(mKey), slip.id, "MT_CARD"))) {
+   694→   694→      await releaseSlipFlag(slip.id, "telegramCard");
+   695→   695→      await releaseBroadcast(dedupeKeyOf.card(slip.id));
+   696→   696→      await logOutbox(slip.id, mode, true, "MATCH_ALREADY_POSTED");
+   697→   697→      await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramCard: true } }).catch(() => {});
+   698→   698→      return { ok: false, detail: "MATCH_ALREADY_POSTED", preview };
+   699→   699→    }
+   700→   700→  }
+   701→   701→
+   702→   702→  try {
+   703→   703→    // ═══ v20.0 — هیچ پیامی بدون تصویر کامل ارسال نمی‌شود ═══
+   704→   704→    // فالبک متنی حذف شد: رندر ناموفق → هیچ پستی نمی‌رود؛ ادعا آزاد و تیک بعدی
+   705→   705→    // (۹۰ ثانیه بعد) دوباره تلاش می‌کند. کپشن هم در tgSendPhotoTo ایمن می‌شود.
+   706→   706→    let photo: Buffer | null = null;
+   707→   707→    for (let attempt = 0; attempt < 2 && photo === null; attempt++) {
+   708→   708→      try {
+   709→   709→        photo = mode === "TEASER" ? await renderSlipTeaserPNG(slip) : await renderSlipCardPNG(slip);
+   710→   710→      } catch (err) {
+   711→   711→        console.warn(`[telegram] card render attempt ${attempt + 1} failed:`, err instanceof Error ? err.message : err);
+   712→   712→      }
+   713→   713→    }
+   714→   714→    if (!photo) {
+   715→   715→      if (mode === "CARD") {
+   716→   716→        await releaseSlipFlag(slip.id, "telegramCard");
+   717→   717→        await releaseBroadcast(dedupeKeyOf.card(slip.id));
+   718→   718→        await releaseBroadcast(dedupeKeyOf.mtCard(mKey));
+   719→   719→      }
+   720→   720→      await logOutbox(slip.id, mode, false, "RENDER_FAILED_NO_POST");
+   721→   721→      return { ok: false, detail: "RENDER_FAILED_NO_POST", preview };
+   722→   722→    }
+   723→   723→
+   724→   724→    const result = await tgSendPhoto(photo, preview, `slip-${slip.hash.slice(0, 10)}.png`);
+   725→   725→
+   726→   726→    await logOutbox(slip.id, mode, result.ok, result.detail);
+   727→   727→    if (result.ok) {
+   728→   728→      if (mode === "TEASER") {
+   729→   729→        await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramTeaser: true } });
+   730→   730→      }
+   731→   731→      // telegramCard در claim ست شده — فقط تایید نهایی
+   732→   732→      // v19.0 — commit ردیف ادعای outbox (ok=true) تا repair پرچم‌ها ارسال موفق را ببیند
+   733→   733→      if (mode === "CARD") await commitBroadcast(dedupeKeyOf.card(slip.id), true, result.detail);
+   734→   734→      return { ...result, preview };
+   735→   735→    }
+   736→   736→    // v18.4 — شکست ارسال → آزادسازی claim تا ریتیپ بعدی مسیر کار را از دست ندهد
+   737→   737→    if (mode === "CARD") {
+   738→   738→      await releaseSlipFlag(slip.id, "telegramCard");
+   739→   739→      await releaseBroadcast(dedupeKeyOf.card(slip.id));
+   740→   740→      await releaseBroadcast(dedupeKeyOf.mtCard(mKey));
+   741→   741→    }
+   742→   742→    return { ...result, preview };
+   743→   743→  } catch (err) {
+   744→   744→    // رندر/شبکه شکست خورد → آزادسازی claim
+   745→   745→    if (mode === "CARD") {
+   746→   746→      await releaseSlipFlag(slip.id, "telegramCard");
+   747→   747→      await releaseBroadcast(dedupeKeyOf.card(slip.id));
+   748→   748→      await releaseBroadcast(dedupeKeyOf.mtCard(mKey));
+   749→   749→    }
+   750→   750→    throw err;
+   751→   751→  }
+   752→   752→}
+   753→   753→
+   754→   754→/**
+   755→   755→ * اعلام خودکار نتیجه پس از FT:
+   756→   756→ * برنده → تصویر جام پیروزی | بازنده → تصویر رختکن بهم‌ریخته
+   757→   757→ * v13.5 — نتایج فقط به «کانال عمومی @aineobet» می‌روند (دستور کارفرما: کانال عمومی فقط نتیجه؛
+   758→   758→ * کانال VIP فقط فلش‌کارت بازی + برآیند روزانه).
+   759→   759→ * v18.4 — ضد تکرار: claim اتمی telegramResult قبل از ارسال (ریشه ارسال تکراری نتایج —
+   760→   760→ * سه مسیر موازی هم‌زمان این تابع را صدا می‌زدند)؛ شکست ارسال → آزادسازی claim برای ریتیپ.
+   761→   761→ */
+   762→   762→export async function sendSettlementNotification(slip: IssuedSlip, opts?: { force?: boolean }): Promise<boolean> {
+   763→   763→  // v11.0 — سپر مطلق دفتر سایه: کارت وتوشده سوپروایزر هرگز نتیجه هم به کانال نمی‌رود
+   764→   764→  if (!slip.supervisorApproved) return false;
+   765→   765→  // v13.2 — کارت بازخوانی (بازی FT پیش از صدور) هرگز به کانال اعلام نمی‌شود —
+   766→   766→  // کارتی که هرگز منتشر نشده نتیجه هم ندارد (جلوگیری از MIDDLE_TRAP‌های هرگز-صادرنشده)
+   767→   767→  if (slip.retroIssued) return false;
+   768→   768→  const status = await telegramStatus();
+   769→   769→  if (!status.configured || !status.channelSet || !status.tokenFormat) return false;
+   770→   770→  if (slip.homeGoals === null || slip.awayGoals === null) return false;
+   771→   771→
+   772→   772→  const chatId = await publicChannelId();
+   773→   773→  if (!chatId) return false;
+   774→   774→
+   775→   775→  // ═══ v20.0 — ادعای سطح-بازی نتیجه: هر بازی فقط یک‌بار پست نتیجه‌نوع می‌گیرد ═══
+   776→   776→  const mKey = matchKeyOf(slip);
+   777→   777→  if (!opts?.force && (await matchResultAlreadyPosted(mKey))) {
+   778→   778→    await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } }).catch(() => {});
+   779→   779→    return false;
+   780→   780→  }
+   781→   781→
+   782→   782→  // v18.4 — claim اتمی مالکیت ارسال نتیجه (بدون این، دو مسیر موازی دوبار می‌فرستند)
+   783→   783→  if (!opts?.force) {
+   784→   784→    const claimed = await claimSlipFlag(slip.id, "telegramResult");
+   785→   785→    if (!claimed) return false;
+   786→   786→    // v19.0 — لایه دوم ادعا (INSERT-first اتمیک بین پردازه‌ها): RESULT:<slipId>
+   787→   787→    if (!(await claimBroadcast(dedupeKeyOf.result(slip.id), slip.id, "RESULT"))) {
+   788→   788→      await releaseSlipFlag(slip.id, "telegramResult");
+   789→   789→      return false;
+   790→   790→    }
+   791→   791→    // v20.0 — لایه سوم: ادعای سطح-بازی MT-RESULT:<matchKey> (نتیجه یا اثبات UNBLUR — فقط یکی)
+   792→   792→    if (!(await claimBroadcast(dedupeKeyOf.mtResult(mKey), slip.id, "MT_RESULT"))) {
+   793→   793→      await releaseSlipFlag(slip.id, "telegramResult");
+   794→   794→      await releaseBroadcast(dedupeKeyOf.result(slip.id));
+   795→   795→      await db.issuedSlip.update({ where: { id: slip.id }, data: { telegramResult: true } }).catch(() => {});
+   796→   796→      return false;
+   797→   797→    }
+   798→   798→  }
+   799→   799→
+   800→   800→  const caption = buildResultMessage(slip);
+
+[showing lines 1-800 of 2002; use offset=801 with limit to continue reading]

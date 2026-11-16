@@ -100,6 +100,20 @@ export async function runBroadcastCycle(options?: {
     winRate: false,
   };
 
+  // ═══ ۰) v20.0 — هسته موتور داخل چرخه پخش (استقلال کامل از مرورگر و سرور Next) ═══
+  // اسکن ESPN → صدور کارت → تسویه FT → کالیبراسیون دسته‌ها — خودتنظیم با TTL ۱۰ دقیقه؛
+  // حتی اگر سرور Next در حال ری‌استارت باشد و زمان‌بند درون Next خاموش باشد، دیمن مستقل
+  // :3011 کل خط لوله موتور را گرم و پایدار نگه می‌دارد.
+  try {
+    const { autoSyncPastAndPresentMatches } = await import("./auto-issue");
+    const sync = await autoSyncPastAndPresentMatches({ notify: true });
+    if (sync.scanned > 0) {
+      console.log(`[broadcast-cycle] engine sync: scanned=${sync.scanned} today=${sync.registeredToday} settled=${sync.settled} vetoed=${sync.vetoed}`);
+    }
+  } catch (err) {
+    console.warn("[broadcast-cycle] engine sync failed:", err instanceof Error ? err.message : err);
+  }
+
   // ─── ۱) صف انتشار تلگرام (کارت‌های تایید سوپروایزر + نتایج FT) ───
   // v16.0 — سقف هر پاس: ۴ کارت / ۳ نتیجه — فلش‌کارت‌های «بازی‌های روز» قبل از کیک‌آف
   // کامل مخابره می‌شوند؛ v19.0 — ادعای اتمی INSERT-first ضد تکرار بین پردازه‌ها.
@@ -127,6 +141,13 @@ export async function runBroadcastCycle(options?: {
   try {
     const funnel = await import("./telegram-service");
     const th = tehranNow();
+
+    // ─── v20.0 — جبران اسلات‌های گم‌شده روز قبل (Slot Catch-Up Ledger) ───
+    // ریشه «هیچ پستی ارسال نمی‌شود»: اگر سیستم در طول روز تهران خاموش بوده، همه اسلات‌های
+    // آن روز (خبر/درس/بریفینگ/کارت هدیه/برآیند) برای همیشه گم می‌شدند چون catch-up قدیمی
+    // فقط «درون همان روز تهران» کار می‌کرد و بعد از نیمه‌شب می‌مُرد. حالا: اولین تیک
+    // پنجره بازاریابی هر روز، اسلات‌های تایید‌نشدهِ دیروز را چک می‌کند و دقیقاً یک‌بار جبران می‌کند.
+    await catchUpMissedSlots(funnel);
 
     // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — هر تیک بین ۹ تا ۲۳ تلاش می‌شود ───
     if (th.hour >= MARKETING_START_HOUR && th.hour <= MARKETING_END_HOUR) {
@@ -185,4 +206,115 @@ export async function runBroadcastCycle(options?: {
   }
 
   return out;
+}
+
+// ═══ v20.0 — دفتر جبران اسلات‌های گم‌شده (Slot Catch-Up Ledger) ═══
+// کلید روزانه‌ی جبران: فقط یک‌بار در روز اجرا می‌شود (claim اتمی).
+const CATCHUP_DAY_KEY = "broadcast_catchup_last_day";
+
+/**
+ * catchUpMissedSlots — جبران کراس-نیمه‌شب اسلات‌های از‌دست‌رفته:
+ * اگر روز تهرانِ قبل هر اسلاتی (خبر ×۲ / درس ×۲ / بریفینگ VIP / کارت هدیه /
+ * برآیند روزانه / برآیند شبانه) بدون ارسال موفق مانده باشد، اولین تیک پنجره
+ * بازاریابی امروز (۰۹:۰۰+) همان محتوا را دقیقاً یک‌بار جبران می‌کند:
+ *   · NEWS/BET/BRIEF/GIFT → با کلید اتمی «امروز» ارسال می‌شوند (محتوای تازه؛
+ *     اسلات معادل امروز مصرف می‌شود — هیچ ارسال دوباره‌ای شکل نمی‌گیرد)
+ *   · DIGEST/PNL → با کلید اتمی «دیروز» و داده‌های همان روز جبران می‌شوند
+ *     (پارامتر dayKey override — محتوای واقعیِ روزِ از‌دست‌رفته)
+ * هیچ اسلاتی دیگر «برای همیشه» گم نمی‌شود — حتی پس از خاموشی شبانه/ری‌استارت.
+ */
+async function catchUpMissedSlots(
+  funnel: typeof import("./telegram-service")
+): Promise<void> {
+  try {
+    const th = tehranNow();
+    // فقط در پنجره بازاریابی (۰۹ تا ۲۳ تهران) — جبران در ساعت معقول مخابره می‌شود
+    if (th.hour < MARKETING_START_HOUR || th.hour > MARKETING_END_HOUR) return;
+
+    // کلید اتمی روزانه: فقط اولین تیک روز جبران را اجرا می‌کند
+    const { claimSetting, getSetting } = await import("./telegram-service");
+    const done = await getSetting(CATCHUP_DAY_KEY);
+    if (done === th.dateKey) return;
+    const claimed = await claimSetting(CATCHUP_DAY_KEY, th.dateKey);
+    if (!claimed) return;
+
+    // روز تهرانِ قبل
+    const ydayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tehran" })
+      .format(new Date(Date.now() - 24 * 3600_000));
+
+    // بررسی ارسال موفق هر اسلات دیروز از روی صندوق اتمی TelegramOutbox
+    const { db } = await import("@/lib/db");
+    const sentKeys = new Set<string>();
+    const rows = await db.telegramOutbox.findMany({
+      where: {
+        ok: true,
+        dedupeKey: {
+          in: [
+            `NEWS:${ydayKey}:0`, `NEWS:${ydayKey}:1`,
+            `BET:${ydayKey}:0`, `BET:${ydayKey}:1`,
+            `BRIEF:${ydayKey}`, `GIFT:${ydayKey}`,
+            `DIGEST:${ydayKey}`, `PNL:${ydayKey}`,
+          ],
+        },
+      },
+      select: { dedupeKey: true },
+    });
+    for (const r of rows) if (r.dedupeKey) sentKeys.add(r.dedupeKey);
+
+    let recovered = 0;
+    const missed = (k: string) => !sentKeys.has(k);
+
+    // خبرهای فوتبال (دو اسلات)
+    if (missed(`NEWS:${ydayKey}:0`)) {
+      const r = await funnel.sendFootballNews(false, 0);
+      if (r.ok) recovered += 1;
+      console.log(`[catchup] v20.0 news slot0 of ${ydayKey} → ${r.detail}`);
+    }
+    if (missed(`NEWS:${ydayKey}:1`)) {
+      const r = await funnel.sendFootballNews(false, 1);
+      if (r.ok) recovered += 1;
+      console.log(`[catchup] v20.0 news slot1 of ${ydayKey} → ${r.detail}`);
+    }
+    // آکادمی اصطلاحات (دو اسلات)
+    if (missed(`BET:${ydayKey}:0`)) {
+      const r = await funnel.sendBetTermLesson(false, 0);
+      if (r.ok) recovered += 1;
+      console.log(`[catchup] v20.0 edu slot0 of ${ydayKey} → ${r.detail}`);
+    }
+    if (missed(`BET:${ydayKey}:1`)) {
+      const r = await funnel.sendBetTermLesson(false, 1);
+      if (r.ok) recovered += 1;
+      console.log(`[catchup] v20.0 edu slot1 of ${ydayKey} → ${r.detail}`);
+    }
+    // بریفینگ صبح کانال VIP
+    if (missed(`BRIEF:${ydayKey}`)) {
+      const r = await funnel.sendVipMorningBrief(false);
+      if (r.ok) recovered += 1;
+      console.log(`[catchup] v20.0 VIP brief of ${ydayKey} → ${r.detail}`);
+    }
+    // کارت رایگان روزانه کانال عمومی
+    if (missed(`GIFT:${ydayKey}`)) {
+      const r = await funnel.sendDailyGiftCard(false);
+      if (r.ok) recovered += 1;
+      console.log(`[catchup] v20.0 daily gift card of ${ydayKey} → ${r.detail}`);
+    }
+    // برآیند روزانه (دو کانال) — با داده‌های واقعی همان روزِ گم‌شده
+    if (missed(`DIGEST:${ydayKey}`)) {
+      const ok = await funnel.sendDailyDigest(false, ydayKey);
+      if (ok) recovered += 1;
+      console.log(`[catchup] v20.0 daily digest of ${ydayKey} → ${ok ? "sent" : "failed"}`);
+    }
+    // برآیند شبانه کانال عمومی — با داده‌های واقعی همان روزِ گم‌شده
+    if (missed(`PNL:${ydayKey}`)) {
+      const ok = await funnel.sendNightlyPnl(false, ydayKey);
+      if (ok) recovered += 1;
+      console.log(`[catchup] v20.0 nightly PnL of ${ydayKey} → ${ok ? "sent" : "failed"}`);
+    }
+
+    if (recovered > 0) {
+      console.log(`[catchup] v20.0: ${recovered} missed slot(s) of ${ydayKey} recovered (cross-midnight catch-up ledger)`);
+    }
+  } catch (err) {
+    console.warn("[catchup] failed:", err instanceof Error ? err.message : err);
+  }
 }

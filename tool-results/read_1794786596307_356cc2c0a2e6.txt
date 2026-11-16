@@ -1,0 +1,639 @@
+   656→ * خط مرجع: پیناکل وقتی خط شارپ واقعی موجود است؛ وگرنه خط منصفانه موتور (MARKET_FAIR)
+   657→ * خروجی همیشه عدد دارد — «—» فقط برای بازار خارج ماتریس (کرنر/کارت).
+   658→ */
+   659→function computeEdge(modelProb: number | null, odds: number): number | null {
+   660→  if (modelProb === null || modelProb <= 0 || odds <= 1) return null;
+   661→  return Math.round((modelProb * odds - 1) * 1000) / 10;
+   662→}
+   663→
+   664→/**
+   665→ * صدور کارت به کارنامه — Idempotent با هش SHA-256.
+   666→ * اگر کارت با همین هش قبلاً صادر شده باشد، همان ردیف بازگردانده می‌شود.
+   667→ * v9.0: نگهداری λ ترکیبی نهایی + کد الگو (حلقه کالیبراسیون) + نشان تایید سوپروایزر
+   668→ * و پرچم ثبت خودکار سرور (autoIssued) برای خط لوله Zero-Click.
+   669→ */
+   670→export async function issueSlip(
+   671→  item: IssueSlipItemDTO,
+   672→  opts?: { autoIssued?: boolean }
+   673→): Promise<{ created: boolean; slip: IssuedSlipDTO }> {
+   674→  const externalId = item.match.externalId ?? null;
+   675→  // v19.0 — استیک صریح حتی وقتی stakeB=0 است (کارت‌های تک‌ستون BANKER و آکومولاتور):
+   676→  // اگر فراخواننده هر دو استیک را صریح داده، دیگر به داچینگ سود-برابر برنگرد.
+   677→  const stakes =
+   678→    typeof item.stakeA === "number" && typeof item.stakeB === "number" && item.stakeA + item.stakeB > 0
+   679→      ? { stakeA: item.stakeA, stakeB: item.stakeB }
+   680→      : equalProfitStakes(item.oddsA, item.oddsB);
+   681→
+   682→  const hash = slipHash({
+   683→    externalId,
+   684→    homeTeam: item.match.homeTeam,
+   685→    awayTeam: item.match.awayTeam,
+   686→    kickoff: item.match.kickoff,
+   687→    labelA: item.labelA,
+   688→    labelB: item.labelB,
+   689→    oddsA: item.oddsA,
+   690→    oddsB: item.oddsB,
+   691→    stakeA: stakes.stakeA,
+   692→    stakeB: stakes.stakeB,
+   693→  });
+   694→
+   695→  const existing = await db.issuedSlip.findUnique({ where: { hash } });
+   696→  if (existing) return { created: false, slip: mapSlip(existing) };
+   697→
+   698→  // ─── v10.0 — احتمال مدل، ارزش عددی و پنجره زمانی طلایی ثبت ───
+   699→  // v19.0 — کارت‌های میکس چندبازی (ACCUMULATOR) احتمال مدل فراخلب دارند:
+   700→  // حاصل‌ضرب احتمال هر پای مستقل — ماتریس تک‌بازی برای میکس چندبازی معنا ندارد.
+   701→  const lH = item.lambdaHome ?? 1.35;
+   702→  const lA = item.lambdaAway ?? 1.25;
+   703→  const probA = item.modelProbAOverride != null ? item.modelProbAOverride : legProbability(lH, lA, item.legsA ?? []);
+   704→  const probB = item.modelProbBOverride != null ? item.modelProbBOverride : legProbability(lH, lA, item.legsB ?? []);
+   705→
+   706→  // ─── v10.0.1 — خط شارپ واقعی پیناکل برای انتخاب مستقیم (پاسخ «چرا عددی ندارد؟») ───
+   707→  // ارزش نسبت به خط مرجع:
+   708→  //   · PINNACLE موجود → (ضریب ثبت ÷ خط پیناکل − ۱) × ۱۰۰ — مزیت قیمت نسبت به خط شارپ
+   709→  //   · در غیر این صورت → (احتمال مدل × ضریب ثبت − ۱) × ۱۰۰ — EV نسبت به خط منصفانه موتور
+   710→  const pinPrices = item.pinnaclePrices ?? {};
+   711→  const pinPriceOf = (legs: SettlementLegDTO[]): number | null => {
+   712→    const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+   713→    if (keys.length !== 1) return null; // تیپ ترکیبی چندبازاره — خط مستقیم پیناکل ندارد
+   714→    const p = pinPrices[keys[0]];
+   715→    return typeof p === "number" && p > 1.01 ? p : null;
+   716→  };
+   717→  const pinA = pinPriceOf(item.legsA ?? []);
+   718→  const pinB = pinPriceOf(item.legsB ?? []);
+   719→  const priceAdvantage = (odds: number, pin: number): number => Math.round((odds / pin - 1) * 1000) / 10;
+   720→
+   721→  const edgeA = pinA !== null ? priceAdvantage(item.oddsA, pinA) : computeEdge(probA, item.oddsA);
+   722→  const edgeB = pinB !== null ? priceAdvantage(item.oddsB, pinB) : computeEdge(probB, item.oddsB);
+   723→  const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+   724→  const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+   725→  const tipKindA: TipKind | null = edgeA !== null ? deriveTipKind((item.legsA ?? []).map((l) => l.key), item.oddsA) : null;
+   726→  const tipKindB: TipKind | null = edgeB !== null ? deriveTipKind((item.legsB ?? []).map((l) => l.key), item.oddsB) : null;
+   727→  const koMs = new Date(item.match.kickoff).getTime();
+   728→  const winA = tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
+   729→  const winB = tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
+   730→
+   731→  const row = await db.issuedSlip.create({
+   732→    data: {
+   733→      hash,
+   734→      externalId,
+   735→      matchId: item.match.id,
+   736→      league: item.match.league,
+   737→      homeTeam: item.match.homeTeam,
+   738→      awayTeam: item.match.awayTeam,
+   739→      kickoff: new Date(item.match.kickoff),
+   740→      labelA: item.labelA,
+   741→      labelB: item.labelB,
+   742→      legsA: JSON.stringify(item.legsA ?? []),
+   743→      legsB: JSON.stringify(item.legsB ?? []),
+   744→      oddsA: item.oddsA,
+   745→      oddsB: item.oddsB,
+   746→      stakeA: stakes.stakeA,
+   747→      stakeB: stakes.stakeB,
+   748→      cellsA: JSON.stringify(coveredCells(lH, lA, item.legsA ?? [], externalId)),
+   749→      cellsB: JSON.stringify(coveredCells(lH, lA, item.legsB ?? [], externalId)),
+   750→      guaranteedProfit: item.guaranteedProfit,
+   751→      marginPct: item.marginPct,
+   752→      archetype: item.archetype ?? null,
+   753→      archetypeCode: item.archetypeCode ?? null,
+   754→      lambdaHome: item.lambdaHome ?? null,
+   755→      lambdaAway: item.lambdaAway ?? null,
+   756→      espnUrl: item.match.espnUrl ?? espnUrlOf(externalId),
+   757→      supervisorApproved: item.supervisorApproved !== false,
+   758→      autoIssued: opts?.autoIssued === true,
+   759→      retroIssued: item.retroIssued === true,
+   760→      // v18.0 — سطح تاج کارت (GOLD / SILVER_SHADOW) برای حصاد آلفای دفتر سایه
+   761→      crownTier: item.crownTier ?? null,
+   762→      supervisorScore: item.supervisorScore ?? null,
+   763→      vetoReason: item.vetoReason ?? null,
+   764→      jointLossRiskPct: item.jointLossRiskPct ?? null,
+   765→      doubleWinProbPct: item.doubleWinProbPct ?? null,
+   766→      modelProbA: probA,
+   767→      modelProbB: probB,
+   768→      pinnacleOddsA: pinA,
+   769→      pinnacleOddsB: pinB,
+   770→      edgeA,
+   771→      edgeB,
+   772→      edgeSourceA,
+   773→      edgeSourceB,
+   774→      tipKindA,
+   775→      tipKindB,
+   776→      timingWindowA: winA?.windowKey ?? null,
+   777→      timingWindowB: winB?.windowKey ?? null,
+   778→      timingStartA: winA?.startAt ?? null,
+   779→      timingEndA: winA?.endAt ?? null,
+   780→      timingStartB: winB?.startAt ?? null,
+   781→      timingEndB: winB?.endAt ?? null,
+   782→      // v17.0 — خط تولید Bet-Type برای افراز مجزای کارنامه (پیش‌فرض: SINGLE زوج‌تیپ)
+   783→      productLine: item.productLine ?? "SINGLE",
+   784→      status: "PENDING",
+   785→    },
+   786→  });
+   787→  return { created: true, slip: mapSlip(row) };
+   788→}
+   789→
+   790→// ═══════════ v10.0.2 — بازپررسی یادگیری کارت‌های قدیمی (Idempotent Backfill) ═══════════
+   791→
+   792→/** throttle بازپررسی — حداکثر هر ۳۰ دقیقه یک‌بار (فراخوانی از خط لوله سرور) */
+   793→let lastBackfillAt = 0;
+   794→const BACKFILL_TTL_MS = 30 * 60_000;
+   795→
+   796→/**
+   797→ * backfillSlipLearning — پرکردن ستون‌های یادگیری کارت‌های صادرشده پیش از v10:
+   798→ *   · modelProbA/B و edgeA/B (ارزش عددی نسبت به پیناکل واقعی یا خط منصفانه)
+   799→ *   · tipKind + پنجره زمانی طلایی ثبت
+   800→ *   · ردیف ژورنال تسویه (recordSettlementLearning — Idempotent با slipId)
+   801→ * همه محاسبات از λ ذخیره‌شده کارت بازتولید می‌شود — هیچ عدد ساختگی نیست.
+   802→ */
+   803→export async function backfillSlipLearning(force = false): Promise<{ scanned: number; updated: number; journalled: number }> {
+   804→  if (!force && Date.now() - lastBackfillAt < BACKFILL_TTL_MS) {
+   805→    return { scanned: 0, updated: 0, journalled: 0 };
+   806→  }
+   807→  lastBackfillAt = Date.now();
+   808→
+   809→  // کارت‌های تسویه‌شده بدون ارزش عددی (نسخه‌های ≤ v9) — سقف هر پاس ۶۰ ردیف
+   810→  const targets = await db.issuedSlip.findMany({
+   811→    where: {
+   812→      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP", "MANUAL_REVIEW"] },
+   813→      OR: [
+   814→        { edgeA: null },
+   815→        { edgeB: null },
+   816→        { timingWindowA: null },
+   817→        { timingWindowB: null },
+   818→        { jointLossRiskPct: null },
+   819→        { doubleWinProbPct: null },
+   820→      ],
+   821→    },
+   822→    orderBy: { kickoff: "desc" },
+   823→    take: 60,
+   824→  });
+   825→  if (targets.length === 0) return { scanned: 0, updated: 0, journalled: 0 };
+   826→
+   827→  let updated = 0;
+   828→  let journalled = 0;
+   829→  for (const s of targets) {
+   830→    try {
+   831→      const legsA: SettlementLegDTO[] = safeParseLegs(s.legsA);
+   832→      const legsB: SettlementLegDTO[] = safeParseLegs(s.legsB);
+   833→      const lH = s.lambdaHome ?? 1.35;
+   834→      const lA = s.lambdaAway ?? 1.25;
+   835→      const probA = s.modelProbA ?? legProbability(lH, lA, legsA);
+   836→      const probB = s.modelProbB ?? legProbability(lH, lA, legsB);
+   837→
+   838→      // خط شارپ واقعی پیناکل — از رکورد OddsRecord مرتبط با بازی (وقتی فید موجود باشد)
+   839→      let pinPrices: Record<string, number> = {};
+   840→      if (s.matchId) {
+   841→        const oddsRows = await db.oddsRecord.findMany({ where: { matchId: s.matchId } });
+   842→        const pin = oddsRows.find((o) => o.bookmaker === "PINNACLE");
+   843→        if (pin) {
+   844→          pinPrices = {
+   845→            HOME: pin.oddsHome,
+   846→            DRAW: pin.oddsDraw,
+   847→            AWAY: pin.oddsAway,
+   848→            DC_1X: 1 / (1 / pin.oddsHome + 1 / pin.oddsDraw),
+   849→            DC_X2: 1 / (1 / pin.oddsAway + 1 / pin.oddsDraw),
+   850→            O25: pin.oddsOver25,
+   851→            U25: pin.oddsUnder25,
+   852→          };
+   853→        }
+   854→      }
+   855→      const pinPriceOf = (legs: SettlementLegDTO[]): number | null => {
+   856→        const keys = legs.map((l) => l.key).filter((k) => !isOffMatrixKey(k));
+   857→        if (keys.length !== 1) return null;
+   858→        const p = pinPrices[keys[0]];
+   859→        return typeof p === "number" && p > 1.01 ? p : null;
+   860→      };
+   861→      const priceAdvantage = (odds: number, pin: number): number => Math.round((odds / pin - 1) * 1000) / 10;
+   862→
+   863→      const pinA = s.pinnacleOddsA ?? pinPriceOf(legsA);
+   864→      const pinB = s.pinnacleOddsB ?? pinPriceOf(legsB);
+   865→      const edgeA = s.edgeA ?? (pinA !== null ? priceAdvantage(s.oddsA, pinA) : computeEdge(probA, s.oddsA));
+   866→      const edgeB = s.edgeB ?? (pinB !== null ? priceAdvantage(s.oddsB, pinB) : computeEdge(probB, s.oddsB));
+   867→      const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+   868→      const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+   869→
+   870→      const tipKindA = (s.tipKindA as TipKind | null) ?? (edgeA !== null ? deriveTipKind(legsA.map((l) => l.key), s.oddsA) : null);
+   871→      const tipKindB = (s.tipKindB as TipKind | null) ?? (edgeB !== null ? deriveTipKind(legsB.map((l) => l.key), s.oddsB) : null);
+   872→      const koMs = s.kickoff.getTime();
+   873→      const winA = s.timingWindowA ? null : tipKindA ? computeTimingWindowStatic(koMs, tipKindA) : null;
+   874→      const winB = s.timingWindowB ? null : tipKindB ? computeTimingWindowStatic(koMs, tipKindB) : null;
+   875→
+   876→      // ─── v11.0 — سنجه‌های دفتر سایه: بازتولید ٪ باخت همزمان و ٪ برد طلایی از λ ذخیره‌شده ───
+   877→      let jointLossRiskPct: number | undefined;
+   878→      let doubleWinProbPct: number | undefined;
+   879→      if (s.jointLossRiskPct === null || s.doubleWinProbPct === null) {
+   880→        const matchRow = s.matchId ? await db.match.findUnique({ where: { id: s.matchId }, include: { referee: true } }) : null;
+   881→        if (matchRow) {
+   882→          const eng = computeMatchEngine(matchRow);
+   883→          const m = jointShadowMetrics(
+   884→            lH,
+   885→            lA,
+   886→            eng.lambdaCorners,
+   887→            eng.lambdaCards,
+   888→            legsA.map((l) => l.key),
+   889→            legsB.map((l) => l.key)
+   890→          );
+   891→          jointLossRiskPct = s.jointLossRiskPct ?? m.jointLossRiskPct;
+   892→          doubleWinProbPct = s.doubleWinProbPct ?? m.doubleWinProbPct;
+   893→        }
+   894→      }
+   895→
+   896→      const refreshed = await db.issuedSlip.update({
+   897→        where: { id: s.id },
+   898→        data: {
+   899→          modelProbA: s.modelProbA ?? probA,
+   900→          modelProbB: s.modelProbB ?? probB,
+   901→          jointLossRiskPct,
+   902→          doubleWinProbPct,
+   903→          pinnacleOddsA: pinA,
+   904→          pinnacleOddsB: pinB,
+   905→          edgeA,
+   906→          edgeB,
+   907→          edgeSourceA,
+   908→          edgeSourceB,
+   909→          tipKindA: tipKindA ?? undefined,
+   910→          tipKindB: tipKindB ?? undefined,
+   911→          timingWindowA: s.timingWindowA ?? winA?.windowKey ?? undefined,
+   912→          timingWindowB: s.timingWindowB ?? winB?.windowKey ?? undefined,
+   913→          timingStartA: s.timingStartA ?? winA?.startAt ?? undefined,
+   914→          timingEndA: s.timingEndA ?? winA?.endAt ?? undefined,
+   915→          timingStartB: s.timingStartB ?? winB?.startAt ?? undefined,
+   916→          timingEndB: s.timingEndB ?? winB?.endAt ?? undefined,
+   917→        },
+   918→      });
+   919→      updated += 1;
+   920→
+   921→      // ژورنال یادگیری — Idempotent (هر کارت حداکثر یک ردیف)
+   922→      const hasJournal = await db.settlementJournal.findFirst({ where: { slipId: s.id }, select: { id: true } });
+   923→      if (!hasJournal) {
+   924→        await recordSettlementLearning(refreshed);
+   925→        journalled += 1;
+   926→      }
+   927→    } catch (err) {
+   928→      console.warn(`backfill failed for slip ${s.id}:`, err instanceof Error ? err.message : err);
+   929→    }
+   930→  }
+   931→  return { scanned: targets.length, updated, journalled };
+   932→}
+   933→
+   934→// ═════════════════════ کارنامه و آمار ═════════════════════
+   935→
+   936→type DbSlip = Awaited<ReturnType<typeof db.issuedSlip.findFirst>>;
+   937→
+   938→function mapSlip(s: NonNullable<DbSlip>): IssuedSlipDTO {
+   939→  return {
+   940→    id: s.id,
+   941→    hash: s.hash,
+   942→    externalId: s.externalId,
+   943→    league: s.league,
+   944→    homeTeam: s.homeTeam,
+   945→    awayTeam: s.awayTeam,
+   946→    kickoff: s.kickoff.toISOString(),
+   947→    labelA: s.labelA,
+   948→    labelB: s.labelB,
+   949→    legsA: safeParseLegs(s.legsA),
+   950→    legsB: safeParseLegs(s.legsB),
+   951→    oddsA: s.oddsA,
+   952→    oddsB: s.oddsB,
+   953→    stakeA: s.stakeA,
+   954→    stakeB: s.stakeB,
+   955→    guaranteedProfit: s.guaranteedProfit,
+   956→    marginPct: s.marginPct,
+   957→    archetype: s.archetype,
+   958→    archetypeCode: s.archetypeCode,
+   959→    lambdaHome: s.lambdaHome,
+   960→    lambdaAway: s.lambdaAway,
+   961→    supervisorApproved: s.supervisorApproved,
+   962→    autoIssued: s.autoIssued,
+   963→    retroIssued: s.retroIssued,
+   964→    supervisorScore: s.supervisorScore,
+   965→    vetoReason: s.vetoReason,
+   966→    jointLossRiskPct: s.jointLossRiskPct,
+   967→    doubleWinProbPct: s.doubleWinProbPct,
+   968→    crownTier: s.crownTier,
+   969→    // v19.0 — خط تولید Bet-Type برای ویترین ۵ رژیم (بدون این فیلد، همه باکس‌ها خالی می‌ماندند)
+   970→    productLine: s.productLine ?? null,
+   971→    espnUrl: s.espnUrl,
+   972→    status: s.status as SlipStatus,
+   973→    homeGoals: s.homeGoals,
+   974→    awayGoals: s.awayGoals,
+   975→    profitA: s.profitA,
+   976→    profitB: s.profitB,
+   977→    netProfit: s.netProfit,
+   978→    settledAt: s.settledAt?.toISOString() ?? null,
+   979→    settleNote: s.settleNote,
+   980→    telegramCard: s.telegramCard,
+   981→    telegramTeaser: s.telegramTeaser,
+   982→    telegramResult: s.telegramResult,
+   983→    pinnacleOddsA: s.pinnacleOddsA,
+   984→    pinnacleOddsB: s.pinnacleOddsB,
+   985→    edgeA: s.edgeA,
+   986→    edgeB: s.edgeB,
+   987→    edgeSourceA: s.edgeSourceA,
+   988→    edgeSourceB: s.edgeSourceB,
+   989→    modelProbA: s.modelProbA,
+   990→    modelProbB: s.modelProbB,
+   991→    tipKindA: s.tipKindA,
+   992→    tipKindB: s.tipKindB,
+   993→    timingWindowA: s.timingWindowA,
+   994→    timingWindowB: s.timingWindowB,
+   995→    timingStartA: s.timingStartA?.toISOString() ?? null,
+   996→    timingEndA: s.timingEndA?.toISOString() ?? null,
+   997→    timingStartB: s.timingStartB?.toISOString() ?? null,
+   998→    timingEndB: s.timingEndB?.toISOString() ?? null,
+   999→    createdAt: s.createdAt.toISOString(),
+  1000→  };
+  1001→}
+  1002→
+  1003→export async function getLedger(): Promise<LedgerDTO> {
+  1004→  // v13.5.1 — رفع باگ محاسباتی منحنی بانک: آمار تیتر (سود خالص مجموع) از «تمام تاریخ» محاسبه
+  1005→  // می‌شود، نه از ۱۲۰ ردیف آخر؛ وگرنه با منحنی بانک (تمام تاریخ) نمی‌خواند.
+  1006→  // ردیف‌های DTO برای نمایش به ۱۲۰ ردیف آخر محدود می‌شوند (سقف نمایش، نه سقف محاسبه).
+  1007→  const [allRows, outboxRows, tgStatus] = await Promise.all([
+  1008→    db.issuedSlip.findMany({ orderBy: [{ status: "asc" }, { kickoff: "desc" }] }),
+  1009→    db.telegramOutbox.findMany({ orderBy: { createdAt: "desc" }, take: 25, include: { slip: { select: { hash: true } } } }),
+  1010→    import("./telegram-service").then((m) => m.telegramStatus()),
+  1011→  ]);
+  1012→
+  1013→  const slips = allRows.map((s) => mapSlip(s));
+  1014→  const slipsView = slips.slice(0, 120); // سقف نمایش جدول کارنامه
+  1015→  // ─── v11.0 — آمار تیتر کارنامه فقط از کارت‌های تایید سوپروایزر؛ وتوها به «دفتر سایه» می‌روند ───
+  1016→  // v13.2 — کارت‌های بازخوانی (retroIssued — بازی FT پیش از صدور) از آمار اصلی حذف و به دسته ه می‌روند
+  1017→  // v18.0 — کارت‌های تاج نقره‌ای (crownTier=SILVER_SHADOW) از کتاب طلایی جدا شده‌اند
+  1018→  // (افراز مجزای Two-Tier Crown — استیک ۵۰u Half-Kelly) و در silverHarvest شمرده می‌شوند.
+  1019→  const goldSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued && s.crownTier !== "SILVER_SHADOW");
+  1020→  const silverSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued && s.crownTier === "SILVER_SHADOW");
+  1021→  const approvedSlips = goldSlips;
+  1022→  const retroSlips = slips.filter((s) => s.retroIssued);
+  1023→  const stats: SettlementStatsDTO = {
+  1024→    total: approvedSlips.length,
+  1025→    pending: 0,
+  1026→    live: 0,
+  1027→    wonA: 0,
+  1028→    wonB: 0,
+  1029→    doubleWin: 0,
+  1030→    middleTrap: 0,
+  1031→    manual: 0,
+  1032→    void: 0,
+  1033→    settled: 0,
+  1034→    netProfit: 0,
+  1035→    netProfitPct: 0,
+  1036→    staked: 0,
+  1037→  };
+  1038→  for (const s of approvedSlips) {
+  1039→    switch (s.status) {
+  1040→      case "PENDING": stats.pending += 1; break;
+  1041→      case "LIVE": stats.live += 1; break;
+  1042→      case "WON_A": stats.wonA += 1; break;
+  1043→      case "WON_B": stats.wonB += 1; break;
+  1044→      case "DOUBLE_WIN": stats.doubleWin += 1; break;
+  1045→      case "MIDDLE_TRAP": stats.middleTrap += 1; break;
+  1046→      case "MANUAL_REVIEW": stats.manual += 1; break;
+  1047→      case "VOID": stats.void += 1; break;
+  1048→    }
+  1049→    if (["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status)) {
+  1050→      stats.settled += 1;
+  1051→      stats.netProfit += s.netProfit ?? 0;
+  1052→      stats.staked += s.stakeA + s.stakeB;
+  1053→    }
+  1054→  }
+  1055→  stats.netProfit = Math.round(stats.netProfit * 100) / 100;
+  1056→  stats.netProfitPct = stats.staked > 0 ? Math.round((stats.netProfit / stats.staked) * 1000) / 10 : 0;
+  1057→
+  1058→  // ─── v11.0 — دفتر سایه: تسویه کاغذی کارت‌های وتوشده (paper P&L — هرگز واقعی نبوده) ───
+  1059→  // v13.5.1 — کارت‌های بازخوانی (retroIssued) از دفتر سایه خارج شدند؛ سایه فقط وتوهای زنده است
+  1060→  const shadowSlips = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
+  1061→  const shadowByStatus: Record<string, number> = {};
+  1062→  let shadowWins = 0;
+  1063→  let shadowLosses = 0;
+  1064→  let shadowNet = 0;
+  1065→  for (const s of shadowSlips) {
+  1066→    shadowByStatus[s.status] = (shadowByStatus[s.status] ?? 0) + 1;
+  1067→    if (["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status)) {
+  1068→      if (s.status === "MIDDLE_TRAP") shadowLosses += 1;
+  1069→      else shadowWins += 1;
+  1070→      shadowNet += s.netProfit ?? 0;
+  1071→    }
+  1072→  }
+  1073→  const shadowSettled = shadowWins + shadowLosses;
+  1074→  const shadow = {
+  1075→    total: shadowSlips.length,
+  1076→    settled: shadowSettled,
+  1077→    wins: shadowWins,
+  1078→    losses: shadowLosses,
+  1079→    winRate: shadowSettled > 0 ? Math.round((shadowWins / shadowSettled) * 1000) / 10 : null,
+  1080→    netProfit: Math.round(shadowNet * 100) / 100,
+  1081→    byStatus: shadowByStatus,
+  1082→  };
+  1083→
+  1084→  // ─── v18.0 — 🥈 حصاد آلفای سایه (Tier-2 Shadow Alpha Harvester) ───
+  1085→  // کارت‌های تاج نقره‌ای سطح ۲ (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ در لیگ معتبر) که به‌جای
+  1086→  // حبس در دفتر کاغذی با استیک نصف ۵۰ واحدی Half-Kelly منتشر و تسویه واقعی شدند.
+  1087→  const silverSettledSlips = silverSlips.filter((s) => ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status));
+  1088→  const silverWins = silverSettledSlips.filter((s) => s.status !== "MIDDLE_TRAP").length;
+  1089→  const silverLosses = silverSettledSlips.length - silverWins;
+  1090→  const silverNet = silverSettledSlips.reduce((a, s) => a + (s.netProfit ?? 0), 0);
+  1091→  const SILVER_START_BANK = 1000;
+  1092→  let silverAcc = SILVER_START_BANK;
+  1093→  const silverEquityPoints = [silverAcc];
+  1094→  for (const s of [...silverSettledSlips].sort((a, b) => new Date(a.settledAt ?? 0).getTime() - new Date(b.settledAt ?? 0).getTime())) {
+  1095→    silverAcc += s.netProfit ?? 0;
+  1096→    silverEquityPoints.push(Math.round(silverAcc * 100) / 100);
+  1097→  }
+  1098→  const silverHarvest = {
+  1099→    total: silverSlips.length,
+  1100→    settled: silverSettledSlips.length,
+  1101→    wins: silverWins,
+  1102→    losses: silverLosses,
+  1103→    winRate: silverSettledSlips.length > 0 ? Math.round((silverWins / silverSettledSlips.length) * 1000) / 10 : null,
+  1104→    netProfit: Math.round(silverNet * 100) / 100,
+  1105→    equityPoints: silverEquityPoints,
+  1106→    finalBank: Math.round(silverAcc * 100) / 100,
+  1107→    roiPct: Math.round(((silverAcc - SILVER_START_BANK) / SILVER_START_BANK) * 1000) / 10,
+  1108→  };
+  1109→
+  1110→  // ─── v13.2 — دفتر بازخوانی: کارت‌های چندروزه (هرگز پیش‌بازی صادر نشده) — جدا از آمار واقعی ───
+  1111→  // v13.5.1 — بازخوانی با پرچم retroIssued شناسایی می‌شود (مستقل از تایید)؛ کارت بازخوانی
+  1112→  // هرگز «تاییدشده» نیست — صدور پس از FT صرفاً تحلیل کاغذی است.
+  1113→  let retroWins = 0;
+  1114→  let retroLosses = 0;
+  1115→  let retroNet = 0;
+  1116→  for (const s of retroSlips) {
+  1117→    if (["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status)) {
+  1118→      if (s.status === "MIDDLE_TRAP") retroLosses += 1;
+  1119→      else retroWins += 1;
+  1120→      retroNet += s.netProfit ?? 0;
+  1121→    }
+  1122→  }
+  1123→  const retroSettled = retroWins + retroLosses;
+  1124→  const retroBook = {
+  1125→    total: retroSlips.length,
+  1126→    settled: retroSettled,
+  1127→    wins: retroWins,
+  1128→    losses: retroLosses,
+  1129→    winRate: retroSettled > 0 ? Math.round((retroWins / retroSettled) * 1000) / 10 : null,
+  1130→    netProfit: Math.round(retroNet * 100) / 100,
+  1131→  };
+  1132→
+  1133→  // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور ───
+  1134→  const [journal, doctrine, sched] = await Promise.all([
+  1135→    listJournal(30).catch(() => []),
+  1136→    listDoctrine().catch(() => [] as DoctrineSummary[]),
+  1137→    Promise.resolve(getSchedulerStatus()),
+  1138→  ]);
+  1139→
+  1140→  // ─── v13.5 — منحنی رشد بانک ۱۰۰۰ واحدی از «تمام تاریخ» (بدون سقف take:120) ───
+  1141→  // فقط کارت‌های تاییدشده غیربازخوانی تسویه‌شده — هم‌مبنا با stats؛ انتهای منحنی
+  1142→  // دقیقاً با «سود خالص مجموع» تیتر برابر است (رفع باگ نمایش/محاسبه).
+  1143→  // v18.0 — کارت‌های تاج نقره‌ای از منحنی طلایی خارج شدند (منحنی مجزای silverHarvest).
+  1144→  const curveRows = await db.issuedSlip.findMany({
+  1145→    where: {
+  1146→      supervisorApproved: true,
+  1147→      retroIssued: false,
+  1148→      crownTier: { not: "SILVER_SHADOW" },
+  1149→      status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+  1150→      settledAt: { not: null },
+  1151→    },
+  1152→    select: { netProfit: true, settledAt: true },
+  1153→    orderBy: { settledAt: "asc" },
+  1154→  });
+  1155→  const START_BANK = 1000;
+  1156→  let equityAcc = START_BANK;
+  1157→  const equityPoints = [equityAcc];
+  1158→  for (const r of curveRows) {
+  1159→    equityAcc += r.netProfit ?? 0;
+  1160→    equityPoints.push(Math.round(equityAcc * 100) / 100);
+  1161→  }
+  1162→  const firstSettled = curveRows[0]?.settledAt ?? null;
+  1163→  const lastSettled = curveRows[curveRows.length - 1]?.settledAt ?? null;
+  1164→  const equity = {
+  1165→    startBank: START_BANK,
+  1166→    points: equityPoints,
+  1167→    finalBank: Math.round(equityAcc * 100) / 100,
+  1168→    roiPct: Math.round(((equityAcc - START_BANK) / START_BANK) * 1000) / 10,
+  1169→    basis: curveRows.length,
+  1170→    /** v13.5.1 — بازه زمانی واقعی منحنی برای برچسب محور زیر نمودار */
+  1171→    firstSettledAt: firstSettled ? firstSettled.toISOString() : null,
+  1172→    lastSettledAt: lastSettled ? lastSettled.toISOString() : null,
+  1173→  };
+  1174→
+  1175→  // ─── v18.0 — نبض کارنامه (Ledger Pulse): تشخیص صادقانه «چرا آمار تغییر نکرده» ───
+  1176→  // آمار رسمی فقط کارت‌های تاییدشده را می‌شمارد؛ اگر گیت سوپروایزر همه کارت‌های
+  1177→  // تازه را وتو کند، منحنی/وین‌ریت تخت می‌ماند — این نبض همان وضعیت را شفاف نشان می‌دهد.
+  1178→  const pulseNow = Date.now();
+  1179→  const weekAgoMs = pulseNow - 7 * 86_400_000;
+  1180→  const TEHRAN_OFFSET_MS = 3.5 * 3600_000;
+  1181→  const dayStartShifted = Math.floor((pulseNow + TEHRAN_OFFSET_MS) / 86_400_000) * 86_400_000;
+  1182→  const tehranDayStart = new Date(dayStartShifted - TEHRAN_OFFSET_MS);
+  1183→  const [pendingApproved, vetoedTotal, approvedLive] = await Promise.all([
+  1184→    db.issuedSlip.count({ where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] } } }),
+  1185→    db.issuedSlip.count({ where: { supervisorApproved: false, retroIssued: false } }),
+  1186→    db.issuedSlip.count({ where: { supervisorApproved: true, retroIssued: false, status: { in: ["PENDING", "LIVE"] }, kickoff: { gte: tehranDayStart, lt: new Date(tehranDayStart.getTime() + 86_400_000) } } }),
+  1187→  ]);
+  1188→  const pulse = {
+  1189→    lastSettledAt: lastSettled ? lastSettled.toISOString() : null,
+  1190→    settled7d: curveRows.filter((r) => r.settledAt && r.settledAt.getTime() >= weekAgoMs).length,
+  1191→    settledToday: curveRows.filter((r) => r.settledAt && r.settledAt >= tehranDayStart).length,
+  1192→    pendingApproved,
+  1193→    approvedLiveToday: approvedLive,
+  1194→    vetoedTotal,
+  1195→  };
+  1196→
+  1197→  // ═══ v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown) ═══
+  1198→  // افراز مجزا: هر کارت فقط در خط تولید خودش شمرده می‌شود (productLine)؛
+  1199→  // کارت‌های بدون productLine = زوج‌تیپ دوچرخه (خط SINGLE پیش‌فرض).
+  1200→  type RegimeKey = "DUAL_HEDGE" | "COMBO" | "CORRECT_SCORE" | "BANKER" | "ACCUMULATOR" | "SNIPER";
+  1201→  const regimeOf = (pl: string | null): RegimeKey => {
+  1202→    switch (pl) {
+  1203→      case "COMBO": return "COMBO";
+  1204→      case "CS_CLUSTER":
+  1205→      case "CORRECT_SCORE": return "CORRECT_SCORE";
+  1206→      case "BANKER": return "BANKER";
+  1207→      case "ACCUMULATOR": return "ACCUMULATOR";
+  1208→      case "SNIPER": return "SNIPER";
+  1209→      default: return "DUAL_HEDGE";
+  1210→    }
+  1211→  };
+  1212→  const REGIME_DEFS: { key: RegimeKey; labelFa: string; labelEn: string; icon: string }[] = [
+  1213→    { key: "DUAL_HEDGE", labelFa: "زوج‌تیپ دوقلو", labelEn: "Dual-Hedge", icon: "⚖️" },
+  1214→    { key: "COMBO", labelFa: "کمبوی رسمی", labelEn: "Official Combo", icon: "🧩" },
+  1215→    { key: "CORRECT_SCORE", labelFa: "خوشه نتیجه دقیق", labelEn: "Correct Score Cluster", icon: "🎯" },
+  1216→    { key: "BANKER", labelFa: "بنکر ستون فقرات", labelEn: "Single Bankers", icon: "🏦" },
+  1217→    { key: "ACCUMULATOR", labelFa: "آکومولاتور ۲-۳ تایی", labelEn: "Smart Accumulators", icon: "🔗" },
+  1218→    { key: "SNIPER", labelFa: "تک‌تیرانداز ارزش", labelEn: "Odds Snipers", icon: "🎯" },
+  1219→  ];
+  1220→  const settledApproved = approvedSlips.filter((s) => ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status));
+  1221→  const regimes = REGIME_DEFS.map((def) => {
+  1222→    const rows = settledApproved.filter((s) => regimeOf(s.productLine ?? null) === def.key);
+  1223→    const settledN = rows.length;
+  1224→    const winsN = rows.filter((r) => r.status !== "MIDDLE_TRAP").length;
+  1225→    const net = Math.round(rows.reduce((a, r) => a + (r.netProfit ?? 0), 0) * 100) / 100;
+  1226→    return {
+  1227→      key: def.key,
+  1228→      labelFa: def.labelFa,
+  1229→      labelEn: def.labelEn,
+  1230→      icon: def.icon,
+  1231→      settled: settledN,
+  1232→      wins: winsN,
+  1233→      winRatePct: settledN > 0 ? Math.round((winsN / settledN) * 1000) / 10 : null,
+  1234→      netProfit: net,
+  1235→      avgProfitPerWin: winsN > 0 ? Math.round((net / winsN) * 100) / 100 : null,
+  1236→    };
+  1237→  }).filter((r) => r.key !== "SNIPER" || r.settled > 0); // اسنایپر فقط وقتی کارت واقعی دارد نمایش داده می‌شود
+  1238→
+  1239→  return {
+  1240→    success: true,
+  1241→    slips: slipsView,
+  1242→    stats,
+  1243→    regimes,
+  1244→    shadow,
+  1245→    retroBook,
+  1246→    silverHarvest,
+  1247→    outbox: outboxRows.map((o) => ({
+  1248→      id: o.id,
+  1249→      kind: o.kind,
+  1250→      ok: o.ok,
+  1251→      detail: o.detail,
+  1252→      slipHash: o.slip?.hash ?? null,
+  1253→      createdAt: o.createdAt.toISOString(),
+  1254→    })),
+  1255→    telegram: { configured: tgStatus.configured, channelSet: tgStatus.channelSet },
+  1256→    journal,
+  1257→    doctrine,
+  1258→    automation: {
+  1259→      schedulerActive: sched.active,
+  1260→      lastTickAt: sched.lastTickAt ? new Date(sched.lastTickAt).toISOString() : null,
+  1261→      lastDailyReportAt: sched.lastDailyReportAt ? new Date(sched.lastDailyReportAt).toISOString() : null,
+  1262→      intervalSec: sched.intervalSec,
+  1263→    },
+  1264→    unitBasis: { stakePerTicket: 100, unitPctOfBankroll: 1, exampleBankrollUsd: 10 },
+  1265→    equity,
+  1266→    pulse,
+  1267→  };
+  1268→}
+  1269→
+  1270→// ═════════════════════ تسویه خودکار پس‌زمینه (throttle ۶۰ ثانیه) ═════════════════════
+  1271→
+  1272→let autoBusy = false;
+  1273→let autoLastAt = 0;
+  1274→const AUTO_THROTTLE_MS = 60_000;
+  1275→
+  1276→/**
+  1277→ * فراخوانی سبک از دل فید زنده — به محض FT در ESPN تسویه انجام می‌شود
+  1278→ * بدون انتظار برای کلیک کاربر. با throttle و قفل برای صفر هزینه اضافه.
+  1279→ */
+  1280→export async function autoSettleInBackground(): Promise<void> {
+  1281→  const pending = await db.issuedSlip.count({ where: { status: { in: ["PENDING", "LIVE"] } } });
+  1282→  if (pending === 0) return;
+  1283→  if (autoBusy || Date.now() - autoLastAt < AUTO_THROTTLE_MS) return;
+  1284→  autoBusy = true;
+  1285→  autoLastAt = Date.now();
+  1286→  try {
+  1287→    await settleFinishedSlips({ notify: true });
+  1288→  } catch (err) {
+  1289→    console.warn("auto-settle failed:", err);
+  1290→  } finally {
+  1291→    autoBusy = false;
+  1292→  }
+  1293→}
+  1294→

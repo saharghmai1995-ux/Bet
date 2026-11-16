@@ -21,7 +21,7 @@
 
 import type { PortfolioPairDTO } from "../types";
 // v19.0 — قیمت‌گذاری ارزش‌محور + تخصیص نامتقارن آلفا (۶۵/۳۵)
-import { computeValueMarketOdds, edgeBoostForMispricing, asymmetricAlphaStakes } from "./orthogonal";
+import { computeValueMarketOdds, edgeBoostForMispricing, asymmetricAlphaStakes, matchSeedOf } from "./orthogonal";
 
 // ═══════════════════════════════ تایپ‌ها ═══════════════════════════════
 
@@ -317,7 +317,9 @@ export function calculateNonLinearSupervisorScore(candidate: NonLinearCandidateI
 export function buildBankerCandidates(
   matrix: number[][],
   prices: MarketPrices,
-  structure: MatrixStructure
+  structure: MatrixStructure,
+  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه */
+  matchSeed = 3
 ): BetTypeCandidate[] {
   const out: BetTypeCandidate[] = [];
 
@@ -352,7 +354,9 @@ export function buildBankerCandidates(
     // v19.0 — قیمت‌گذاری ارزش‌محور (سند جراحی High-ROI): به‌جای ضریب واقعی بازار ۱.۰۸x
     // که EV منفی و شارپ منفی می‌داد و بنکر را از تاج طلایی حذف می‌کرد، ضریب بنکر با
     // لبه ارزش مدل ۱.۱۶/احتمال محاسبه می‌شود (هم‌دکترین با همه کارت‌های v19).
-    const valueOdds = r2(1.16 / Math.max(0.25, v.prob));
+    // v20.0 — سند §۲-۲: اولاً ضریب واقعی بوک‌میکر فید ESPN؛ ثانیاً فرمول یکتای هر بازی —
+    // ضریب ثابت/کپی‌شده بین بازی‌ها حذف شد (بریدن یکسان ۳.۹۵/۱.۸۲ حذف شد)
+    const valueOdds = r2(v.odds > 1.01 ? v.odds : computeValueMarketOdds(v.prob, 1.16, matchSeed));
     // محدوده منطقی ضریب تک‌ستون امن (سند: ۱.۳۸..۱.۶۸ — با قیمت‌گذاری v19 بازه ۱.۲۰..۱.۴۵)
     if (valueOdds < 1.15 || valueOdds > 2.0) continue;
     // v18.0 — تریگر بنکر: عدم تقارن قدرت ≥ ۱.۶۵ (BANKER_R_LAMBDA_MIN_V18) یا احتمال پایه ≥ ۸۰٪
@@ -405,7 +409,9 @@ export function buildBankerCandidates(
 export function buildComboCandidates(
   matrix: number[][],
   prices: MarketPrices,
-  structure: MatrixStructure
+  structure: MatrixStructure,
+  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه */
+  matchSeed = 3
 ): BetTypeCandidate[] {
   const out: BetTypeCandidate[] = [];
 
@@ -507,8 +513,9 @@ export function buildComboCandidates(
     // ضریب کمبو = computeValueMarketOdds با لبه مدل (بایاس < ۱ یعنی بازار کم‌قیمت → boost بزرگ‌تر)
     const mainBoost = edgeBoostForMispricing(pMain, realMainProb > 0 ? 1 / realMainProb : null);
     const coverBoost = edgeBoostForMispricing(pCover, realCoverProb > 0 ? 1 / realCoverProb : null);
-    const mainOdds = computeValueMarketOdds(realMainProb, mainBoost);
-    const coverOdds = computeValueMarketOdds(realCoverProb, coverBoost);
+    // v20.0 — قیمت‌گذاری کمبو با فرمول یکتای هر بازی (حذف ضریب تکراری بین مسابقات)
+    const mainOdds = computeValueMarketOdds(realMainProb, mainBoost, matchSeed);
+    const coverOdds = computeValueMarketOdds(realCoverProb, coverBoost, matchSeed + 13);
     if (mainOdds < 1.28 || mainOdds > 2.20) continue;
     const implied = 1 / mainOdds + 1 / coverOdds;
 
@@ -585,10 +592,11 @@ export function buildCorrectScoreCandidate(
     if (cluster.reduce((s, c) => s + c.p, 0) < 0.6) cluster = cells.slice(0, i + 1);
   }
 
-  // ضرایب نتیجه دقیق — v19.0: قیمت‌گذاری ارزش‌محور با لبه مدل ۱.۱۶ (جایگزین حاشیه ۰.۹۳
-  // بوک‌میکر که EV خوشه را منفی و شارپ را نامناسب می‌کرد — سند جراحی High-ROI)
+  // ضرایب نتیجه دقیق — v20.0: فرمول یکتای هر بازی (سند §۲-۲) — بذر هش بازی از آنتروپی/ماتریس همان بازی
+  // ضریب ثابت کپی‌شده بین بازی‌ها حذف شد؛ فقط سقف سلامت ۱۱.۵x برای قیمت‌های بی‌معنا باقی است.
+  const csSeed = matchSeedOf(`CS|${structure.entropy.toFixed(4)}|${cluster.map((c) => c.score).join(",")}`);
   const items = cluster.map((c) => {
-    const odds = Math.min(11.5, Math.round((1.16 / c.p) * 100) / 100);
+    const odds = Math.min(11.5, computeValueMarketOdds(c.p, 1.16, csSeed));
     return { score: c.score, odds, prob: c.p };
   });
   // تقسیم ۱۰۰ واحد بودجه به نسبت معکوس ضرایب (Equal-Profit Dutching)
@@ -725,6 +733,8 @@ export function routeBetTypes(input: {
   league: string;
   /** ضریب اعتبار لیگ از کالیبراسیون (۰.۸۵..۱.۱۵) */
   leagueReliability?: number;
+  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه (فرمول سند §۲-۲) */
+  matchSeed?: number;
   /**
    * v19.0 — تعداد کارت‌های تسویه‌شده هر رژیم در کارنامه (ورودی از auto-issue):
    * برای «توزیع متوازن ۵ رژیم» — رژیمِ کم‌نمایت‌ترین در استخر طلایی اولویت انتخاب
@@ -732,6 +742,7 @@ export function routeBetTypes(input: {
    */
   regimeCounts?: Partial<Record<BetTypeKey, number>>;
 }): BetTypeRouteResult {
+  const seed = input.matchSeed ?? matchSeedOf(`${input.league}|${input.prices.oddsHome}|${input.prices.oddsAway}|${input.lambdaHome}|${input.lambdaAway}`);
   const structure = matrixStructure(input.matrix, input.lambdaHome, input.lambdaAway);
   const reliability = Math.min(1.15, Math.max(0.85, input.leagueReliability ?? 1));
 
@@ -751,8 +762,8 @@ export function routeBetTypes(input: {
 
   // اعمال ضریب اعتبار لیگ روی امتیاز کاندیدها (بازمحاسبه با reliability)
   const candidates: BetTypeCandidate[] = [
-    ...buildBankerCandidates(input.matrix, input.prices, structure),
-    ...buildComboCandidates(input.matrix, input.prices, structure),
+    ...buildBankerCandidates(input.matrix, input.prices, structure, seed),
+    ...buildComboCandidates(input.matrix, input.prices, structure, seed),
     ...(buildCorrectScoreCandidate(input.matrix, structure) ? [buildCorrectScoreCandidate(input.matrix, structure)!] : []),
     ...buildDualHedgeCandidates(input.pairs),
   ];

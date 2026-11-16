@@ -22,6 +22,7 @@ import { computeMatchEngine } from "@/lib/engine/matchEngine";
 import {
   generateOrthogonalComplementarySlips,
   buildOrthoPortfolioPair,
+  matchSeedOf,
   type OrthoContext,
 } from "@/lib/engine/orthogonal";
 import { pickCrownPair } from "@/lib/supervisor";
@@ -30,8 +31,9 @@ import { pickCrownPair } from "@/lib/supervisor";
 // v19.0 — ورودی regimeCounts برای «توزیع متوازن ۵ رژیم» + صدور آکومولاتور واقعی روز.
 import { routeBetTypes, type MarketPrices, type BetTypeKey } from "@/lib/engine/betrouter";
 import { leagueGate } from "@/lib/leagues-catalog";
-import { issueSlip, settleFinishedSlips } from "./liveDataService";
+import { issueSlip, settleFinishedSlips, backfillAccLedgerRows } from "./liveDataService";
 import { getActiveRules, invalidateRulesCache } from "./calibration-rules";
+import { getCachedCalibration, evaluateCategoryCalibration, getSuspendedCategories } from "./category-calibration";
 import type { IssueSlipItemDTO, SettlementLegDTO } from "@/lib/types";
 
 /** فاصله حداقلی بین اجراهای خودکار — ۱۰ دقیقه (دکمه دستی با force می‌شکند) */
@@ -122,6 +124,8 @@ async function enforceDailyBroadcastQuorum(): Promise<number> {
 const ACC_MIN_LEGS = 2;
 const ACC_MAX_LEGS = 3;
 const ACC_LEG_LINES = ["BANKER", "COMBO"];
+/** v20.0 — نگاشت خط تولید کارت پای به دسته کالیبراسیون (برای فیلتر دسته‌های تعلیق‌شده) */
+const ACC_LEG_LINE_MAP: Record<string, "BANKER" | "COMBO"> = { BANKER: "BANKER", COMBO: "COMBO" };
 const ACC_LOOKBACK_DAYS = 7;
 
 async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
@@ -158,10 +162,16 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
     if (existingAcc) continue;
 
     const usedExt = new Set<string>();
-    const legs: { key: string; matchExternalId: string; matchLabel: string; odds: number; prob: number; label: string }[] = [];
+    const legs: { key: string; matchExternalId: string; matchLabel: string; odds: number; prob: number; label: string; home: string; away: string }[] = [];
+    // v20.0 — پای‌های دسته‌های تعلیق‌شده کالیبراسیون در میکس روز نمی‌آیند
+    const suspendedSet = await getSuspendedCategories();
     for (const s of slips) {
       if (legs.length >= ACC_MAX_LEGS) break;
       if (usedExt.has(s.externalId as string)) continue;
+      if (suspendedSet.size > 0) {
+        const pl = (s.productLine ?? "SINGLE") as keyof typeof ACC_LEG_LINE_MAP;
+        if (pl && suspendedSet.has(ACC_LEG_LINE_MAP[pl])) continue;
+      }
       let leg: { key?: string; matchExternalId?: string; matchLabel?: string } | undefined;
       try {
         leg = (JSON.parse(s.legsA || "[]") as { key?: string; matchExternalId?: string; matchLabel?: string }[])[0];
@@ -177,6 +187,8 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
         odds: s.oddsA,
         prob: s.modelProbA ?? 0.5,
         label: s.labelA ?? leg.key,
+        home: s.homeTeam,
+        away: s.awayTeam,
       });
     }
     if (legs.length < ACC_MIN_LEGS) continue;
@@ -190,8 +202,9 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
         id: externalId,
         externalId,
         league: "Smart Accumulator",
-        homeTeam: `ACC ${legs.length}-Leg`,
-        awayTeam: "Multi-Match Chain",
+        // ═══ v20.0 — نام دقیق تیم‌های واقعی هر پای (حذف ردیف ساختگی ACC x-Leg Multi-Match Chain) ═══
+        homeTeam: legs.map((l) => l.home).join(" + ").slice(0, 90),
+        awayTeam: legs.map((l) => l.away).join(" + ").slice(0, 90),
         kickoff: new Date(firstKo).toISOString(),
         espnUrl: null,
       },
@@ -457,6 +470,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           matrix: engine.dc.matrix,
           lambdaCorners: engine.lambdaCorners,
           lambdaCards: engine.lambdaCards,
+          /** v20.0 — بذر یکتای بازی برای ضریب منحصربه‌فرد هر مسابقه */
+          matchSeed: matchSeedOf(ev.externalId),
           prices: priceRow
             ? {
                 HOME: priceRow.oddsHome,
@@ -501,6 +516,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           prices: routePrices,
           pairs,
           league: ev.leagueName,
+          /** v20.0 — بذر یکتای بازی برای ضریب منحصربه‌فرد */
+          matchSeed: matchSeedOf(ev.externalId),
           // v19.0 — توزیع متوازن ۵ رژیم: رژیم کم‌نمایت‌ترین کارنامه اولویت انتخاب می‌گیرد
           regimeCounts,
         });
@@ -534,12 +551,38 @@ export async function autoSyncPastAndPresentMatches(options?: {
         );
         if (!decision) continue;
 
+        // ═══ v20.0 — حلقه کالیبراسیون دسته‌ها (سند §۴-۱) ═══
+        // اگر رژیم منتخب مسیریاب تعلیق‌شده باشد (Category ROI منفی)، سیستم به بهترین
+        // دسته سودده بعدی هدایت می‌کند؛ اگر هیچ دسته فعال ماتریسی نبود → دفتر سایه.
+        const calibration = await getCachedCalibration();
+        const suspendedCats = new Set((calibration?.states ?? []).filter((s) => s.suspended).map((s) => s.category as string));
+        let calibrationShadow = false;
+        let calibrationRedirect: string | null = null;
+        const winnerKey0 = router.winner?.key ?? null;
+        if (winnerKey0 && suspendedCats.has(winnerKey0)) {
+          const alt = [...(router.candidates ?? [])]
+            .sort((a, b) => b.score - a.score)
+            .find((c) => !suspendedCats.has(c.key));
+          if (alt) {
+            calibrationRedirect = `${winnerKey0} → ${alt.key}`;
+            router.winner = alt;
+            router.winnerVariantId = alt.variantId;
+          } else {
+            // هیچ دسته فعال ماتریسی نبود — کارت به دفتر سایه می‌رود (بدون تایید)
+            calibrationShadow = true;
+          }
+        }
+
         // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
         // وتو دیگر «دورانداختن» نیست: کارت سایه با supervisorApproved=false ثبت می‌شود
         // تا با همان موتور ESPN تسویه کاغذی شود و سوگیری بازماندگی حذف گردد.
         // تلگرام به‌صورت ساختاری هرگز کارت سایه را منتشر نمی‌کند (سپر سه‌لایه).
         // v16.0 — لیگ سمّی/خارج وایت‌لیست هم کارت را مستقیماً به دفتر سایه می‌فرستد.
-        const shadow = decision.veto || gate.veto;
+        // v20.0 — تعلیق کالیبراسیون همه دسته‌ها هم کارت را به سایه می‌فرستد.
+        const shadow = decision.veto || gate.veto || calibrationShadow;
+        if (calibrationRedirect) {
+          console.log(`[auto-issue] v20.0 calibration redirect for ${ev.externalId}: ${calibrationRedirect}`);
+        }
 
         const crown = decision.crown;
 
@@ -651,7 +694,13 @@ export async function autoSyncPastAndPresentMatches(options?: {
           // بازخوانی است و با پرچم retroIssued شناسایی می‌شود، نه با تایید سوپروایزر.
           supervisorApproved: !shadow && (!isFinished || cleanSlate),
           supervisorScore: decision.score.raw,
-          vetoReason: shadow ? (gate.veto ? gate.reason : decision.vetoReason) : null,
+          vetoReason: shadow
+            ? gate.veto
+              ? gate.reason
+              : calibrationShadow
+                ? "⚠️ تعلیق خودکار کالیبراسیون (Auto-Suspended due to Negative ROI — انتقال موقت به دفتر سایه تا رسیدن به آستانه اطمینان بالاتر)"
+                : decision.vetoReason
+            : null,
           jointLossRiskPct: decision.score.jointLossRiskPct,
           doubleWinProbPct: decision.score.doubleWinProbPct,
           /** v18.0 — سطح تاج کارت برای حصاد آلفای دفتر سایه (GOLD / SILVER_SHADOW) */
@@ -744,6 +793,24 @@ export async function autoSyncPastAndPresentMatches(options?: {
       }
     } catch (err) {
       console.warn("auto-issue accumulator pass failed:", err);
+    }
+
+    // ─── v20.0 — حلقه کالیبراسیون دسته‌ها (بازمحاسبه تعلیق‌ها) + پاکسازی ACC ساختگی ───
+    try {
+      const snap = await evaluateCategoryCalibration();
+      if (snap.suspendedCount > 0) {
+        console.log(`[auto-issue] v20.0 category calibration: ${snap.suspendedCount} category(ies) auto-suspended (negative ROI), best=${snap.bestCategory ?? "—"}`);
+      }
+    } catch (err) {
+      console.warn("category calibration pass failed:", err);
+    }
+    try {
+      const accFix = await backfillAccLedgerRows();
+      if (accFix.fixed + accFix.relegated > 0) {
+        console.log(`[auto-issue] v20.0 synthetic ACC cleanup: fixed=${accFix.fixed} relegated=${accFix.relegated}`);
+      }
+    } catch (err) {
+      console.warn("acc backfill pass failed:", err);
     }
 
     // ─── تسویه خودکار همه کارت‌های FT (شامل کارت‌های تازه صادرشده) + اعلام تلگرام ───

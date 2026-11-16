@@ -1332,7 +1332,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
 
   return (
     <TableRow className={cn("border-white/6 align-top", !slip.supervisorApproved && "bg-rose-500/[0.04]")}>
-      <TableCell className="max-w-[190px] py-2.5">
+      <TableCell className="whitespace-normal py-2.5 align-top">
         <p className="truncate text-[11px] font-bold">
           {slip.homeTeam} <span className="text-muted-foreground">×</span> {slip.awayTeam}
         </p>
@@ -1370,7 +1370,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
         )}
       </TableCell>
 
-      <TableCell className="max-w-[170px] py-2.5">
+      <TableCell className="max-w-[170px] whitespace-normal py-2.5 align-top">
         <p className="break-words text-[10px] leading-4">{slip.labelA}</p>
         <p className="mt-0.5 text-[9px] text-muted-foreground">
           ضریب <b className="font-num text-sky-300" dir="ltr">{slip.oddsA.toFixed(2)}</b> · استیک{" "}
@@ -1384,7 +1384,7 @@ function SlipRow({ slip }: { slip: IssuedSlipDTO }) {
         <EdgeChip edge={slip.edgeA} source={slip.edgeSourceA} pin={slip.pinnacleOddsA} />
       </TableCell>
 
-      <TableCell className="max-w-[170px] py-2.5">
+      <TableCell className="max-w-[170px] whitespace-normal py-2.5 align-top">
         <p className="break-words text-[10px] leading-4">{slip.labelB}</p>
         <p className="mt-0.5 text-[9px] text-muted-foreground">
           ضریب <b className="font-num text-emerald-300" dir="ltr">{slip.oddsB.toFixed(2)}</b> · استیک{" "}

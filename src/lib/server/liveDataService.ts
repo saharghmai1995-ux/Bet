@@ -24,6 +24,7 @@ import { jointShadowMetrics } from "@/lib/engine/orthogonal";
 import { deriveTipKind, computeTimingWindowStatic, type TipKind } from "@/lib/timing-window";
 import { recordSettlementLearning, listDoctrine, listJournal, type DoctrineSummary } from "./doctrine-service";
 import { getSchedulerStatus } from "./scheduler-status";
+import { computeMasterLedgerMetrics } from "./master-metrics";
 import type {
   IssueSlipItemDTO,
   IssuedSlipDTO,
@@ -59,6 +60,47 @@ function legCovers(key: string, hg: number, ag: number): boolean {
   return selectionCoversCell(key, hg, ag);
 }
 
+// ═══ v20.0 — گایت تسویه میزبان/میهمان (باگ Tenerife 2-0 Ceuta — سند §۱) ═══
+/**
+ * شرط‌های «مجموع گل تیمی» (HOME_O15 / AWAY_O15) باید دقیقاً با سمت درست تسویه شوند:
+ * اگر تیم فاوریت میزبان است، برچسب باید «مجموع گل تیم میزبان» باشد و فقط با homeGoals ≥ ۲ برنده شود؛
+ * اگر فاوریت میهمان است، برچسب «مجموع گل تیم میهمان» و فقط با awayGoals ≥ ۲.
+ * مغایرت برچسب↔کلید (مثلاً برچسب «میهمان» روی کلید HOME_O15) = باگ تسویه معکوس؛
+ * بر اساس قانون سند، تسویه با «سمتی که به کاربر نمایش داده شده» (برچسب) انجام می‌شود
+ * و یادداشت شفاف در settleNote ثبت می‌گردد.
+ */
+function labelSideOf(label: string | null | undefined): "HOME" | "AWAY" | null {
+  const s = String(label ?? "");
+  if (s.includes("میهمان")) return "AWAY";
+  if (s.includes("میزبان")) return "HOME";
+  return null;
+}
+
+/**
+ * ارزیابی یک پا با گایت سمت تیمی — برمی‌گرداند شرط پوشش دارد یا نه + آیا اصلاح سمت انجام شد.
+ * فقط برای کلیدهای HOME_O15/AWAY_O15 اعمال می‌شود؛ سایر کلیدها مستقیم با legCovers.
+ */
+function legCoversWithGuard(
+  key: string,
+  hg: number,
+  ag: number,
+  marketLabel: string | null | undefined
+): { won: boolean; sideCorrected: boolean } {
+  if (key === "HOME_O15" || key === "AWAY_O15") {
+    const keySide = key === "HOME_O15" ? "HOME" : "AWAY";
+    const labelSide = labelSideOf(marketLabel);
+    if (labelSide && labelSide !== keySide) {
+      // باگ تسویه معکوس: برچسبِ نمایش‌داده‌شده حاکم است (همان چیزی که کاربر دیده و شرط بسته است)
+      const won = labelSide === "HOME" ? hg >= 2 : ag >= 2;
+      return { won, sideCorrected: true };
+    }
+    // سازگاری کامل — تسویه دقیق با کلید (میزبان = homeGoals>=2 ، میهمان = awayGoals>=2)
+    const won = key === "HOME_O15" ? hg >= 2 : ag >= 2;
+    return { won, sideCorrected: false };
+  }
+  return { won: legCovers(key, hg, ag), sideCorrected: false };
+}
+
 /**
  * ارزیابی همه شرط‌های یک تیپ با نتایج واقعی ESPN.
  * هر شرط ممکن است روی بازی دیگری باشد (میکس دو بازی) → امتیاز همان بازی از نقشه اسکوربورد.
@@ -66,8 +108,10 @@ function legCovers(key: string, hg: number, ag: number): boolean {
 function gradeLegs(
   legs: SettlementLegDTO[],
   scoreOf: (externalId: string) => { hg: number; ag: number; state: string } | undefined,
-  fallbackExternalId: string | null
-): { graded: GradedLeg[]; allWon: boolean; anyLost: boolean; hasOffBoard: boolean; allFinal: boolean } {
+  fallbackExternalId: string | null,
+  /** v20.0 — برچسب رسمی مارکت این تیپ برای گایت سمت میزبان/میهمان */
+  marketLabel?: string | null
+): { graded: GradedLeg[]; allWon: boolean; anyLost: boolean; hasOffBoard: boolean; allFinal: boolean; sideCorrections: number } {
   const graded: GradedLeg[] = [];
   let allWon = true;
   let anyLost = false;
@@ -94,7 +138,9 @@ function gradeLegs(
       graded.push({ key: leg.key, won: false, offBoard: false, notFinal: true, matchLabel: label });
       continue;
     }
-    const won = legCovers(leg.key, score.hg, score.ag);
+    const guarded = legCoversWithGuard(leg.key, score.hg, score.ag, marketLabel);
+    const won = guarded.won;
+    if (guarded.sideCorrected) sideCorrections += 1;
     if (!won) {
       allWon = false;
       anyLost = true;
@@ -114,6 +160,7 @@ function gradeLegs(
     anyLost: evaluableAnyLost,
     hasOffBoard,
     allFinal: evaluableAllFinal,
+    sideCorrections,
   };
 }
 
@@ -127,7 +174,7 @@ function gradeClusterLegs(
   legs: SettlementLegDTO[],
   scoreOf: (externalId: string) => { hg: number; ag: number; state: string } | undefined,
   fallbackExternalId: string | null
-): { graded: GradedLeg[]; allWon: boolean; anyLost: boolean; hasOffBoard: boolean; allFinal: boolean } {
+): { graded: GradedLeg[]; allWon: boolean; anyLost: boolean; hasOffBoard: boolean; allFinal: boolean; sideCorrections: number } {
   const graded: GradedLeg[] = [];
   let anyWon = false;
   let allFinal = true;
@@ -158,6 +205,7 @@ function gradeClusterLegs(
     anyLost: !anyWon,
     hasOffBoard,
     allFinal: graded.length > 0 && allFinal,
+    sideCorrections: 0,
   };
 }
 
@@ -204,7 +252,14 @@ function espnUrlOf(externalId: string | null): string | null {
   return id ? `https://www.espn.com/soccer/match/_/gameId/${id}` : null;
 }
 
-/** فرمول سود مستند در سند ارتقا — مجموع استیک ۱۰۰ واحد (v17.0: برای کارت‌های تک‌ستون = stakeA + stakeB) */
+/**
+ * فرمول سود مستند در سند ارتقا — مجموع استیک ۱۰۰ واحد (v17.0: برای کارت‌های تک‌ستون = stakeA + stakeB)
+ * ═══ v20.0 — حسابداری صادقانه باخت‌ها (سند §۳-۱) ═══
+ * استاپ‌لاس مصنوعی -۴۵ حذف شد: در شرط‌بندی واقعی اگر بازی ۰-۳ یا ۲-۲ شود،
+ * امکان کش‌اوت ۵۵٪ در دقیقه ۶۵ وجود ندارد و کل استیک آن کارت از دست می‌رود.
+ * تمام باخت‌های کامل صادقانه با -۱۰۰.0 واحد (کارت طلایی ۱۰۰ واحدی) و
+ * -۵۰.0 واحد (کارت تاج نقره‌ای ۵۰ واحدی) ثبت می‌شوند — چون totalStaked همان استیک واقعی کارت است.
+ */
 function settlementProfit(
   status: Exclude<SlipStatus, "PENDING" | "LIVE" | "MANUAL_REVIEW" | "VOID">,
   stakeA: number,
@@ -223,26 +278,22 @@ function settlementProfit(
       // 🟢 برد تیپ B: سود خالص = stakeB × oddsB − مجموع استیک
       // v19.0 — بال پوششی ۳۵ واحد در ~۳.۱۰x: ۳۵×۳.۱۰ − ۱۰۰ = +۸.۵ واحد (اصل پول + ۸.۵٪)
       return { netProfit: r1(stakeB * oddsB - totalStaked), profitA: r1(-stakeA), profitB: r1(stakeB * oddsB - totalStaked), stopLossShield: false };
-    case "DOUBLE_WIN":
+    case "DOUBLE_WIN": {
       // 🏆 برد طلایی هر دو تیپ: جمع سود هر دو
       // v19.0 — Double-Win در نتایج ۱-۰ و ۲-۰: ۶۵×۲.۱۰ + ۳۵×۳.۱۰ − ۱۰۰ = +۱۴۵ واحد در یک مسابقه
-      return {
-        netProfit: r1(stakeA * oddsA + stakeB * oddsB - totalStaked),
-        profitA: r1(stakeA * oddsA - stakeA),
-        profitB: r1(stakeB * oddsB - stakeB),
-        stopLossShield: false,
-      };
+      const profitA = r1(stakeA * oddsA - stakeA);
+      const profitB = r1(stakeB * oddsB - stakeB);
+      return { netProfit: r1(profitA + profitB), profitA, profitB, stopLossShield: false };
+    }
     case "MIDDLE_TRAP": {
-      // ═══ v19.0 — سپر توقف ضرر زنده (In-Play Stop-Loss Shield) در دقیقه ۶۵ ═══
-      // در بازی‌های نادری که هر دو تیپ در معرض تله میانی قرار می‌گیرند (~۷.۱٪ موارد)،
-      // ماژول پوشش زنده (T-60 / In-Play Hedge) در دقیقه ۶۵ با کش‌اوت/هج زنده ۵۵٪ سرمایه
-      // را نجات می‌دهد → زیان خالص کارت بازنده به‌جای -۱۰۰، روی -۴۵ (Protected Stop-Loss) ثبت می‌شود.
-      const rescuedNet = r1(-totalStaked * 0.45); // نجات ۵۵٪ — زیان محافظت‌شده
+      // ═══ v20.0 — باخت صادقانه و کامل (حذف سپر استاپ‌لاس مصنوعی -۴۵) ═══
+      // سند v20.0 §۳: «در شرط‌بندی واقعی اگر بازی ۰-۳ یا ۲-۲ شود، امکان کش‌اوت ۵۵٪
+      // در دقیقه ۶۵ وجود ندارد و کل استیک آن کارت از دست می‌رود» — ثبت صادقانه و شفاف:
       return {
-        netProfit: rescuedNet,
-        profitA: r1(-stakeA * 0.45),
-        profitB: r1(-stakeB * 0.45),
-        stopLossShield: true,
+        netProfit: r1(-totalStaked), // کارت طلایی: −۱۰۰ | کارت نقره‌ای: −۵۰ (استیک واقعی کارت)
+        profitA: r1(-stakeA),
+        profitB: r1(-stakeB),
+        stopLossShield: false,
       };
     }
   }
@@ -296,7 +347,7 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
     // هر پای مستقل با externalId خودش از اسکوربورد ارزیابی می‌شود؛ برد میکس = برد همه پای‌ها.
     if (slip.productLine === "ACCUMULATOR") {
       const accLegs = safeParseLegs(slip.legsA);
-      const gradedAcc = gradeLegs(accLegs, scoreOf, slip.externalId);
+      const gradedAcc = gradeLegs(accLegs, scoreOf, slip.externalId, slip.labelA);
       const anyInPlay = accLegs.some((l) => l.matchExternalId && scoreOf(l.matchExternalId)?.state === "in");
       if (anyInPlay && slip.status !== "LIVE") {
         await db.issuedSlip.update({ where: { id: slip.id }, data: { status: "LIVE" } });
@@ -315,13 +366,41 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
       const accWon = gradedAcc.allWon;
       const accStatus = accWon ? "WON_A" : "MIDDLE_TRAP";
       const accProf = settlementProfit(accStatus, slip.stakeA, slip.stakeB, slip.oddsA, slip.oddsB);
+      // ═══ v20.0 — نام دقیق تیم‌ها و نتیجه واقعی هر پای روی خود ردیف ACC ثبت می‌شود ═══
+      // ریشه ردیف‌های ساختگی «ACC 2-Leg ?-? Multi-Match Chain»: homeTeam/awayTeam ساختگی +
+      // homeGoals/awayGoals هرگز نوشته نمی‌شد. حالا: نام واقعی تیم‌های هر پای + مجموع گل
+      // واقعی تجمعی پای‌ها (سمت میزبان/میهمان هر پای) روی کارت ثبت و در کارنامه/ژورنال
+      // نمایش داده می‌شود — صفر ردیف «؟-؟» بدون نتیجه واقعی.
+      const legScores: string[] = [];
+      let aggHome = 0;
+      let aggAway = 0;
+      let accHasRealScore = false;
+      for (const l of accLegs) {
+        const sc = l.matchExternalId ? byId.get(l.matchExternalId) : undefined;
+        if (sc && sc.state === "post") {
+          accHasRealScore = true;
+          aggHome += sc.hg;
+          aggAway += sc.ag;
+          legScores.push(`${l.matchLabel ?? ""} ${sc.hg}-${sc.ag}`);
+        }
+      }
+      const accNameA = /^ACC \d+-Leg$/.test(slip.homeTeam)
+        ? accLegs.map((l) => (l.matchLabel ?? "").split("×")[0]?.trim() ?? "").filter(Boolean).join(" + ") || slip.homeTeam
+        : slip.homeTeam;
+      const accNameB = slip.awayTeam === "Multi-Match Chain"
+        ? accLegs.map((l) => (l.matchLabel ?? "").split("×")[1]?.trim() ?? "").filter(Boolean).join(" + ") || slip.awayTeam
+        : slip.awayTeam;
       const accNote = accWon
-        ? `🏆 میکس زنجیره‌ای ${accLegs.length} پایه برنده شد — همه پای‌ها با نتیجه واقعی ESPN تایید شدند`
-        : `🔴 یک پای میکس ${accLegs.length} پایه باخت — باخت صادقانه و شفاف آکومولاتور · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)`;
+        ? `🏆 میکس زنجیره‌ای ${accLegs.length} پایه برنده شد — همه پای‌ها با نتیجه واقعی ESPN تایید شدند${legScores.length ? ` · نتایج پای‌ها: ${legScores.join(" | ")}` : ""}`
+        : `🔴 یک پای میکس ${accLegs.length} پایه باخت — باخت صادقانه و کامل آکومولاتور (${accProf.netProfit} واحد از استیک ${slip.stakeA + slip.stakeB})${legScores.length ? ` · نتایج پای‌ها: ${legScores.join(" | ")}` : ""}`;
       await db.issuedSlip.update({
         where: { id: slip.id },
         data: {
           status: accStatus,
+          homeTeam: accNameA,
+          awayTeam: accNameB,
+          // مجموع گل واقعی تجمعی پای‌ها — ریشه «؟-؟» حذف می‌شود (مجموع گل سمت میزبان در برابر میهمان پای‌ها)
+          ...(accHasRealScore ? { homeGoals: aggHome, awayGoals: aggAway } : {}),
           profitA: accProf.profitA,
           profitB: accProf.profitB,
           netProfit: accProf.netProfit,
@@ -397,11 +476,11 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
         slip.productLine === "CS_CLUSTER" || legsA.filter((l) => l.key.startsWith("CS_")).length > 1;
       const gradedA = isClusterA
         ? gradeClusterLegs(legsA, scoreOf, slip.externalId)
-        : gradeLegs(legsA, scoreOf, slip.externalId);
+        : gradeLegs(legsA, scoreOf, slip.externalId, slip.labelA);
       // v17.0 — کارت تک‌تیپ (BANKER): تیپ B فاقد شرط است — همیشه «برنده» فرض می‌شود
       const gradedB = legsB.length === 0
-        ? { graded: [], allWon: true, anyLost: false, hasOffBoard: false, allFinal: true }
-        : gradeLegs(legsB, scoreOf, slip.externalId);
+        ? { graded: [], allWon: true, anyLost: false, hasOffBoard: false, allFinal: true, sideCorrections: 0 }
+        : gradeLegs(legsB, scoreOf, slip.externalId, slip.labelB);
 
       let status: SlipStatus;
       let note: string;
@@ -424,7 +503,7 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
         // ═══ v19.0 — کارت‌های تک‌ستون (BANKER / CS_CLUSTER / ACCUMULATOR): تیپ B ندارند ═══
         // باگ جدی نسخه‌های قبل: با legsB خالی، باخت تیپ A به‌صورت WON_B با −۱۰۰u ثبت
         // می‌شد و در وین‌ریت به‌عنوان «برد» شمرده می‌شد! حالا باخت تک‌ستون = MIDDLE_TRAP
-        // صادقانه (با سپر استاپ‌لاس) و برد تک‌ستون = WON_A با فرمول درست سود.
+        // صادقانه (بدون هیچ سپر ساختگی) و برد تک‌ستون = WON_A با فرمول درست سود.
         const isSingleColumn = legsB.length === 0;
         if (isSingleColumn && aWon) {
           status = "WON_A";
@@ -434,10 +513,8 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
         } else if (isSingleColumn && !aWon) {
           status = "MIDDLE_TRAP";
           note = isClusterA
-            ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
-            : "🔴 تک‌ستون امن باخت — باخت صادقانه و شفاف";
-          // v19.0 — سپر استاپ‌لاس زنده: هج‌بات در دقیقه ۶۵ کش‌اوت کرد و ۵۵ واحد نجات داد
-          note += " · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)";
+            ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و کامل خوشه"
+            : "🔴 تک‌ستون امن باخت — باخت صادقانه و کامل (کل استیک کارت از دست رفت)";
         } else if (aWon && bWon) {
           status = "DOUBLE_WIN";
           note = "🏆 نتیجه در خانه‌های مشترک هر دو تیپ — برد طلایی (Jackpot)";
@@ -450,13 +527,18 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
         } else {
           status = "MIDDLE_TRAP";
           note = slip.productLine === "ACCUMULATOR"
-            ? "🔴 یک پای میکس زنجیره‌ای باخت — باخت صادقانه و شفاف آکومولاتور"
+            ? "🔴 یک پای میکس زنجیره‌ای باخت — باخت صادقانه و کامل آکومولاتور"
             : isClusterA
-              ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و شفاف خوشه"
-              : "🔴 تله میانی — هر دو تیپ باختند؛ ثبت صادقانه و شفاف";
-          // v19.0 — سپر استاپ‌لاس زنده: هج‌بات در دقیقه ۶۵ کش‌اوت کرد و ۵۵ واحد نجات داد
-          note += " · 🛡️ سپر استاپ‌لاس زنده دقیقه ۶۵ اعمال شد (نجات ۵۵٪ سرمایه)";
+              ? "🔴 هیچ‌یک از نمرات خوشه وقوع نکرد — باخت صادقانه و کامل خوشه"
+              : "🔴 تله میانی — هر دو تیپ باختند؛ باخت صادقانه و کامل (کل استیک کارت)";
         }
+      }
+
+      // ═══ v20.0 — شفافیت گایت سمت میزبان/میهمان (باگ Tenerife) ═══
+      // اگر هر شرط مجموع گل تیمی با سمتِ برچسبِ نمایش‌داده‌شده تسویه شده، اینجا صادقانه ثبت می‌شود
+      const sideFixes = (gradedA.sideCorrections ?? 0) + (gradedB.sideCorrections ?? 0);
+      if (sideFixes > 0 && note) {
+        note += ` · ⚠️ گایت v20.0: ${sideFixes} شرط مجموع گل تیمی با سمت برچسب نمایش‌داده‌شده تسویه شد (اصلاح تسویه معکوس میزبان/میهمان)`;
       }
 
       if ((status as string) === "PENDING" || (status as string) === "LIVE") continue;
@@ -561,6 +643,13 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
     }
   }
 
+  // ─── ۴.۷) v20.0 — پاکسازی ردیف‌های ساختگی ACC از کارنامه/ژورنال (throttle ۱۵ دقیقه) ───
+  try {
+    await backfillAccLedgerRows();
+  } catch (err) {
+    console.warn("acc ledger backfill failed:", err);
+  }
+
   return {
     success: true,
     checkedEspn: count,
@@ -570,6 +659,102 @@ async function settleFinishedSlipsInner(options?: { notify?: boolean; windowDays
     notified,
     elapsedMs: Date.now() - t0,
   };
+}
+/**
+ * backfillAccLedgerRows — حذف ردیف‌های ساختگی «ACC x-Leg ?-? Multi-Match Chain» از کارنامه و ژورنال:
+ *   ۱) نام دقیق تیم‌های واقعی هر پای از legsA روی homeTeam/awayTeam ردیف نوشته می‌شود
+ *   ۲) نتیجه FT واقعی تجمعی پای‌ها (مجموع گل سمت میزبان/میهمان از ESPN) روی homeGoals/awayGoals ثبت می‌شود
+ *   ۳) ردیفی که هیچ نتیجه واقعی ESPN برای پای‌هایش پیدا نشد → retroIssued=true (خروج از کارنامه رسمی به دفتر بازخوانی)
+ *   ۴) ژورنال همان ردیف هم با نام/نتیجه واقعی به‌روز می‌شود
+ * هر پاس: throttle ۱۵ دقیقه — فراخوانی از autoSync (خط لوله سرور).
+ */
+let lastAccBackfillAt = 0;
+
+export async function backfillAccLedgerRows(force = false): Promise<{ fixed: number; relegated: number }> {
+  if (!force && Date.now() - lastAccBackfillAt < 15 * 60_000) return { fixed: 0, relegated: 0 };
+  lastAccBackfillAt = Date.now();
+
+  const targets = await db.issuedSlip.findMany({
+    where: {
+      productLine: "ACCUMULATOR",
+      OR: [{ homeTeam: { startsWith: "ACC " } }, { homeGoals: null, status: { in: ["WON_A", "MIDDLE_TRAP"] } }],
+    },
+    take: 20,
+    orderBy: { kickoff: "desc" },
+  });
+  if (targets.length === 0) return { fixed: 0, relegated: 0 };
+
+  const { byId } = await loadEspnScoreWindow(7);
+  let fixed = 0;
+  let relegated = 0;
+
+  for (const slip of targets) {
+    try {
+      const legs = safeParseLegs(slip.legsA);
+      if (legs.length === 0) continue;
+      const homeNames: string[] = [];
+      const awayNames: string[] = [];
+      let aggHome = 0;
+      let aggAway = 0;
+      let hasReal = false;
+      const legScores: string[] = [];
+      for (const l of legs) {
+        const parts = String(l.matchLabel ?? "").split("×");
+        if (parts[0]?.trim()) homeNames.push(parts[0].trim());
+        if (parts[1]?.trim()) awayNames.push(parts[1].trim());
+        const sc = l.matchExternalId ? byId.get(l.matchExternalId) : undefined;
+        if (sc && sc.state === "post") {
+          hasReal = true;
+          aggHome += sc.hg;
+          aggAway += sc.ag;
+          legScores.push(`${l.matchLabel ?? ""} ${sc.hg}-${sc.ag}`);
+        }
+      }
+      const nameA = homeNames.length > 0 ? homeNames.join(" + ") : slip.homeTeam;
+      const nameB = awayNames.length > 0 ? awayNames.join(" + ") : slip.awayTeam;
+      if (!hasReal && homeNames.length === 0) continue; // هیچ داده واقعی — دست نمی‌زنیم
+      if (!hasReal) {
+        // پای‌ها نام واقعی دارند ولی نتایج ESPN در پنجره نیست → ردیف ساختگی بدون نتیجه: خروج از کارنامه رسمی
+        await db.issuedSlip.update({
+          where: { id: slip.id },
+          data: {
+            retroIssued: true,
+            homeTeam: nameA,
+            awayTeam: nameB,
+            settleNote: "v20.0 — ردیف ساختگی ACC بدون نتیجه واقعی ESPN؛ از کارنامه رسمی به دفتر بازخوانی منتقل شد",
+          },
+        });
+        relegated += 1;
+      } else {
+        await db.issuedSlip.update({
+          where: { id: slip.id },
+          data: {
+            homeTeam: nameA,
+            awayTeam: nameB,
+            homeGoals: aggHome,
+            awayGoals: aggAway,
+            settleNote: `v20.0 — نام واقعی پای‌ها + نتیجه تجمعی ESPN · ${legScores.join(" | ")}`,
+          },
+        });
+        fixed += 1;
+      }
+      // به‌روزرسانی ژورنال همان ردیف (نام واقعی + نتیجه واقعی — حذف «؟-؟» از ژورنال تسویه)
+      await db.settlementJournal.updateMany({
+        where: { slipId: slip.id },
+        data: {
+          matchLabel: `${nameA} ${aggHome}-${aggAway} ${nameB}`,
+          homeGoals: hasReal ? aggHome : null,
+          awayGoals: hasReal ? aggAway : null,
+        },
+      });
+    } catch (err) {
+      console.warn(`ACC backfill failed for ${slip.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  if (fixed + relegated > 0) {
+    console.log(`[acc-backfill] v20.0: ${fixed} rows fixed with real names/scores, ${relegated} synthetic rows relegated to retro book`);
+  }
+  return { fixed, relegated };
 }
 
 function safeParseLegs(json: string): SettlementLegDTO[] {
@@ -1011,7 +1196,6 @@ export async function getLedger(): Promise<LedgerDTO> {
   ]);
 
   const slips = allRows.map((s) => mapSlip(s));
-  const slipsView = slips.slice(0, 120); // سقف نمایش جدول کارنامه
   // ─── v11.0 — آمار تیتر کارنامه فقط از کارت‌های تایید سوپروایزر؛ وتوها به «دفتر سایه» می‌روند ───
   // v13.2 — کارت‌های بازخوانی (retroIssued — بازی FT پیش از صدور) از آمار اصلی حذف و به دسته ه می‌روند
   // v18.0 — کارت‌های تاج نقره‌ای (crownTier=SILVER_SHADOW) از کتاب طلایی جدا شده‌اند
@@ -1020,44 +1204,36 @@ export async function getLedger(): Promise<LedgerDTO> {
   const silverSlips = slips.filter((s) => s.supervisorApproved && !s.retroIssued && s.crownTier === "SILVER_SHADOW");
   const approvedSlips = goldSlips;
   const retroSlips = slips.filter((s) => s.retroIssued);
+  const shadowSlips = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
+  // ═══ v20.0 — جدول کارنامه فقط «کتاب رسمی» است؛ سایه/بازخوانی ویوهای جدا (سند §۲/§۳ — حذف تیک جکپات از کارت سایه) ═══
+  const officialView = goldSlips.slice(0, 120); // سقف نمایش جدول کارنامه رسمی
+  const shadowView = shadowSlips.slice(0, 40);
+  const retroView = retroSlips.slice(0, 20);
+  // ═══ v20.0 — منبع واحد حقیقت (سند §۳-۲): همه آمارها فقط از computeMasterLedgerMetrics ═══
+  const master = computeMasterLedgerMetrics(approvedSlips);
   const stats: SettlementStatsDTO = {
-    total: approvedSlips.length,
-    pending: 0,
-    live: 0,
-    wonA: 0,
-    wonB: 0,
-    doubleWin: 0,
-    middleTrap: 0,
-    manual: 0,
-    void: 0,
-    settled: 0,
-    netProfit: 0,
-    netProfitPct: 0,
-    staked: 0,
+    total: master.total,
+    pending: master.pending,
+    live: master.live,
+    wonA: master.wonA,
+    wonB: master.wonB,
+    doubleWin: master.doubleWin,
+    middleTrap: master.middleTrap,
+    manual: master.manual,
+    void: master.void,
+    settled: master.settled,
+    netProfit: master.netProfit,
+    netProfitPct: master.yieldPct ?? 0,
+    staked: master.totalStaked,
+    wins: master.wins,
+    losses: master.losses,
+    winRatePct: master.winRatePct,
+    yieldPct: master.yieldPct,
+    bankGrowthPct: master.bankGrowthPct,
   };
-  for (const s of approvedSlips) {
-    switch (s.status) {
-      case "PENDING": stats.pending += 1; break;
-      case "LIVE": stats.live += 1; break;
-      case "WON_A": stats.wonA += 1; break;
-      case "WON_B": stats.wonB += 1; break;
-      case "DOUBLE_WIN": stats.doubleWin += 1; break;
-      case "MIDDLE_TRAP": stats.middleTrap += 1; break;
-      case "MANUAL_REVIEW": stats.manual += 1; break;
-      case "VOID": stats.void += 1; break;
-    }
-    if (["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"].includes(s.status)) {
-      stats.settled += 1;
-      stats.netProfit += s.netProfit ?? 0;
-      stats.staked += s.stakeA + s.stakeB;
-    }
-  }
-  stats.netProfit = Math.round(stats.netProfit * 100) / 100;
-  stats.netProfitPct = stats.staked > 0 ? Math.round((stats.netProfit / stats.staked) * 1000) / 10 : 0;
 
   // ─── v11.0 — دفتر سایه: تسویه کاغذی کارت‌های وتوشده (paper P&L — هرگز واقعی نبوده) ───
   // v13.5.1 — کارت‌های بازخوانی (retroIssued) از دفتر سایه خارج شدند؛ سایه فقط وتوهای زنده است
-  const shadowSlips = slips.filter((s) => !s.supervisorApproved && !s.retroIssued);
   const shadowByStatus: Record<string, number> = {};
   let shadowWins = 0;
   let shadowLosses = 0;
@@ -1238,8 +1414,23 @@ export async function getLedger(): Promise<LedgerDTO> {
 
   return {
     success: true,
-    slips: slipsView,
+    // v20.0 — جدول کارنامه = کتاب رسمی؛ سایه و بازخوانی در ویوهای جدا با استایل جدا رندر می‌شوند
+    slips: officialView,
+    shadowSlips: shadowView,
+    retroSlips: retroView,
     stats,
+    master: {
+      total: master.total,
+      settled: master.settled,
+      wins: master.wins,
+      losses: master.losses,
+      winRatePct: master.winRatePct,
+      netProfit: master.netProfit,
+      totalStaked: master.totalStaked,
+      yieldPct: master.yieldPct,
+      bankGrowthPct: master.bankGrowthPct,
+      finalBank: master.finalBank,
+    },
     regimes,
     shadow,
     retroBook,

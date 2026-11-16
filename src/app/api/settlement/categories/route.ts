@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { computeMasterLedgerMetrics } from "@/lib/server/master-metrics";
+import { evaluateCategoryCalibration } from "@/lib/server/category-calibration";
 import type { CategoryPerformanceDTO, CategoryPerformanceResponseDTO } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-/** وضعیت‌های تسویه‌شده معتبر برای محاسبه وین‌ریت */
-const SETTLED = ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"];
-const WIN_STATUSES = ["WON_A", "WON_B", "DOUBLE_WIN"];
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -39,6 +37,8 @@ export async function GET() {
         productLine: true,
         crownTier: true, // v18.0 — افراز تاج نقره‌ای (شکارچی آلفای سایه)
         netProfit: true,
+        stakeA: true,
+        stakeB: true,
         marginPct: true,
         jointLossRiskPct: true,
         doubleWinProbPct: true,
@@ -77,24 +77,23 @@ export async function GET() {
       c.paper = paper;
       let riskSum = 0;
       let riskN = 0;
+      // ═══ v20.0 — منبع واحد حقیقت: وین‌ریت/سود/ROI هر دسته فقط از computeMasterLedgerMetrics ═══
+      const m = computeMasterLedgerMetrics(rows);
+      c.total = m.total;
+      c.settled = m.settled;
+      c.pending = m.pending + m.live + m.manual + m.void;
+      c.wins = m.wins;
+      c.losses = m.losses;
+      c.winRate = m.winRatePct;
+      c.netProfit = m.netProfit;
+      c.roiPct = m.yieldPct;
       for (const s of rows) {
-        c.total += 1;
         if (typeof s.jointLossRiskPct === "number") {
           riskSum += s.jointLossRiskPct;
           riskN += 1;
         }
-        if (!SETTLED.includes(s.status)) {
-          c.pending += 1;
-          continue;
-        }
-        c.settled += 1;
-        c.netProfit += s.netProfit ?? 0;
-        if (WIN_STATUSES.includes(s.status)) c.wins += 1;
-        else c.losses += 1;
         if (s.status === "DOUBLE_WIN") c.doubleWinHits += 1;
       }
-      c.winRate = c.settled > 0 ? r1((c.wins / c.settled) * 100) : null;
-      c.netProfit = r2(c.netProfit);
       c.avgJointLossRiskPct = riskN > 0 ? r1(riskSum / riskN) : null;
       return c;
     };
@@ -118,10 +117,20 @@ export async function GET() {
       let riskN = 0;
       let dwpSum = 0;
       let dwpN = 0;
+      // ═══ v20.0 — منبع واحد حقیقت برای فیلترها هم ═══
+      const m = computeMasterLedgerMetrics(rows);
+      c.total = m.total;
+      c.settled = m.settled;
+      c.pending = m.pending + m.live + m.manual + m.void;
+      c.wins = m.wins;
+      c.losses = m.losses;
+      c.winRate = m.winRatePct;
+      c.netProfit = m.netProfit;
+      c.roiPct = m.yieldPct;
       for (const s of rows) {
-        c.total += 1;
         // سنجه‌های لحظه صدور روی «همه» کارت‌های دسته میانگین می‌شوند (مستقل از تسویه)
-        if (typeof s.marginPct === "number") {
+        if (typeof s.marginPct === "number" && s.marginPct > 0) {
+          // v20.0 — میانگین سود تضمینی فقط روی کارت‌های دارای پوشش واقعی (رفع «میانگین سود -۱۹٪»)
           marginSum += s.marginPct;
           marginN += 1;
         }
@@ -133,18 +142,8 @@ export async function GET() {
           dwpSum += s.doubleWinProbPct;
           dwpN += 1;
         }
-        if (!SETTLED.includes(s.status)) {
-          c.pending += 1;
-          continue;
-        }
-        c.settled += 1;
-        c.netProfit += s.netProfit ?? 0;
-        if (WIN_STATUSES.includes(s.status)) c.wins += 1;
-        else c.losses += 1;
         if (s.status === "DOUBLE_WIN") c.doubleWinHits += 1;
       }
-      c.winRate = c.settled > 0 ? r1((c.wins / c.settled) * 100) : null;
-      c.netProfit = r2(c.netProfit);
       c.avgGuaranteedProfitPct = marginN > 0 ? r1(marginSum / marginN) : null;
       c.avgJointLossRiskPct = riskN > 0 ? r1(riskSum / riskN) : null;
       c.avgDoubleWinProbPct = dwpN > 0 ? r1(dwpSum / dwpN) : null;
@@ -298,9 +297,49 @@ export async function GET() {
       ),
     ];
 
+    // ═══ v20.0 — حلقه کالیبراسیون خودکار دسته‌ها: اتصال وضعیت تعلیق به هر دسته ═══
+    const calibration = await evaluateCategoryCalibration().catch(() => null);
+    const calStateOf = (catKey: string) => {
+      if (!calibration) return null;
+      const map: Record<string, string> = {
+        APPROVED: "DUAL_HEDGE",
+        COMBO: "COMBO",
+        BANKER: "BANKER",
+        CS_CLUSTER: "CS_CLUSTER",
+        SNIPER: "SNIPER",
+      };
+      const ck = map[catKey];
+      return calibration.states.find((st) => st.category === ck) ?? null;
+    };
+    for (const cat of categories) {
+      const st = calStateOf(cat.key);
+      if (st) {
+        cat.suspended = st.suspended;
+        cat.suspensionReason = st.reason;
+        if (st.roiPct !== null) cat.roiPct = st.roiPct;
+      }
+    }
+
     const body: CategoryPerformanceResponseDTO = {
       success: true,
       categories,
+      calibration: calibration
+        ? {
+            evaluatedAt: calibration.evaluatedAt,
+            bestCategory: calibration.bestCategory,
+            suspendedCount: calibration.suspendedCount,
+            states: calibration.states.map((st) => ({
+              category: st.category,
+              labelFa: st.labelFa,
+              settled: st.settled,
+              winRatePct: st.winRatePct,
+              netProfit: st.netProfit,
+              roiPct: st.roiPct,
+              suspended: st.suspended,
+              reason: st.reason,
+            })),
+          }
+        : undefined,
       filterPerformance,
       shadowLedger: {
         approvedSlips: live.length,
@@ -311,15 +350,15 @@ export async function GET() {
             : `هشدار افراز: مجموع دسته‌ها (${sumTotal}) با کل کارت‌ها (${slips.length}) نمی‌خواند.`,
       },
       silverHarvest: (() => {
-        const sSettled = partitionSilver.filter((s) => SETTLED.includes(s.status));
-        const sWins = partitionSilver.filter((s) => WIN_STATUSES.includes(s.status)).length;
+        // v20.0 — حصاد نقره‌ای هم از منبع واحد حقیقت
+        const m = computeMasterLedgerMetrics(partitionSilver);
         return {
           total: partitionSilver.length,
-          settled: sSettled.length,
-          wins: sWins,
-          losses: sSettled.length - sWins,
-          winRate: sSettled.length > 0 ? r1((sWins / sSettled.length) * 100) : null,
-          netProfit: Math.round(partitionSilver.reduce((a, s) => a + (s.netProfit ?? 0), 0) * 100) / 100,
+          settled: m.settled,
+          wins: m.wins,
+          losses: m.losses,
+          winRate: m.winRatePct,
+          netProfit: m.netProfit,
         };
       })(),
       generatedAt: new Date().toISOString(),

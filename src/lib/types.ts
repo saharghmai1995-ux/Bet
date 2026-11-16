@@ -771,6 +771,17 @@ export interface SettlementStatsDTO {
   /** سود خالص نسبت به مجموع استیک‌های تسویه‌شده (٪) */
   netProfitPct: number;
   staked: number;
+  /** ═══ v20.0 — سنجه‌های واحد منبع حقیقت (computeMasterLedgerMetrics) ═══ */
+  /** تعداد برد (wonA + wonB + doubleWin) — تعریف واحد برد در کل سیستم */
+  wins: number;
+  /** تعداد باخت کامل (middleTrap) */
+  losses: number;
+  /** وین‌ریت واقعی = wins ÷ settled × ۱۰۰ */
+  winRatePct: number | null;
+  /** Yield/ROI واقعی روی حجم استیک = netProfit ÷ staked × ۱۰۰ */
+  yieldPct: number | null;
+  /** رشد بانک ۱۰۰۰ واحدی = netProfit ÷ ۱۰۰۰ × ۱۰۰ */
+  bankGrowthPct: number;
 }
 
 /** خروجی همگام‌سازی و تسویه خودکار با سرور ESPN */
@@ -790,7 +801,12 @@ export interface SettlementSyncResultDTO {
 /** خروجی کامل کارنامه + صندوق تلگرام */
 export interface LedgerDTO {
   success: boolean;
+  /** v20.0 — جدول کارنامه فقط «کتاب رسمی» است (تاییدشده غیربازخوانی)؛ سایه/بازخوانی در دو ویو جدا */
   slips: IssuedSlipDTO[];
+  /** v20.0 — ویو کارت‌های وتوشده دفتر سایه (تسویه کاغذی — بدون تیک جکپات در جدول رسمی) */
+  shadowSlips: IssuedSlipDTO[];
+  /** v20.0 — ویو کارت‌های بازخوانی (تحلیل کاغذی پس از FT) */
+  retroSlips: IssuedSlipDTO[];
   stats: SettlementStatsDTO;
   /**
    * v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown):
@@ -887,6 +903,19 @@ export interface LedgerDTO {
     approvedLiveToday: number;
     /** مجموع کارت‌های وتوشده سوپروایزر (دفتر سایه — زنده) */
     vetoedTotal: number;
+  };
+  /** ═══ v20.0 — خروجی رسمی computeMasterLedgerMetrics — تنها منبع آمار همه باکس‌ها ═══ */
+  master: {
+    total: number;
+    settled: number;
+    wins: number;
+    losses: number;
+    winRatePct: number | null;
+    netProfit: number;
+    totalStaked: number;
+    yieldPct: number | null;
+    bankGrowthPct: number;
+    finalBank: number;
   };
 }
 
@@ -1002,11 +1031,33 @@ export interface CategoryPerformanceDTO {
   avgGuaranteedProfitPct: number | null;
   avgJointLossRiskPct: number | null;
   avgDoubleWinProbPct: number | null;
+  /** v20.0 — Category ROI واقعی روی حجم استیک (netProfit ÷ totalStaked × ۱۰۰) */
+  roiPct?: number | null;
+  /** v20.0 — تعلیق خودکار کالیبراسیون (ROI منفی) */
+  suspended?: boolean;
+  /** v20.0 — دلیل تعلیق (متن سند) */
+  suspensionReason?: string | null;
 }
 
 export interface CategoryPerformanceResponseDTO {
   success: boolean;
   categories: CategoryPerformanceDTO[];
+  /** ═══ v20.0 — حلقه کالیبراسیون خودکار دسته‌ها (تعلیق ROI منفی + بهترین دسته سودده) ═══ */
+  calibration?: {
+    evaluatedAt: string;
+    bestCategory: string | null;
+    suspendedCount: number;
+    states: {
+      category: string;
+      labelFa: string;
+      settled: number;
+      winRatePct: number | null;
+      netProfit: number;
+      roiPct: number | null;
+      suspended: boolean;
+      reason: string | null;
+    }[];
+  };
   /**
    * v13.4 — پوشش کامل عملکرد هر «فیلتر دک فلش‌کارت» (RISK10/BOOSTER/PROFIT15/FORTRESS/APPROVED/VETOED).
    * برخلاف `categories` (افراز ۱۰۰٪ مجزا)، این دسته‌ها همپوشان‌اند: یک کارت می‌تواند هم‌زمان

@@ -842,9 +842,113 @@ function crestInitials(name: string): string {
 }
 
 /** کامپوز نهایی v18.1: پس‌زمینه آرکید پیکسلی موضوع‌محور + لایه برداری + لایه CRT — خروجی PNG 1080×1440 (صفر آپلود) */
-function compose(kind: StadiumKind, overlaySvg: string, accent: string, topic: PosterTopic = "MATCH"): Promise<Buffer> {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${arcadeBackdrop(W, H, kind, accent, topic)}${overlaySvg}${crtOverlay(W, H)}</svg>`;
+function compose(kind: StadiumKind, overlaySvg: string, accent: string, topic: PosterTopic = "MATCH", backdropVariant?: "ARCADE" | "SILVER"): Promise<Buffer> {
+  // ═══ v20.0 — Two-Tier Visual Identity: کارت طلایی = استادیوم آرکید گرم؛
+  // کارت نقره‌ای = پس‌زمینه فولادی-صنعتی کاملاً متفاوت (سند کارفرما: فلش کارت‌های
+  // طلایی و نقره‌ای باید تصاویر متفاوت داشته باشند) ═══
+  const backdrop = backdropVariant === "SILVER" ? silverBackdrop(W, H) : arcadeBackdrop(W, H, kind, accent, topic);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${backdrop}${overlaySvg}${crtOverlay(W, H)}</svg>`;
   return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+/**
+ * v20.0 — پس‌زمینه «شکارچی آلفای سایه» — هویت بصری کاملاً متفاوت کارت نقره‌ای:
+ * به‌جای استادیوم آرکید شبانه (کارت طلایی)، ترکیب فولادی-صنعتی:
+ *   · آسمان سرد دو رنگ پلاتینیوم + خطوط مورب فولادی ۴۵ درجه
+ *   · شبکه شش‌ضلعی ( Honeycomb ) در نیمه بالا + خطوط اسکن افقی
+ *   · موج‌های زمین فلزی مورب به‌جای چمن افقی
+ *   · مهرهای لوزی پلاتینیوم پخش در پس‌زمینه
+ */
+function silverBackdrop(w: number, h: number): string {
+  const sky0 = "#0a0e16";
+  const sky1 = "#151c2a";
+  const steel = "#cdd6e4";
+  const steelDim = "#8f9fb5";
+
+  // ─── آسمان سرد + خطوط مورب فولادی (جنس کاملاً متفاوت از ستاره‌های آرکید) ───
+  const diagonal: string[] = [];
+  for (let i = -4; i < Math.ceil((w + h) / 56); i++) {
+    const x0 = i * 56;
+    diagonal.push(
+      `<line x1="${x0}" y1="0" x2="${x0 + h * 0.42}" y2="${h * 0.42}" stroke="${steel}" stroke-opacity="${(i % 3 === 0 ? 0.10 : 0.05).toFixed(2)}" stroke-width="${i % 3 === 0 ? 3 : 1.6}"/>`
+    );
+  }
+
+  // ─── شبکه شش‌ضلعی فولادی در نیمه بالایی ───
+  const hexes: string[] = [];
+  const hr = 26;
+  for (let row = 0; row * hr * 1.5 < h * 0.46 + hr; row++) {
+    for (let col = 0; col * hr * Math.sqrt(3) < w + hr * 2; col++) {
+      const cx = col * hr * Math.sqrt(3) + (row % 2 === 1 ? hr * Math.sqrt(3) / 2 : 0);
+      const cy = row * hr * 1.5;
+      const pts: string[] = [];
+      for (let k = 0; k < 6; k++) {
+        const ang = Math.PI / 6 + (k * Math.PI) / 3;
+        pts.push(`${(cx + hr * Math.cos(ang)).toFixed(1)},${(cy + hr * Math.sin(ang)).toFixed(1)}`);
+      }
+      hexes.push(`<polygon points="${pts.join(" ")}" fill="none" stroke="${steelDim}" stroke-opacity="0.13" stroke-width="1.4"/>`);
+    }
+  }
+
+  // ─── خطوط اسکن افقی (CRT صنعتی) ───
+  const scan: string[] = [];
+  for (let y = 0; y < h; y += 6) {
+    scan.push(`<rect x="0" y="${y}" width="${w}" height="1.4" fill="${steel}" fill-opacity="0.05"/>`);
+  }
+
+  // ─── زمین فلزی مورب (به‌جای چمن افقی آرکید) ───
+  const floorY = Math.round(h * 0.5);
+  const floor: string[] = [];
+  for (let i = 0; i < 14; i++) {
+    const t = i / 14;
+    const y0 = floorY + t * (h - floorY);
+    const inset = Math.round(90 * (1 - t));
+    floor.push(
+      `<line x1="${inset}" y1="${y0.toFixed(1)}" x2="${w - inset}" y2="${y0.toFixed(1)}" stroke="${steelDim}" stroke-opacity="${(0.22 - t * 0.16).toFixed(2)}" stroke-width="${i % 2 === 0 ? 2.4 : 1.2}"/>`
+    );
+  }
+  // پرسپکتیو شعاعی از مرکز زمین
+  const rays: string[] = [];
+  for (let k = -8; k <= 8; k++) {
+    rays.push(`<line x1="${w / 2 + k * 22}" y1="${floorY}" x2="${w / 2 + k * 118}" y2="${h}" stroke="${steelDim}" stroke-opacity="0.12" stroke-width="1.6"/>`);
+  }
+
+  // ─── مهرهای لوزی پلاتینیوم ───
+  const diamonds: string[] = [];
+  const drnd = seeded(20260);
+  for (let i = 0; i < 26; i++) {
+    const dx = drnd() * w;
+    const dy = drnd() * h * 0.48;
+    const s = 5 + drnd() * 9;
+    const op = 0.10 + drnd() * 0.22;
+    diamonds.push(`<rect x="${dx.toFixed(1)}" y="${dy.toFixed(1)}" width="${s.toFixed(1)}" height="${s.toFixed(1)}" transform="rotate(45 ${(dx + s / 2).toFixed(1)} ${(dy + s / 2).toFixed(1)})" fill="${steel}" fill-opacity="${op.toFixed(2)}"/>`);
+  }
+
+  return `
+  <defs>
+    <linearGradient id="silverSky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${sky0}"/>
+      <stop offset="52%" stop-color="${sky1}"/>
+      <stop offset="100%" stop-color="#0b1018"/>
+    </linearGradient>
+    <radialGradient id="silverGlow" cx="50%" cy="18%" r="62%">
+      <stop offset="0%" stop-color="${steel}" stop-opacity="0.20"/>
+      <stop offset="45%" stop-color="${steel}" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="${steel}" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="${w}" height="${h}" fill="url(#silverSky)"/>
+  ${diagonal.join("")}
+  ${hexes.join("")}
+  ${diamonds.join("")}
+  <rect width="${w}" height="${h}" fill="url(#silverGlow)"/>
+  <rect x="0" y="${floorY}" width="${w}" height="${h - floorY}" fill="#0d1320" fill-opacity="0.88"/>
+  ${rays.join("")}
+  ${floor.join("")}
+  ${scan.join("")}
+  <!-- نوار هویت نقره‌ای بالای کارت (جدا از طلایی) -->
+  <rect x="0" y="0" width="${w}" height="6" fill="${steel}" fill-opacity="0.85"/>
+  <rect x="0" y="10" width="${w}" height="2" fill="${steel}" fill-opacity="0.35"/>`;
 }
 
 /** data URL از بافر لوگو (برای جاسازی در SVG) */
@@ -1164,8 +1268,14 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
   ${glassBox(90, 1096, 900, 132, tierColor, 20)}
   <text x="${W / 2}" y="1134" text-anchor="middle" font-family="${C.sans}" font-size="19" font-weight="bold" fill="${tierColor}" letter-spacing="2.5">${isSilver ? "SILVER HALF-KELLY GUARANTEE" : (st && (st.archetypeCode === "BANKER" || st.archetypeCode === "ACC") ? "WIN-SCENARIO PROFIT · SINGLE COLUMN" : "GUARANTEED COVER PROFIT")} · ${esc(input.timingTitle)}</text>
   <text x="290" y="1190" text-anchor="middle" font-family="${C.mono}" font-size="34" font-weight="bold" fill="${tierColor}">${input.guaranteedPct >= 0 ? "+" : "−"}${Math.abs(input.guaranteedPct).toFixed(1)}%</text>
-  <rect x="408" y="1156" width="128" height="34" rx="17" fill="${input.timingState === "OPEN" ? "rgba(61,220,151,0.18)" : "rgba(245,197,66,0.16)"}" stroke="${input.timingState === "OPEN" ? C.emerald : C.gold}" stroke-width="1.6"/>
-  <text x="472" y="1179" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${input.timingState === "OPEN" ? C.emerald : C.gold}" letter-spacing="1">${input.timingState === "OPEN" ? "WINDOW OPEN" : input.timingState === "WAITING" ? "UPCOMING" : input.timingState === "LATE" ? "CLOSING" : "KICKED OFF"}</text>
+  ${
+    isSilver
+      ? `<!-- v20.0 — مهر تیرکام نقره‌ای (ویژه کارت سطح ۲) -->
+  <rect x="560" y="1158" width="176" height="40" rx="20" fill="rgba(205,214,228,0.14)" stroke="${SILVER}" stroke-width="1.6"/>
+  <text x="648" y="1184" text-anchor="middle" font-family="${C.sans}" font-size="15" font-weight="bold" fill="${SILVER}" letter-spacing="2">TIER-2 · 50u</text>`
+      : `<rect x="408" y="1156" width="128" height="34" rx="17" fill="${input.timingState === "OPEN" ? "rgba(61,220,151,0.18)" : "rgba(245,197,66,0.16)"}" stroke="${input.timingState === "OPEN" ? C.emerald : C.gold}" stroke-width="1.6"/>
+  <text x="472" y="1179" text-anchor="middle" font-family="${C.sans}" font-size="14.5" font-weight="bold" fill="${input.timingState === "OPEN" ? C.emerald : C.gold}" letter-spacing="1">${input.timingState === "OPEN" ? "WINDOW OPEN" : input.timingState === "WAITING" ? "UPCOMING" : input.timingState === "LATE" ? "CLOSING" : "KICKED OFF"}</text>`
+  }
   <text x="775" y="1190" text-anchor="middle" font-family="${C.sans}" font-size="16" fill="${C.inkDim}">${esc(tLines.join(" · "))}</text>
 
   <!-- ═══ خط آموزشی استراتژی v13.2 ═══ -->
@@ -1181,7 +1291,7 @@ export async function renderMatchCardPNG(input: MatchCardInput): Promise<Buffer>
 
   ${footer(W, H, "NEOBET QUANT PRO · auto-graded on official ESPN scoreboard · not financial advice")}`;
 
-  return compose("PRE_MATCH", overlay, accent, "MATCH");
+  return compose("PRE_MATCH", overlay, accent, "MATCH", isSilver ? "SILVER" : "ARCADE");
 }
 
 export async function renderTeaserPNG(input: Omit<MatchCardInput, "teaser">): Promise<Buffer> {

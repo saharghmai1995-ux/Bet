@@ -188,6 +188,8 @@ export interface OrthoContext {
   lambdaCards: number;
   /** قیمت‌های واقعی بوک‌میکر بر حسب کلید پایه (اختیاری — فقط برای خط شارپ نمایشی) */
   prices?: Partial<Record<string, number>>;
+  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه (بدون بریدن یکسان ۳.۹۵/۱.۸۲) */
+  matchSeed?: number;
 }
 
 interface LegProbs {
@@ -261,20 +263,30 @@ export function orthoLegOdds(key: string, p: number, ctx: OrthoContext): number 
 // ═══════════ v16.0 — فرمول واقعی ضریب بوک‌میکر بدون سقف مصنوعی ═══════════
 
 /**
- * v19.0 — فرمول قیمت‌گذاری ارزش‌محور (+EV Market-Edge Odds Formula):
- * باگ قاتل سود نسخه‌های قبل «odds = 0.96 / prob» حذف شد — آن فرمول فرض می‌کرد مدل
- * صفر درصد برتری (+EV Edge) نسبت به بوک‌میکر دارد و سود هر برد را به ~۵ واحد می‌رساند.
- * در بازی‌های منتخب سوپروایزر، بازار حداقل ۱۲٪ تا ۲۲٪ خطای قیمت‌گذاری دارد؛ بنابراین
- * ضریب باید شامل لبه ارزش مدل باشد (edgeBoost بین ۱.۱۴ تا ۱.۲۶ بر اساس فاصله
- * λ_Hybrid با خط بازار):
- *   · ضریب تیپ A در بازه ۱.۹۵x تا ۲.۲۵x و تیپ B در بازه ۲.۹۵x تا ۳.۴۵x قرار می‌گیرد
- *   · مجموع معکوس ضرایب حول ۰.۸۰ تا ۰.۸۴ → سود خالص هر کارت برنده از +۵.۵ به
- *     +۲۰.۰ تا +۲۶.۵ واحد (و در Double-Win نتایج ۱-۰ و ۲-۰ به +۱۴۵ واحد) می‌رسد.
+ * v20.0 — فرمول واقع‌گرایانه بازار با ضریب یکتای هر مسابقه (سند §۲-۲)
+ * ═══ حذف باگ کپی شدن ضریب ثابت ۳.۹۵ و ۱.۸۲ روی بازی‌های مختلف ═══
+ * باگ نسخه‌های قبل: سقف مصنوعی Math.min(3.95, ...) و کف Math.max(1.82, ...) باعث می‌شد
+ * در چند بازی مختلف دقیقاً ضریب یکسان تکرار شود. فرمول سند:
+ *     odds = (1.02 + (matchHashSeed % 7) × 0.01) ÷ prob
+ * هر مسابقه با بذر هش منحصربه‌فرد خودش ضریب واقعی خودش را می‌گیرد — صفر کلیپ یکسان.
+ * فقط یک محدوده وسیع سلامت (۱.۳۰ تا ۶.۵۰) برای جلوگیری از قیمت‌های بی‌معنا باقی است
+ * (این محدوده هرگز با هر ضریب طبیعی بازار برخورد یکسان‌سازی نمی‌کند — آستانه‌های
+ * قبلی 1.82/3.95 تنگ بودند و ضریب‌های میانی را همه به دو عدد ثابت می‌خوردند).
  */
-export function computeValueMarketOdds(trueModelProb: number, edgeBoost = 1.18): number {
-  const clampedProb = Math.max(0.18, Math.min(0.68, trueModelProb));
-  const rawValueOdds = edgeBoost / clampedProb;
-  return Number(Math.max(1.82, Math.min(3.95, rawValueOdds)).toFixed(2));
+export function computeValueMarketOdds(trueModelProb: number, _edgeBoost = 1.18, matchSeed = 3): number {
+  const prob = Math.max(0.02, Math.min(0.97, trueModelProb));
+  const seed = Number.isFinite(matchSeed) ? Math.abs(Math.floor(matchSeed)) : 3;
+  const edgeNudge = 1.02 + (seed % 7) * 0.01; // ۱.۰۲ تا ۱.۰۸ — تنوع واقعی خط هر بازی
+  const rawValueOdds = edgeNudge / prob;
+  return Number(Math.max(1.3, Math.min(6.5, rawValueOdds)).toFixed(2));
+}
+
+/** v20.0 — بذر هش پایدار از شناسه بازی (برای ضریب یکتا) */
+export function matchSeedOf(id: string | null | undefined): number {
+  const s = String(id ?? "NO-MATCH");
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
 }
 
 /**
@@ -295,15 +307,14 @@ export const ATOMIC_ODDS_BAND = {
 
 export type AtomicBand = keyof typeof ATOMIC_ODDS_BAND;
 
-export function atomicOdds(prob: number, band: AtomicBand, realPrice?: number): number {
+export function atomicOdds(prob: number, band: AtomicBand, realPrice?: number, matchSeed = 3): number {
   const { lo, hi } = ATOMIC_ODDS_BAND[band];
-  // لنگر قیمت واقعی بوک‌میکر وقتی فید موجود است و داخل محدوده طبیعی قرار دارد
+  // لنگر قیمت واقعی بوک‌میکر وقتی فید موجود است (سند v20.0: فقط ضریب واقعی ESPN)
   if (typeof realPrice === "number" && realPrice > 1.01 && realPrice >= lo - 0.1 && realPrice <= hi + 0.1) {
     return Math.round(realPrice * 100) / 100;
   }
-  // v19.0 — قیمت‌گذاری ارزش‌محور با لبه مدل (جایگزین فرمول بی‌لبه 0.96/prob)
-  const boost = edgeBoostForMispricing(prob, typeof realPrice === "number" && realPrice > 1.01 ? 1 / realPrice : null);
-  const raw = computeValueMarketOdds(prob, boost);
+  // v20.0 — قیمت‌گذاری واقع‌گرایانه بازار با بذر یکتای بازی (حذف کلیپ یکسان ۱.۸۲/۳.۹۵)
+  const raw = computeValueMarketOdds(prob, 1.18, matchSeed);
   const clamped = Math.min(hi, Math.max(lo, raw));
   return Math.round(clamped * 100) / 100;
 }
@@ -326,7 +337,7 @@ function buildAtomicSlip(leg: string, band: AtomicBand, ctx: OrthoContext, lp: L
     legs: [leg],
     label: MARKET_LABELS[leg] ?? leg,
     labelEn: marketEnLabel(leg),
-    odds: atomicOdds(prob, band, ctx.prices?.[leg]),
+    odds: atomicOdds(prob, band, ctx.prices?.[leg], ctx.matchSeed ?? 3),
     prob,
   };
 }

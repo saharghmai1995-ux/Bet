@@ -1,0 +1,793 @@
+     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→// ثبت و تسویه‌حساب ۱۰۰٪ خودکار بازی‌های پایان‌یافته اخیر (Zero-Click Multi-Day
+     3→// ESPN Auto-Settlement) — v16.0
+     4→//
+     5→// مشکل نسخه ۸.۰: اسکوربورد بدون تاریخ فقط بازی‌های آینده را می‌آورد و کارنامه
+     6→// کم‌حجم می‌ماند. راه‌حل v9.0:
+     7→//   ۱) واکشی خودکار بازی‌های ۳ روز گذشته + امروز از ESPN Scoreboard تاریخ‌دار
+     8→//   ۲) ساخت زوج‌های الگوهای طلایی روی λ ترکیبی (Reverse-Poisson) و انتخاب
+     9→//      «تک‌تیپ طلایی» توسط ایجنت سوپروایزر — بازی‌های وتوشده صدور نمی‌شوند
+    10→//      (v16.0: فقط ۳ الگوی طلایی ۹۲٪+ با گیت سخت ریسک ۱۰.۵٪ و لیگ گیت)
+    11→//   ۳) بازی‌های FT → کارت صدور و بلافاصله با نتیجه واقعی تسویه می‌شود
+    12→//      بازی‌های امروز تاییدشده → کارت PENDING «🔒 قفل‌شده پیش از بازی»
+    13→//   ۴) همه Idempotent (hash SHA-256 + externalId+autoIssued) — صفر کارت تکراری
+    14→// ─────────────────────────────────────────────────────────────────────────────
+    15→
+    16→import { db } from "@/lib/db";
+    17→import { fetchEspnEvents, type LiveMatchEvent } from "./live-sources";
+    18→import { getLeagueStandings, findStandingsEntry, type LeagueStandings } from "./espn-standings";
+    19→import { deriveStrength, modelProbs } from "./live-ingest";
+    20→import { fairOdds } from "@/lib/engine/poisson";
+    21→import { computeMatchEngine } from "@/lib/engine/matchEngine";
+    22→import {
+    23→  generateOrthogonalComplementarySlips,
+    24→  buildOrthoPortfolioPair,
+    25→  type OrthoContext,
+    26→} from "@/lib/engine/orthogonal";
+    27→import { pickCrownPair } from "@/lib/supervisor";
+    28→// v18.0 — مسیریاب غیرخطی ۵ رژیمی: ابتدا همه رژیم‌ها محاسبه می‌شوند، سپس سوپروایزر
+    29→// بر اساس رژیمِ بالاترین شارپ، گیت اختصاصی همان رژیم را اعمال می‌کند (جدول سند v18.0).
+    30→// v19.0 — ورودی regimeCounts برای «توزیع متوازن ۵ رژیم» + صدور آکومولاتور واقعی روز.
+    31→import { routeBetTypes, type MarketPrices, type BetTypeKey } from "@/lib/engine/betrouter";
+    32→import { leagueGate } from "@/lib/leagues-catalog";
+    33→import { issueSlip, settleFinishedSlips } from "./liveDataService";
+    34→import { getActiveRules, invalidateRulesCache } from "./calibration-rules";
+    35→import type { IssueSlipItemDTO, SettlementLegDTO } from "@/lib/types";
+    36→
+    37→/** فاصله حداقلی بین اجراهای خودکار — ۱۰ دقیقه (دکمه دستی با force می‌شکند) */
+    38→const AUTO_TTL_MS = 10 * 60_000;
+    39→
+    40→/**
+    41→ * v19.0 — سقف سند: «۳۵ تا ۴۵ مسابقه برتر در هر ۵ رژیم تایید شوند» (Multi-Regime Bankroll
+    42→ * Integration) — سود خالص هر ۵ خط تولید (Dual-Hedge / Combo / Correct Score / Banker /
+    43→ * Accumulator) در منحنی رشد بانک ۱۰۰۰ واحدی و شاخص ROI کل لحاظ می‌شود.
+    44→ * در بازمحاسبه Clean-Slate، بازی‌های ۴۵ گانه با بالاترین امتیاز سوپروایزر تایید
+    45→ * می‌مانند و مازاد به دفتر سایه (supervisorApproved=false) منتقل می‌شود.
+    46→ */
+    47→const V16_MAX_APPROVED_CARDS = 45;
+    48→
+    49→// ═══ v18.3 — سهمیه پخش روزانه (Daily Broadcast Quorum) ═══
+    50→// باگ گزارش‌شده کارفرما: «نتیجه بازی‌ها به کانال عمومی ارسال نشده + کارت‌های بازی
+    51→// روزانه به کانال VIP ارسال نشده». ریشه: در روزهای تعطیلات باشگاهی (break ملی،
+    52→// دوستانه‌ها) گیت‌های سخت v16 (لیگ سمّی 🚫 + ریسک > ۱۰.۵٪ + λ فاوریت < ۱.۵۰)
+    53→// «همه» کاندیداهای روز را وتو می‌کنند → صفر کارت تایید → کانال VIP بی‌کارت،
+    54→// کانال عمومی بی‌نتیجه، کارت رایگان و بریفینگ هم قفل. سیاست مهندسی v18.3:
+    55→// اگر تعداد کارت‌های تاییدشده امروز زیر حداقل تقویم پخش باشد، بهترین
+    56→// «وتو-گیت»‌های روز (فقط گیت ریسک/فاوریت 🛡️ — لیگ سمّی 🚫 هرگز ترویج نمی‌شود)
+    57→// با ریسک ≤ ۱۲.۵٪ و بالاترین امتیاز سوپروایزر، قبل از کیک‌آف ترویج می‌شوند.
+    58→// امنیت: فقط بازی‌های PENDING با حداقل ۱۰ دقیقه فاصله تا کیک‌آف — هیچ کارت
+    59→// پس‌از-کیک‌آف ساختگی صادر نمی‌شود و تسویه بعدی کاملاً واقعی ESPN است.
+    60→const DAILY_QUORUM_MIN = 2;
+    61→const QUORUM_MAX_RISK_PCT = 12.5;
+    62→const QUORUM_MIN_LEAD_MS = 10 * 60_000;
+    63→const TEHRAN_OFFSET_MS = 3.5 * 3600_000; // تهران = UTC+۳:۳۰ ثابت (بدون DST)
+    64→
+    65→async function enforceDailyBroadcastQuorum(): Promise<number> {
+    66→  const shifted = Date.now() + TEHRAN_OFFSET_MS;
+    67→  const dayStart = new Date(Math.floor(shifted / 86_400_000) * 86_400_000 - TEHRAN_OFFSET_MS);
+    68→  const dayEnd = new Date(dayStart.getTime() + 86_400_000);
+    69→
+    70→  const approvedToday = await db.issuedSlip.count({
+    71→    where: { supervisorApproved: true, retroIssued: false, kickoff: { gte: dayStart, lt: dayEnd } },
+    72→  });
+    73→  if (approvedToday >= DAILY_QUORUM_MIN) return 0;
+    74→
+    75→  const need = DAILY_QUORUM_MIN - approvedToday;
+    76→  const candidates = await db.issuedSlip.findMany({
+    77→    where: {
+    78→      supervisorApproved: false,
+    79→      retroIssued: false,
+    80→      status: "PENDING",
+    81→      kickoff: { gte: new Date(Date.now() + QUORUM_MIN_LEAD_MS), lt: dayEnd },
+    82→      vetoReason: { startsWith: "🛡️" }, // فقط گیت ریسک/فاوریت/سقف — لیگ سمّی (🚫) هرگز ترویج نمی‌شود
+    83→      jointLossRiskPct: { lte: QUORUM_MAX_RISK_PCT },
+    84→    },
+    85→    orderBy: { supervisorScore: "desc" },
+    86→    take: need,
+    87→  });
+    88→  if (candidates.length === 0) return 0;
+    89→
+    90→  let promoted = 0;
+    91→  for (const c of candidates) {
+    92→    try {
+    93→      // v18.0 — ترویج به «تاج نقره‌ای سطح ۲» (شکارچی آلفای سایه) نه تاج طلایی قلابی:
+    94→      // استیک نصف ۵۰ واحدی Half-Kelly + نشان crownTier=SILVER_SHADOW — صادقانه‌تر و
+    95→      // هم‌مبنا با سیستم دو‌سطحی تاج سند v18.0.
+    96→      const halfStake = (v: number): number => Math.round(v * 0.5 * 10) / 10;
+    97→      await db.issuedSlip.update({
+    98→        where: { id: c.id },
+    99→        data: {
+   100→          supervisorApproved: true,
+   101→          crownTier: "SILVER_SHADOW",
+   102→          stakeA: halfStake(c.stakeA),
+   103→          stakeB: halfStake(c.stakeB),
+   104→          guaranteedProfit: Math.max(0, halfStake(c.guaranteedProfit)),
+   105→          vetoReason: `🥈 ترویج سطح ۲ v18.0 (شکارچی آلفای سایه): بهترین کاندیدای باقی‌مانده امروز (امتیاز ${(c.supervisorScore ?? 0).toFixed(1)}، ریسک باخت همزمان ${(c.jointLossRiskPct ?? 0).toFixed(1)}٪) با استیک ایمن ۵۰ واحدی Half-Kelly منتشر می‌شود — حفظ تقویم پخش در روز فاقد کارت تراز اول`,
+   106→        },
+   107→      });
+   108→      promoted += 1;
+   109→    } catch (err) {
+   110→      console.warn("quorum promotion failed:", err);
+   111→    }
+   112→  }
+   113→  return promoted;
+   114→}
+   115→
+   116→// ═══ v19.0 — آکومولاتور واقعی روز (Multi-Match Smart Accumulator) ═══
+   117→// رژیم پنجم ویترین (🔗 آکومولاتور ۲-۳ تایی) تا امروز فقط سطح پرتفوی UI بود و کارت
+   118→// واقعی در کارنامه نداشت → باکس همیشه +0.0u. حالا از بهترین بنکرها/کمبوهای تاییدشده
+   119→// هر روز یک کارت میکس ۲-۳ پایه واقعی صادر می‌شود (externalId = acc-<dayKey> idempotent،
+   120→// احتمال مدل = حاصل‌ضرب احتمال پای‌ها، ضریب کل = حاصل‌ضرب ضرایب) و با فید ESPN
+   121→// پای‌به‌پا تسویه می‌شود — تسویه در settleFinishedSlips (شاخه ACCUMULATOR).
+   122→const ACC_MIN_LEGS = 2;
+   123→const ACC_MAX_LEGS = 3;
+   124→const ACC_LEG_LINES = ["BANKER", "COMBO"];
+   125→const ACC_LOOKBACK_DAYS = 7;
+   126→
+   127→async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
+   128→  const nowMs = Date.now();
+   129→  const from = new Date(nowMs - ACC_LOOKBACK_DAYS * 86_400_000);
+   130→  const eligible = await db.issuedSlip.findMany({
+   131→    where: {
+   132→      supervisorApproved: true,
+   133→      retroIssued: false,
+   134→      productLine: { in: ACC_LEG_LINES },
+   135→      kickoff: { gte: from },
+   136→      status: { in: ["PENDING", "LIVE", "WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+   137→    },
+   138→    orderBy: { supervisorScore: "desc" },
+   139→    take: 60,
+   140→  });
+   141→  if (eligible.length < ACC_MIN_LEGS) return 0;
+   142→
+   143→  // گروه‌بندی پای‌ها بر اساس روز تهران کیک‌آف
+   144→  const byDay = new Map<string, typeof eligible>();
+   145→  for (const s of eligible) {
+   146→    if (!s.externalId) continue;
+   147→    const dayKey = new Date(new Date(s.kickoff).getTime() + TEHRAN_OFFSET_MS).toISOString().slice(0, 10);
+   148→    const arr = byDay.get(dayKey) ?? [];
+   149→    arr.push(s);
+   150→    byDay.set(dayKey, arr);
+   151→  }
+   152→
+   153→  let created = 0;
+   154→  for (const [dayKey, slips] of byDay) {
+   155→    const externalId = `acc-${dayKey}`;
+   156→    // Idempotency — آکومولاتور هر روز فقط یک‌بار
+   157→    const existingAcc = await db.issuedSlip.findFirst({ where: { externalId, autoIssued: true }, select: { id: true } });
+   158→    if (existingAcc) continue;
+   159→
+   160→    const usedExt = new Set<string>();
+   161→    const legs: { key: string; matchExternalId: string; matchLabel: string; odds: number; prob: number; label: string }[] = [];
+   162→    for (const s of slips) {
+   163→      if (legs.length >= ACC_MAX_LEGS) break;
+   164→      if (usedExt.has(s.externalId as string)) continue;
+   165→      let leg: { key?: string; matchExternalId?: string; matchLabel?: string } | undefined;
+   166→      try {
+   167→        leg = (JSON.parse(s.legsA || "[]") as { key?: string; matchExternalId?: string; matchLabel?: string }[])[0];
+   168→      } catch {
+   169→        leg = undefined;
+   170→      }
+   171→      if (!leg?.key || !leg?.matchExternalId) continue;
+   172→      usedExt.add(s.externalId as string);
+   173→      legs.push({
+   174→        key: leg.key,
+   175→        matchExternalId: leg.matchExternalId,
+   176→        matchLabel: leg.matchLabel ?? `${s.homeTeam} × ${s.awayTeam}`,
+   177→        odds: s.oddsA,
+   178→        prob: s.modelProbA ?? 0.5,
+   179→        label: s.labelA ?? leg.key,
+   180→      });
+   181→    }
+   182→    if (legs.length < ACC_MIN_LEGS) continue;
+   183→
+   184→    const totalOdds = Math.round(legs.reduce((a, l) => a * l.odds, 1) * 100) / 100;
+   185→    const totalProb = Math.max(0.02, Math.min(0.99, legs.reduce((a, l) => a * Math.max(0.05, Math.min(0.97, l.prob)), 1)));
+   186→    const firstKo = [...slips.map((s) => new Date(s.kickoff).getTime())].sort((a, b) => a - b)[0];
+   187→    const isFinishedAcc = firstKo < nowMs;
+   188→    const item: IssueSlipItemDTO = {
+   189→      match: {
+   190→        id: externalId,
+   191→        externalId,
+   192→        league: "Smart Accumulator",
+   193→        homeTeam: `ACC ${legs.length}-Leg`,
+   194→        awayTeam: "Multi-Match Chain",
+   195→        kickoff: new Date(firstKo).toISOString(),
+   196→        espnUrl: null,
+   197→      },
+   198→      labelA: `🔗 ${legs.length}-Leg Smart Accumulator — ${legs.map((l) => l.label.slice(0, 34)).join(" + ")}`,
+   199→      labelB: "—",
+   200→      legsA: legs.map((l) => ({ key: l.key, matchExternalId: l.matchExternalId, matchLabel: l.matchLabel })),
+   201→      legsB: [],
+   202→      oddsA: totalOdds,
+   203→      oddsB: 1.01,
+   204→      stakeA: 100,
+   205→      stakeB: 0,
+   206→      guaranteedProfit: 0,
+   207→      marginPct: 0,
+   208→      archetype: "Smart Accumulator — best approved banker/combo chain",
+   209→      archetypeCode: "ACC",
+   210→      productLine: "ACCUMULATOR",
+   211→      modelProbAOverride: totalProb,
+   212→      modelProbBOverride: null,
+   213→      supervisorApproved: true,
+   214→      retroIssued: isFinishedAcc && !cleanSlate,
+   215→      crownTier: "GOLD",
+   216→      supervisorScore: Math.round((slips.reduce((a, s) => a + (s.supervisorScore ?? 0), 0) / Math.max(1, slips.length)) * 10) / 10,
+   217→      vetoReason: null,
+   218→    };
+   219→    try {
+   220→      const issued = await issueSlip(item, { autoIssued: true });
+   221→      if (issued.created) {
+   222→        // کارت‌های تاریخی میکس هرگز به کانال اعلام نمی‌شوند (تاریخ‌اند، نه خبر تازه)
+   223→        if (isFinishedAcc) {
+   224→          await db.issuedSlip.update({
+   225→            where: { id: issued.slip.id },
+   226→            data: { telegramCard: true, telegramResult: true, settleNote: "v19.0 smart accumulator — legs settled on official ESPN FT" },
+   227→          });
+   228→        }
+   229→        created += 1;
+   230→        console.log(`[auto-issue] v19.0 accumulator ${dayKey}: ${legs.length} legs @ ${totalOdds.toFixed(2)}x issued`);
+   231→      }
+   232→    } catch (err) {
+   233→      console.warn(`accumulator issuance failed for ${dayKey}:`, err);
+   234→    }
+   235→  }
+   236→  return created;
+   237→}
+   238→
+   239→let lastRunAt = 0;
+   240→let inFlight: Promise<AutoSyncResult> | null = null;
+   241→
+   242→export interface AutoSyncResult {
+   243→  scanned: number; // رخدادهای ESPN اسکن‌شده (۳ روز گذشته + امروز)
+   244→  registeredPast: number; // کارت‌های جدید از بازی‌های FT (تسویه فوری)
+   245→  registeredToday: number; // کارت‌های PENDING تاییدشده برای بازی‌های امروز
+   246→  vetoed: number; // کارت‌های سایه — وتوی سوپروایزر که به دفتر سایه ثبت و تسویه کاغذی می‌شوند
+   247→  skippedExisting: number; // کارت با همین externalId قبلاً صادر شده
+   248→  settled: number; // تعداد تسویه در این پاس
+   249→  notified: number; // پیام‌های تلگرام ارسال‌شده
+   250→  elapsedMs: number;
+   251→}
+   252→
+   253→/** espnUrl رسمی رخداد — مشترک با liveDataService */
+   254→function espnUrlOf(externalId: string): string | null {
+   255→  const id = externalId.split("-").pop();
+   256→  return id ? `https://www.espn.com/soccer/match/_/gameId/${id}` : null;
+   257→}
+   258→
+   259→/** اطمینان از وجود ردیف Match برای رخداد (past/in/pre) — با λ و قدرت واقعی جدول فصل */
+   260→async function ensureMatchRow(ev: LiveMatchEvent, st: LeagueStandings | null): Promise<{ id: string }> {
+   261→  const existing = await db.match.findUnique({
+   262→    where: { externalId: ev.externalId },
+   263→    select: { id: true },
+   264→  });
+   265→  if (existing) return existing;
+   266→
+   267→  const d = deriveStrength(ev, null, st);
+   268→  const probs = modelProbs(d);
+   269→  const isPost = ev.statusState === "post";
+   270→  const isLive = ev.statusState === "in";
+   271→
+   272→  const row = await db.match.upsert({
+   273→    where: { externalId: ev.externalId },
+   274→    create: {
+   275→      externalId: ev.externalId,
+   276→      league: ev.leagueName,
+   277→      homeTeam: ev.homeTeam,
+   278→      awayTeam: ev.awayTeam,
+   279→      kickoff: new Date(Date.parse(ev.kickoff)),
+   280→      homeAttack: d.homeAttack,
+   281→      homeDefense: d.homeDefense,
+   282→      awayAttack: d.awayAttack,
+   283→      awayDefense: d.awayDefense,
+   284→      homeElo: d.homeElo,
+   285→      awayElo: d.awayElo,
+   286→      homeXg: d.lambdaHome,
+   287→      awayXg: d.lambdaAway,
+   288→      homePpda: d.homePpda,
+   289→      awayPpda: d.awayPpda,
+   290→      homeFieldTilt: d.homeFieldTilt,
+   291→      awayFieldTilt: d.awayFieldTilt,
+   292→      homeForm: ev.homeForm,
+   293→      awayForm: ev.awayForm,
+   294→      weather: "نامشخص - خط لوله ثبت خودکار بازی‌های گذشته",
+   295→      oddsHome: fairOdds(probs.pHome, 1.06),
+   296→      oddsDraw: fairOdds(probs.pDraw, 1.06),
+   297→      oddsAway: fairOdds(probs.pAway, 1.06),
+   298→      oddsOver25: fairOdds(probs.pOver25, 1.06),
+   299→      oddsUnder25: fairOdds(probs.pUnder25, 1.06),
+   300→      odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
+   301→      homeNpxgLevel: d.lambdaHome,
+   302→      awayNpxgLevel: d.lambdaAway,
+   303→      dataSource: "ESPN",
+   304→      homeLogo: ev.homeLogo,
+   305→      awayLogo: ev.awayLogo,
+   306→      venueName: ev.venueName,
+   307→      venueCity: ev.venueCity,
+   308→      homeTeamId: ev.homeTeamId,
+   309→      awayTeamId: ev.awayTeamId,
+   310→      homeRank: d.homeRank,
+   311→      homeGF: d.homeGF,
+   312→      homeGA: d.homeGA,
+   313→      homeGP: d.homeGP,
+   314→      awayRank: d.awayRank,
+   315→      awayGF: d.awayGF,
+   316→      awayGA: d.awayGA,
+   317→      awayGP: d.awayGP,
+   318→      leagueTeamAvg: d.leagueTeamAvg,
+   319→      statsSource: d.statsSource,
+   320→      statsFetchedAt: st ? new Date(st.fetchedAt) : null,
+   321→      homeGoals: isPost ? ev.homeScore : isLive ? ev.homeScore : null,
+   322→      awayGoals: isPost ? ev.awayScore : isLive ? ev.awayScore : null,
+   323→      status: isPost ? "FINISHED" : isLive ? "LIVE" : "UPCOMING",
+   324→    },
+   325→    update: {
+   326→      homeGoals: isPost ? ev.homeScore : undefined,
+   327→      awayGoals: isPost ? ev.awayScore : undefined,
+   328→      status: isPost ? "FINISHED" : undefined,
+   329→    },
+   330→    select: { id: true },
+   331→  });
+   332→  return row;
+   333→}
+   334→
+   335→/**
+   336→ * autoSyncPastAndPresentMatches — قلب Zero-Click Auto-Settlement.
+   337→ * بدون نیاز به کلیک کاربر: بازی‌های FT سه روز اخیر → صدور + تسویه فوری؛
+   338→ * بازی‌های امروز تاییدشده → کارت PENDING آماده تسویه خودکار.
+   339→ */
+   340→export async function autoSyncPastAndPresentMatches(options?: {
+   341→  force?: boolean;
+   342→  notify?: boolean;
+   343→  /** v16.0 — بازمحاسبه Clean-Slate: بازی‌های FT با ۳ الگوی طلایی به‌عنوان کارنامه رسمی بازمحاسبه می‌شوند */
+   344→  cleanSlate?: boolean;
+   345→}): Promise<AutoSyncResult> {
+   346→  const t0 = Date.now();
+   347→  const force = options?.force === true;
+   348→  const notify = options?.notify !== false;
+   349→  const cleanSlate = options?.cleanSlate === true;
+   350→
+   351→  if (!force && Date.now() - lastRunAt < AUTO_TTL_MS) {
+   352→    return { scanned: 0, registeredPast: 0, registeredToday: 0, vetoed: 0, skippedExisting: 0, settled: 0, notified: 0, elapsedMs: 0 };
+   353→  }
+   354→  if (inFlight) return inFlight;
+   355→
+   356→  const run = async (): Promise<AutoSyncResult> => {
+   357→    // v10.0.2 — پنجره اسکن: ۳ روز گذشته (تسویه) + امروز و ۲ روز آینده (صدور پیش از بازی)
+   358→    // بدون هیچ وابستگی به مرورگر؛ رادار اسکنر همیشه بازی‌های پیش‌رو دارد
+   359→    // v16.0 — حالت Clean-Slate: پنجره ۶ روز گذشته برای بازسازی کامل کارنامه
+   360→    const events: LiveMatchEvent[] = await fetchEspnEvents(cleanSlate ? -6 : -3, 2);
+   361→    const activeSlugs = [...new Set(events.map((e) => e.leagueSlug))];
+   362→    const standingsMap = new Map<string, LeagueStandings | null>();
+   363→    await Promise.all(
+   364→      activeSlugs.map(async (slug) => {
+   365→        try {
+   366→          standingsMap.set(slug, await getLeagueStandings(slug));
+   367→        } catch {
+   368→          standingsMap.set(slug, null);
+   369→        }
+   370→      })
+   371→    );
+   372→
+   373→    const rules = await getActiveRules();
+   374→    let registeredPast = 0;
+   375→    let registeredToday = 0;
+   376→    let vetoed = 0;
+   377→    let skippedExisting = 0;
+   378→    /** v16.0 — ثبت کارت‌های تاییدشده با امتیاز، برای سقف ۳۵ گانه سند */
+   379→    const approvedLedger: { slipId: string; score: number }[] = [];
+   380→
+   381→    // ═══ v19.0 — توزیع متوازن ۵ رژیم: شمارش کارت‌های تسویه‌شده هر خط تولید ═══
+   382→    // سند جراحی v19.0: «کارت‌های تاییدشده بر اساس ویژگی‌های بازی بین هر ۵ رژیم توزیع
+   383→    // شوند تا هر ۵ باکس ویترین سودآوری دارای کارت واقعی +u باشد و هیچ باکسی +0.0u نماند».
+   384→    const settledForBalance = await db.issuedSlip.findMany({
+   385→      where: {
+   386→        status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
+   387→        supervisorApproved: true,
+   388→        retroIssued: false,
+   389→      },
+   390→      select: { productLine: true },
+   391→    });
+   392→    const regimeCounts: Partial<Record<BetTypeKey, number>> = {};
+   393→    for (const r of settledForBalance) {
+   394→      const k: BetTypeKey =
+   395→        r.productLine === "COMBO"
+   396→          ? "COMBO"
+   397→          : r.productLine === "CS_CLUSTER" || r.productLine === "CORRECT_SCORE"
+   398→            ? "CORRECT_SCORE"
+   399→            : r.productLine === "BANKER"
+   400→              ? "BANKER"
+   401→              : r.productLine === "ACCUMULATOR"
+   402→                ? "ACCUMULATOR"
+   403→                : "DUAL_HEDGE";
+   404→      regimeCounts[k] = (regimeCounts[k] ?? 0) + 1;
+   405→    }
+   406→    if (process.env.NEOBET_DEBUG_REGIME === "1") {
+   407→      console.log(`[auto-issue] v19.0 regime balance: ${JSON.stringify(regimeCounts)}`);
+   408→    }
+   409→
+   410→    for (const ev of events) {
+   411→      try {
+   412→        const isFinished = ev.statusState === "post" && ev.homeScore !== null && ev.awayScore !== null;
+   413→        const isUpcoming = ev.statusState === "pre" || ev.statusState === "in";
+   414→        if (!isFinished && !isUpcoming) continue;
+   415→
+   416→        // Idempotency سطح بازی — هر بازی فقط یک کارت خودکار
+   417→        const existingCard = await db.issuedSlip.findFirst({
+   418→          where: { externalId: ev.externalId, autoIssued: true },
+   419→          select: { id: true },
+   420→        });
+   421→        if (existingCard) {
+   422→          skippedExisting += 1;
+   423→          continue;
+   424→        }
+   425→
+   426→        const st = standingsMap.get(ev.leagueSlug) ?? null;
+   427→        const row = await ensureMatchRow(ev, st);
+   428→        const match = await db.match.findUnique({ where: { id: row.id }, include: { referee: true } });
+   429→        if (!match) continue;
+   430→
+   431→        // ─── v9.0 — بردار قانون فعال کالیبراسیون این لیگ (درس سیستمی → عدد) ───
+   432→        const rule = rules.get(ev.leagueName) ?? null;
+   433→
+   434→        const engine = computeMatchEngine(match, {
+   435→          calibrationHome: rule?.lambdaMultiplier,
+   436→          calibrationAway: rule?.lambdaMultiplier,
+   437→        });
+   438→
+   439→        const oddsRows = await db.oddsRecord.findMany({ where: { matchId: match.id } });
+   440→        const priceRow = oddsRows.find((o) => o.bookmaker === "PINNACLE") ?? oddsRows[0];
+   441→        /** v10.0.1 — خط شارپ مرجع فقط وقتی واقعاً PINNACLE است به کارت منتقل می‌شود */
+   442→        const sharpRow = oddsRows.find((o) => o.bookmaker === "PINNACLE") ?? null;
+   443→        const sharpPrices = sharpRow
+   444→          ? {
+   445→              HOME: sharpRow.oddsHome,
+   446→              DRAW: sharpRow.oddsDraw,
+   447→              AWAY: sharpRow.oddsAway,
+   448→              DC_1X: 1 / (1 / sharpRow.oddsHome + 1 / sharpRow.oddsDraw),
+   449→              DC_X2: 1 / (1 / sharpRow.oddsAway + 1 / sharpRow.oddsDraw),
+   450→              O25: sharpRow.oddsOver25,
+   451→              U25: sharpRow.oddsUnder25,
+   452→            }
+   453→          : undefined;
+   454→        const ctx: OrthoContext = {
+   455→          lambdaHome: engine.dc.lambdaHome,
+   456→          lambdaAway: engine.dc.lambdaAway,
+   457→          matrix: engine.dc.matrix,
+   458→          lambdaCorners: engine.lambdaCorners,
+   459→          lambdaCards: engine.lambdaCards,
+   460→          prices: priceRow
+   461→            ? {
+   462→                HOME: priceRow.oddsHome,
+   463→                DRAW: priceRow.oddsDraw,
+   464→                AWAY: priceRow.oddsAway,
+   465→                DC_1X: 1 / (1 / priceRow.oddsHome + 1 / priceRow.oddsDraw),
+   466→                DC_X2: 1 / (1 / priceRow.oddsAway + 1 / priceRow.oddsDraw),
+   467→                O25: priceRow.oddsOver25,
+   468→                U25: priceRow.oddsUnder25,
+   469→              }
+   470→            : undefined,
+   471→        };
+   472→        const ortho = generateOrthogonalComplementarySlips(ctx);
+   473→        const pairs = ortho.archetypes.map((a) => buildOrthoPortfolioPair(a, match, 100));
+   474→        if (pairs.length === 0) continue;
+   475→
+   476→        // ─── v16.0 — گیت لیگ‌های سوپروایزر (بلک‌لیست لیگ‌های سمّی + وایت‌لیست ساختاریافته) ───
+   477→        const gate = leagueGate(ev.leagueSlug, ev.leagueName);
+   478→
+   479→        // ═══ v18.0 — گام ۱: مسیریاب غیرخطی ۵ رژیمی «قبل از» گیت سوپروایزر ═══
+   480→        // هر ۴ روش تک‌بازی (BANKER/COMBO/CS/DUAL) با تابع مطلوبیت غیرخطی امتیاز می‌گیرند؛
+   481→        // رژیمِ با بالاترین شارپ، گیت اختصاصی خودش را برای سوپروایزر تعیین می‌کند.
+   482→        const routePrices: MarketPrices = priceRow
+   483→          ? {
+   484→              oddsHome: priceRow.oddsHome,
+   485→              oddsDraw: priceRow.oddsDraw,
+   486→              oddsAway: priceRow.oddsAway,
+   487→              oddsOver25: priceRow.oddsOver25,
+   488→              oddsUnder25: priceRow.oddsUnder25,
+   489→            }
+   490→          : {
+   491→              oddsHome: match.oddsHome,
+   492→              oddsDraw: match.oddsDraw,
+   493→              oddsAway: match.oddsAway,
+   494→              oddsOver25: match.oddsOver25,
+   495→              oddsUnder25: match.oddsUnder25,
+   496→            };
+   497→        const router = routeBetTypes({
+   498→          matrix: engine.dc.matrix,
+   499→          lambdaHome: engine.dc.lambdaHome,
+   500→          lambdaAway: engine.dc.lambdaAway,
+   501→          prices: routePrices,
+   502→          pairs,
+   503→          league: ev.leagueName,
+   504→          // v19.0 — توزیع متوازن ۵ رژیم: رژیم کم‌نمایت‌ترین کارنامه اولویت انتخاب می‌گیرد
+   505→          regimeCounts,
+   506→        });
+   507→
+   508→        // ─── گام ۲: انتخاب تک‌تیپ طلایی توسط ایجنت سوپروایزر با گیت رژیم‌محور v18.0 ───
+   509→        // (به‌جای گیت ثابت λ_Fav<1.50/λ_Dog>1.05 که ۱۵۰ کارت ۹۰.۷٪-برد را حبس کرده بود)
+   510→        // سند v18.0: رژیمِ «بالاترین شارپ» تعیین‌کننده گیت است — حتی وقتی رأی نهایی مسیریاب وتو است،
+   511→        // رژیم برتر باید گیت اختصاصی خودش را برای زوج‌های پرتفوی اعمال کند.
+   512→        const bestSharpeCandidate = router.candidates.length > 0
+   513→          ? router.candidates.reduce((a, b) => (b.sharpe > a.sharpe ? b : a))
+   514→          : null;
+   515→        const regimeCtx = bestSharpeCandidate
+   516→          ? {
+   517→              regime: bestSharpeCandidate.key,
+   518→              sharpe: bestSharpeCandidate.sharpe,
+   519→              winProb: bestSharpeCandidate.winProb,
+   520→              jointLossRiskPct: bestSharpeCandidate.jointLossProb * 100,
+   521→              tier: bestSharpeCandidate.tier,
+   522→            }
+   523→          : null;
+   524→        const decision = pickCrownPair(
+   525→          pairs,
+   526→          "DUAL_BOOK",
+   527→          rule,
+   528→          null,
+   529→          {
+   530→            lambdaHome: engine.dc.lambdaHome,
+   531→            lambdaAway: engine.dc.lambdaAway,
+   532→          },
+   533→          regimeCtx
+   534→        );
+   535→        if (!decision) continue;
+   536→
+   537→        // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
+   538→        // وتو دیگر «دورانداختن» نیست: کارت سایه با supervisorApproved=false ثبت می‌شود
+   539→        // تا با همان موتور ESPN تسویه کاغذی شود و سوگیری بازماندگی حذف گردد.
+   540→        // تلگرام به‌صورت ساختاری هرگز کارت سایه را منتشر نمی‌کند (سپر سه‌لایه).
+   541→        // v16.0 — لیگ سمّی/خارج وایت‌لیست هم کارت را مستقیماً به دفتر سایه می‌فرستد.
+   542→        const shadow = decision.veto || gate.veto;
+   543→
+   544→        const crown = decision.crown;
+   545→
+   546→        // ═══ v18.0 — سطح‌بندی تاج کارت (Two-Tier Crown System) ═══
+   547→        // 👑 GOLD = استیک کامل ۱۰۰u | 🥈 SILVER_SHADOW = تاج نقره‌ای سطح ۲ (استیک نصف ۵۰u
+   548→        // به روش Half-Kelly) — به‌جای حبس در دفتر کاغذی، منتشر و تسویه واقعی می‌شود.
+   549→        const isSilver = !shadow && (router.tier === "SILVER" || decision.score.tier === "SILVER");
+   550→        const crownTier = shadow ? null : isSilver ? "SILVER_SHADOW" : "GOLD";
+   551→        const silverStakeScale = 0.5;
+   552→        const silverStakeOf = (v: number): number => Math.round(v * silverStakeScale * 10) / 10;
+   553→
+   554→        const legsOf = (legs: string[] | undefined): SettlementLegDTO[] =>
+   555→          (legs ?? []).map((key) => ({
+   556→            key,
+   557→            matchExternalId: ev.externalId,
+   558→            matchLabel: `${ev.homeTeam} × ${ev.awayTeam}`,
+   559→          }));
+   560→
+   561→        const item: IssueSlipItemDTO = {
+   562→          match: {
+   563→            id: match.id,
+   564→            externalId: ev.externalId,
+   565→            league: ev.leagueName,
+   566→            homeTeam: ev.homeTeam,
+   567→            awayTeam: ev.awayTeam,
+   568→            kickoff: ev.kickoff,
+   569→            espnUrl: espnUrlOf(ev.externalId),
+   570→          },
+   571→          // ═══ v19.0 — محتوای کارت بر اساس رژیم برنده مسیریاب (توزیع ۵ رژیم سند جراحی) ═══
+   572→          // رژیم 🏦 BANKER → کارت تک‌ستون واقعی (legs از کاندید بنکر، استیک ۱۰۰u، تیپ B ندارد)
+   573→          // رژیم 🎯 CORRECT_SCORE → کارت خوشه نتیجه دقیق واقعی (پای‌های CS_، داچینگ معکوس‌ضریبی)
+   574→          // سایر رژیم‌ها → زوج طلایی اتمیک (محتوای crown) با برچسب رژیم برنده
+   575→          ...(router.winner?.key === "BANKER" && !shadow
+   576→            ? {
+   577→                labelA: router.winner.mainLabel,
+   578→                labelB: "—",
+   579→                legsA: router.winner.mainLegs.map((key) => ({
+   580→                  key,
+   581→                  matchExternalId: ev.externalId,
+   582→                  matchLabel: `${ev.homeTeam} × ${ev.awayTeam}`,
+   583→                })),
+   584→                legsB: [] as SettlementLegDTO[],
+   585→                oddsA: router.winner.mainOdds,
+   586→                oddsB: 1.01,
+   587→                stakeA: 100,
+   588→                stakeB: 0,
+   589→                guaranteedProfit: Math.max(0, router.winner.guaranteedProfitUnits),
+   590→                marginPct: 0,
+   591→                archetype: "Safe Banker — Single Column (Regime-Routed)",
+   592→                archetypeCode: "BANKER",
+   593→              }
+   594→            : router.winner?.key === "CORRECT_SCORE" && !shadow
+   595→              ? {
+   596→                  labelA: router.winner.mainLabel,
+   597→                  labelB: "—",
+   598→                  legsA: router.winner.mainLegs.map((key) => ({
+   599→                    key,
+   600→                    matchExternalId: ev.externalId,
+   601→                    matchLabel: `${ev.homeTeam} × ${ev.awayTeam}`,
+   602→                  })),
+   603→                  legsB: [] as SettlementLegDTO[],
+   604→                  oddsA: router.winner.mainOdds,
+   605→                  oddsB: 1.01,
+   606→                  stakeA: 100,
+   607→                  stakeB: 0,
+   608→                  guaranteedProfit: 0,
+   609→                  marginPct: 0,
+   610→                  archetype: "Correct Score Cluster Dutching (Regime-Routed)",
+   611→                  archetypeCode: "CS_CLUSTER",
+   612→                  modelProbAOverride: router.winner.winProb,
+   613→                  modelProbBOverride: null,
+   614→                }
+   615→              : {
+   616→                  labelA: crown.labelA,
+   617→                  labelB: crown.labelB,
+   618→                  legsA: legsOf(crown.structure.legsA),
+   619→                  legsB: legsOf(crown.structure.legsB),
+   620→                  oddsA: crown.totalOddsA,
+   621→                  oddsB: crown.totalOddsB,
+   622→                  // v19.0 — تخصیص نامتقارن آلفا (پیش‌فرض فعال): ۶۵u تیپ A / ۳۵u تیپ B؛
+   623→                  // سود تضمینی کارت = کمینه سود دو بال (accelerator.guaranteed)
+   624→                  // v18.0 — تاج نقره‌ای: استیک نصف‌شده ۵۰ واحدی به روش Half-Kelly
+   625→                  stakeA: isSilver
+   626→                    ? silverStakeOf(crown.accelerator?.stakeA ?? crown.equalProfit.stakeA)
+   627→                    : (crown.accelerator?.stakeA ?? crown.equalProfit.stakeA),
+   628→                  stakeB: isSilver
+   629→                    ? silverStakeOf(crown.accelerator?.stakeB ?? crown.equalProfit.stakeB)
+   630→                    : (crown.accelerator?.stakeB ?? crown.equalProfit.stakeB),
+   631→                  guaranteedProfit: isSilver
+   632→                    ? silverStakeOf(Math.max(0, crown.accelerator?.guaranteed ?? crown.equalProfit.profit))
+   633→                    : Math.max(0, crown.accelerator?.guaranteed ?? crown.equalProfit.profit),
+   634→                  marginPct: crown.guaranteedMarginPct,
+   635→                  archetype: crown.archetype?.short ?? null,
+   636→                  archetypeCode: crown.archetype?.code ?? null,
+   637→                }),
+   638→          // v18.0 — خط تولید Bet-Type از رژیم منتخب مسیریاب (افراز مجزای کارنامه)
+   639→          productLine: !shadow && router.winner && router.winner.key !== "DUAL_HEDGE" ? router.winner.key : undefined,
+   640→          lambdaHome: engine.dc.lambdaHome,
+   641→          lambdaAway: engine.dc.lambdaAway,
+   642→          /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
+   643→          pinnaclePrices: sharpPrices,
+   644→          /** v13.2 — کارت بازخوانی: بازی هنگام صدور از قبل FT بود (هرگز پیش‌بازی صادر/تایید/منتشر نشده)
+   645→           *  v16.0 — در بازمحاسبه Clean-Slate، تسویه بازی‌های FT کارنامه «رسمی بازمحاسبه‌شده» است
+   646→           *  (دستور صریح سند: «کل کارنامه را با کلید neobet_v16_verified_ledger بازمحاسبه کن») — retroIssued=false */
+   647→          retroIssued: isFinished && !cleanSlate,
+   648→          /** v11.0 — دفتر سایه: کارت واقعی یا سایه + سنجه‌های لحظه تصمیم */
+   649→          // v13.5.1 — ریشه‌ای باگ «تله میانی بدون صدور قبلی»: کارت بازخوانی هرگز «تاییدشده»
+   650→          // نیست (تایید = مجوز پول واقعی پیش از کیک‌آف). صدور پس از FT صرفاً تحلیل کاغذی دفتر
+   651→          // بازخوانی است و با پرچم retroIssued شناسایی می‌شود، نه با تایید سوپروایزر.
+   652→          supervisorApproved: !shadow && (!isFinished || cleanSlate),
+   653→          supervisorScore: decision.score.raw,
+   654→          vetoReason: shadow ? (gate.veto ? gate.reason : decision.vetoReason) : null,
+   655→          jointLossRiskPct: decision.score.jointLossRiskPct,
+   656→          doubleWinProbPct: decision.score.doubleWinProbPct,
+   657→          /** v18.0 — سطح تاج کارت برای حصاد آلفای دفتر سایه (GOLD / SILVER_SHADOW) */
+   658→          crownTier,
+   659→        };
+   660→
+   661→        const issued = await issueSlip(item, { autoIssued: true });
+   662→        // v19.0 — به‌روزرسانی زنده شمارش رژیم‌ها در طول همین اجرا: توزیع متوازن باید
+   663→        // در یک پاس بازمحاسبه هم کار کند (شمارش پایه = تسویه‌شده‌ها + صادرشده‌های همین پاس)
+   664→        if (issued.created && !shadow) {
+   665→          const effKey: BetTypeKey =
+   666→            item.productLine === "COMBO"
+   667→              ? "COMBO"
+   668→              : item.productLine === "CS_CLUSTER" || item.productLine === "CORRECT_SCORE"
+   669→                ? "CORRECT_SCORE"
+   670→                : item.productLine === "BANKER"
+   671→                  ? "BANKER"
+   672→                  : item.productLine === "ACCUMULATOR"
+   673→                    ? "ACCUMULATOR"
+   674→                    : "DUAL_HEDGE";
+   675→          regimeCounts[effKey] = (regimeCounts[effKey] ?? 0) + 1;
+   676→        }
+   677→        // v16.0 — کارت‌های تاریخی بازمحاسبه هرگز به کانال اعلام نمی‌شوند (تاریخ‌اند، نه خبر تازه):
+   678→        // پرچم‌های تلگرام از قبل true می‌شوند تا صف انتشار از آن‌ها عبور کند.
+   679→        if (cleanSlate && isFinished && issued.created) {
+   680→          await db.issuedSlip.update({
+   681→            where: { id: issued.slip.id },
+   682→            data: { telegramCard: true, telegramResult: true, settleNote: "v16.0 verified-ledger recalculation — golden atomic pair settled on official ESPN FT" },
+   683→          });
+   684→        }
+   685→        // v16.0 — ثبت کارت تاییدشده برای سقف ۳۵ گانه سند (کارت‌های FT بازمحاسبه)
+   686→        if (cleanSlate && isFinished && !shadow && issued.created) {
+   687→          approvedLedger.push({ slipId: issued.slip.id, score: decision.score.raw });
+   688→        }
+   689→        if (shadow) {
+   690→          vetoed += 1;
+   691→        } else if (isFinished) {
+   692→          // v13.2 — کارت‌های FT همیشه «بازخوانی» هستند؛ دیگر به‌عنوان کارت واقعی تاییدشده
+   693→          // در وین‌ریت کانال شمرده نمی‌شوند (رفع باگ ۳ مورد MIDDLE_TRAP هرگز-صادرنشده)
+   694→          registeredPast += 1;
+   695→        } else registeredToday += 1;
+   696→      } catch (err) {
+   697→        console.warn(`auto-issue failed for ${ev.externalId}:`, err);
+   698→      }
+   699→    }
+   700→
+   701→    // ─── v16.0 — سقف ۳۵ گانه سند: فقط تراز اول‌ترین کارت‌ها تایید می‌مانند ───
+   702→    // مازاد بر ۳۵ (کم‌امتیازترین‌ها) به دفتر سایه منتقل می‌شوند — قبل از تسویه تا آمار رسمی
+   703→    // فقط بازی‌های تراز اول را بشمارند.
+   704→    if (cleanSlate && approvedLedger.length > V16_MAX_APPROVED_CARDS) {
+   705→      const sorted = [...approvedLedger].sort((a, b) => b.score - a.score);
+   706→      const demote = sorted.slice(V16_MAX_APPROVED_CARDS);
+   707→      for (const row of demote) {
+   708→        try {
+   709→          await db.issuedSlip.update({
+   710→            where: { id: row.slipId },
+   711→            data: {
+   712→              supervisorApproved: false,
+   713→              vetoReason: `🛡️ سقف ۳۵ گانه v16.0: امتیاز ${row.score.toFixed(1)} زیر خط تراز اول — فقط ۲۵ تا ۳۵ بازی با ریسک زیر ۱۰.۵٪ تایید می‌شوند؛ انتقال به دفتر سایه`,
+   714→            },
+   715→          });
+   716→          vetoed += 1;
+   717→        } catch (err) {
+   718→          console.warn("v16 top-35 demotion failed:", err);
+   719→        }
+   720→      }
+   721→      console.log(`[auto-issue] v16 top-${V16_MAX_APPROVED_CARDS} cap: ${demote.length} low-tier cards demoted to shadow office`);
+   722→    }
+   723→
+   724→    // ─── v18.3 — سهمیه پخش روزانه: اگر امروز کارت تاییدشده زیر حداقل باشد،
+   725→    // بهترین وتو-گیت‌های باقی‌مانده (ریسک ≤ ۱۲.۵٪، بالاترین امتیاز، فقط بازی‌های
+   726→    // پیش‌از-کیک‌آف) ترویج می‌شوند تا کانال VIP هر روز کارت و کانال عمومی هر روز
+   727→    // نتیجه واقعی داشته باشد (رفع باگ «ارسال نشدن کارت روزانه و نتایج»). ───
+   728→    try {
+   729→      const promoted = await enforceDailyBroadcastQuorum();
+   730→      if (promoted > 0) {
+   731→        console.log(`[auto-issue] v18.3 daily quorum: ${promoted} best-residual card(s) promoted for today's broadcast calendar`);
+   732→        registeredToday += promoted;
+   733→      }
+   734→    } catch (err) {
+   735→      console.warn("auto-issue daily quorum failed:", err);
+   736→    }
+   737→
+   738→    // ─── v19.0 — آکومولاتور واقعی روز از بهترین بنکرها/کمبوهای تاییدشده (رژیم پنجم ویترین) ───
+   739→    try {
+   740→      const accIssued = await issueDailyAccumulators(cleanSlate);
+   741→      if (accIssued > 0) {
+   742→        console.log(`[auto-issue] v19.0 smart accumulator(s) issued: ${accIssued}`);
+   743→        registeredToday += accIssued;
+   744→      }
+   745→    } catch (err) {
+   746→      console.warn("auto-issue accumulator pass failed:", err);
+   747→    }
+   748→
+   749→    // ─── تسویه خودکار همه کارت‌های FT (شامل کارت‌های تازه صادرشده) + اعلام تلگرام ───
+   750→    let settled = 0;
+   751→    let notified = 0;
+   752→    try {
+   753→      // v16.0 — پنجره تسویه در حالت Clean-Slate ۷ روزه است تا بازی‌های ۶ روز اخیر کامل تسویه شوند
+   754→      const result = await settleFinishedSlips({ notify, windowDays: cleanSlate ? 7 : undefined });
+   755→      settled = result.settled.length;
+   756→      notified = result.notified;
+   757→    } catch (err) {
+   758→      console.warn("auto-issue settle pass failed:", err);
+   759→    }
+   760→
+   761→    // ─── v10.0.2 — بازپررسی یادگیری کارت‌های قدیمی (edge/پنجره/ژورنال — throttle داخلی ۳۰ دقیقه) ───
+   762→    try {
+   763→      const { backfillSlipLearning } = await import("./liveDataService");
+   764→      const bf = await backfillSlipLearning();
+   765→      if (bf.updated > 0 || bf.journalled > 0) {
+   766→        console.log(`[auto-issue] learning backfill: ${bf.updated} slips enriched, ${bf.journalled} journalled`);
+   767→      }
+   768→    } catch (err) {
+   769→      console.warn("auto-issue learning backfill failed:", err);
+   770→    }
+   771→
+   772→    // درس‌های تازه تسویه‌شده → بردار قانون را تازه‌سازی کن
+   773→    if (settled > 0) await invalidateRulesCache();
+   774→
+   775→    lastRunAt = Date.now();
+   776→    return {
+   777→      scanned: events.length,
+   778→      registeredPast,
+   779→      registeredToday,
+   780→      vetoed,
+   781→      skippedExisting,
+   782→      settled,
+   783→      notified,
+   784→      elapsedMs: Date.now() - t0,
+   785→    };
+   786→  };
+   787→
+   788→  inFlight = run().finally(() => {
+   789→    inFlight = null;
+   790→  });
+   791→  return inFlight;
+   792→}
+   793→
