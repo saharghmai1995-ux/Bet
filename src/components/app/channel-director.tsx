@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useQuantStore } from "@/lib/store";
 import { faNum } from "@/lib/format";
+import { DailyProgramBoard } from "@/components/app/daily-program-board";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -233,6 +234,9 @@ export function ChannelDirectorTab() {
           <Clock className="size-2.5" /> زمان‌بند سرور ۹۰ ثانیه‌ای — کاملاً مستقل از مرورگر
         </Badge>
       </div>
+
+      {/* 📅 v21.0 — تابلوی برنامه روزانه حرفه‌ای پخش (زمان‌بندی مشخص ۱۱ اسلات) */}
+      <DailyProgramBoard compact />
 
       {/* راهنمای تفکیک کانال‌ها */}
       <div className="grid gap-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.05] p-3 sm:grid-cols-2">

@@ -44,6 +44,7 @@ import { AutopilotConfigModal } from "@/components/app/autopilot/config-modal";
 import { AutopilotStatusBar } from "@/components/app/autopilot/status-bar";
 import { FlashcardDeck } from "@/components/app/autopilot/flashcard-deck";
 import { ProductionLines } from "@/components/app/production-lines";
+import { DailyProgramBoard } from "@/components/app/daily-program-board";
 import { PipelineRadar } from "@/components/app/autopilot/radar";
 import { SmartCartDrawer } from "@/components/app/autopilot/cart-drawer";
 import { LiveHedgeToasts } from "@/components/app/autopilot/live-toasts";
@@ -288,6 +289,8 @@ export default function Home() {
             <FlashcardDeck />
             {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (بالای داشبورد سریع) */}
             <RolloverLadder startBank={100} />
+            {/* 📅 v21.0 — برنامه روزانه حرفه‌ای پخش (زمان‌بندی مشخص عمومی + خصوصی) */}
+            <DailyProgramBoard />
             <NewsTickerStrip />
             <PipelineRadar onOpenCard={openFlashcardsFor} />
             <div id="settlement-section">
@@ -316,6 +319,8 @@ export default function Home() {
                 <HeroPerformance onOpenSha={openShaTable} />
                 {/* 🏭 v13.0 — ۳ خط تولید مجزا */}
                 <ProductionLines />
+                {/* 📅 v21.0 — برنامه روزانه حرفه‌ای پخش */}
+                <DailyProgramBoard compact />
                 <DashboardTab
                 loading={loading}
                 analyzedCount={analyzedCount}

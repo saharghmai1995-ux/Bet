@@ -230,7 +230,8 @@ async function botToken(): Promise<string | null> {
   return (stored && stored.trim()) || process.env.TELEGRAM_BOT_TOKEN || null;
 }
 
-async function channelId(): Promise<string | null> {
+/** v21.0 — export شد: ماژول برنامه روزانه به کانال VIP خصوصی ارسال می‌کند */
+export async function channelId(): Promise<string | null> {
   const stored = await getSetting(KEY_CHANNEL);
   const fromEnv = process.env.TELEGRAM_VIP_CHANNEL_ID;
   // v8.0 — کانال @aineobet پیش‌فرض رسمی است؛ تنظیم کاربر/env در اولویت است
@@ -851,6 +852,26 @@ export async function sendConfigTestMessage(): Promise<{ ok: boolean; detail: st
   if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
   const res = await tgCall("sendMessage", { chat_id: chatId, text, parse_mode: "HTML" });
   await logOutbox(null, "CONFIG_TEST", res.ok, res.detail);
+  return res;
+}
+
+/**
+ * v21.0 — ارسال متن HTML به کانال مشخص (تابلوهای «برنامه روزانه پخش» و پیش‌نمایش فردا)
+ * کپشن با safePhotoCaption ایمن می‌شود (بستن تگ‌های باز + سقف ۳۹۰۰ کاراکتر) تا
+ * تلگرام هرگز parse-error نگیرد — همان سپر پیام‌های تصویری، برای پیام‌های متنی.
+ */
+export async function sendHtmlTextTo(
+  chatId: string | null,
+  text: string,
+  kind: string
+): Promise<{ ok: boolean; detail: string }> {
+  if (!chatId) return { ok: false, detail: "NO_CHANNEL" };
+  const res = await tgCall("sendMessage", {
+    chat_id: chatId,
+    text: safePhotoCaption(text, 3900),
+    parse_mode: "HTML",
+  });
+  await logOutbox(null, kind, res.ok, res.detail);
   return res;
 }
 

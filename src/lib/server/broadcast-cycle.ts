@@ -159,6 +159,19 @@ export async function runBroadcastCycle(options?: {
     // پنجره بازاریابی هر روز، اسلات‌های تایید‌نشدهِ دیروز را چک می‌کند و دقیقاً یک‌بار جبران می‌کند.
     await catchUpMissedSlots(funnel);
 
+    // ─── v21.0 — برنامه روزانه حرفه‌ای پخش (دستور کارفرما: زمان‌بندی مشخص عمومی + خصوصی) ───
+    // دو اسلات جدید: 🌅 تابلوی برنامه صبح ۰۷:۳۰ (هر دو کانال) + 🔮 پیش‌نمایش کارت‌های
+    // فردا ۱۹:۳۰ (کارت کامل در VIP + فهرست عمومی) — ادعای اتمی، بدون مرورگر، idempotent.
+    try {
+      const { runDailyProgramSlots } = await import("./daily-program");
+      const prog = await runDailyProgramSlots();
+      if (prog.morning !== "-" || prog.tomorrow !== "-") {
+        console.log(`[broadcast-cycle] daily-program: morning=${prog.morning} tomorrow=${prog.tomorrow}`);
+      }
+    } catch (err) {
+      console.warn("[broadcast-cycle] daily-program failed:", err instanceof Error ? err.message : err);
+    }
+
     // ─── کارت رایگان روزانه (اولویت دژ نفوذناپذیر) — هر تیک بین ۹ تا ۲۳ تلاش می‌شود ───
     if (th.hour >= MARKETING_START_HOUR && th.hour <= MARKETING_END_HOUR) {
       const gift = await funnel.sendDailyGiftCard(false);

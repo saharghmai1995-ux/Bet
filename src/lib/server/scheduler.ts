@@ -34,7 +34,11 @@ g.__fqSchedulerState = g.__fqSchedulerState ?? { timer: null, busy: false, lastT
 const state = g.__fqSchedulerState;
 
 const WATCHDOG_INTERVAL_MS = 60_000;
-const STALE_TICK_MS = 6 * 60_000; // بیش از ۵ تیک جاافتاده = حلقه مرده → ری‌استارت خودکار
+// v21.0 — فیکس باگ watchdog: آستانه stale باید «بزرگ‌تر از فاصله تیک» باشد.
+// قبلاً ۳۶۰s بود در حالی که تیک ۶۰۰s است → بین هر دو تیک سالم، نگهبان حلقه را
+// «مُرده» تشخیص می‌داد و ری‌استارت می‌کرد (لاگ «stale 398s — self-restart»).
+// حالا آستانه = ۲٫۵ برابر فاصله تیک + کف ۱۵ دقیقه — فقط مرگ واقعی ری‌استارت می‌شود.
+const STALE_TICK_MS = Math.max(2.5 * TICK_INTERVAL_MS, 15 * 60_000);
 
 async function runTick(): Promise<void> {
   if (state.busy) return;
