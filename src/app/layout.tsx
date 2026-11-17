@@ -3,7 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v21.0 1xBet Real-Market Calibration — ۱۰۰٪ ESPN Verified",
+  title: "NEOBET QUANT PRO • @AINEOBET | v22.0 100% Automated Live Odds — ۱۰۰٪ ESPN Verified",
   description:
     "حسابداری صادقانه بدون فیک (Zero-Fake Accounting) + تسویه درست میزبان/میهمان + حلقه کالیبراسیون خودکار دسته‌ها + مسیریاب غیرخطی ۵ رژیمی Bet-Type (بنکر، کمبوی رسمی، خوشه نتیجه دقیق، زوج‌تیپ، آکومولاتور) + دیتای زنده واقعی ESPN، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
   icons: {

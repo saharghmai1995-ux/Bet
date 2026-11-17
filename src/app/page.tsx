@@ -184,11 +184,11 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v21.0 1xBet Real-Market Calibration & Zero-Blind-Stats @AINEOBET
+                  <Sparkles className="size-2.5" /> v22.0 100% Automated Live Odds · 2-Leg 1.80x–2.25x Accumulator & Deep Single Pick @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                حسابداری صادقانه کارنامه (منبع واحد حقیقت) + تسویه درست میزبان/میهمان + حلقه کالیبراسیون خودکار دسته‌ها + مسیریاب غیرخطی ۵ رژیمی (🏦 بنکر · 🧩 کمبو · 🎯 خوشه نتیجه دقیق · ⚖️ زوج‌تیپ · 🔗 آکومولاتور) + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
+                حسابداری صادقانه کارنامه (منبع واحد حقیقت) + تسویه درست میزبان/میهمان + سه خط تولید استاندارد v22.0 (🔗 میکس ۲ تایی · 🎯 تک‌گزینه عمیق · 🏦 بنکر) + قانون آهنین Strict Live-Odds + حلقه کالیبراسیون خودکار دسته‌ها + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -405,7 +405,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v21.0 1xBet Real-Market Calibration & Zero-Blind-Stats Edition · حسابداری صادقانه کارنامه (منبع واحد حقیقت — بدون حذف رژیم زیان‌ده، باخت کامل −۱۰۰u/−۵۰u واقعی) + تسویه درست میزبان/میهمان (فیکس Tenerife) + حذف ردیف‌های ساختگی ACC و ضریب تکراری ۳.۹۵/۱.۸۲ + حلقه کالیبراسیون خودکار دسته‌ها (تعلیق خودکار ROI منفی) + بلک‌لیست قطعی دوستانه‌ها + مسیریاب غیرخطی ۵ رژیم + ضرایب ارزش‌محور یکتای هر بازی + سیستم دو‌سطحی تاج (👑 طلایی ۱۰۰u · 🥈 نقره‌ای ۵۰u Half-Kelly) + قیف کانال عمومی↔VIP (@aineobet) + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v22.0 100% Automated Live Odds Edition · حذف کامل همپوشانی دو گزینه (Dual-Hedge) و جایگزینی با سه خط تولید استاندارد (🔗 میکس ۲ تایی 1.80x–2.25x · 🎯 تک‌گزینه عمیق کالیبره‌شده 1.72x–2.15x · 🏦 تک‌ستون بنکر 1.45x–1.68x) + قانون آهنین Strict Live-Odds (بازی فاقد ضریب زنده واقعی ESPN/The Odds API/Polymarket هرگز کارت نمی‌گیرد — مسیر STATS_ONLY مطلقاً ممنوع) + بازمحاسبه ۱۰۰٪ صادقانه بانک ۱,۰۰۰ واحدی (هر برد +۸۰..+۱۲۵u · هر باخت دقیقاً −۱۰۰u بدون استاپ‌لاس مصنوعی) + منبع واحد حقیقت settledCards + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

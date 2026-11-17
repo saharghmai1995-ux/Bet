@@ -262,8 +262,10 @@ function espnUrlOf(externalId: string | null): string | null {
  * امکان کش‌اوت ۵۵٪ در دقیقه ۶۵ وجود ندارد و کل استیک آن کارت از دست می‌رود.
  * تمام باخت‌های کامل صادقانه با -۱۰۰.0 واحد (کارت طلایی ۱۰۰ واحدی) و
  * -۵۰.0 واحد (کارت تاج نقره‌ای ۵۰ واحدی) ثبت می‌شوند — چون totalStaked همان استیک واقعی کارت است.
+ * v22.0 — خروجی از ماژول خارج شد تا مسیر بازمحاسبه رسمی (v22-recalculate) هم از
+ * «تنها فرمول سود مجاز سیستم» استفاده کند — صفر فرمول موازی.
  */
-function settlementProfit(
+export function settlementProfit(
   status: Exclude<SlipStatus, "PENDING" | "LIVE" | "MANUAL_REVIEW" | "VOID">,
   stakeA: number,
   stakeB: number,

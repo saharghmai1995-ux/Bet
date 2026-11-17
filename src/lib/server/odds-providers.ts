@@ -517,3 +517,83 @@ export async function fetchMatchOddsComparison(m: {
 
   return { rows, espnProbabilities };
 }
+
+// ═══════════ v22.0 — نقشه کش‌شده Polymarket برای ادغام ۱۰۰٪ اتوماتیک در خط لوله زنده ═══════════
+
+/** خط سه‌گانه یک بازار Polymarket (توکن نرمال‌شده دو تیم + ضریب اعشاری) */
+export interface PolyMarketLine {
+  a: string;
+  b: string;
+  oddsA: number;
+  oddsB: number;
+  draw: number | null;
+  question: string;
+}
+
+let polyMapCache: { at: number; map: Map<string, PolyMarketLine> } | null = null;
+
+/**
+ * نقشه کش‌شده (۵ دقیقه) همه بازارهای سه‌گانه Polymarket — بدون کلید.
+ * کلید هر ردیف = توکن نرمال‌شده نام تیم؛ هر بازار دو بار (برای هر دو تیم) ثبت می‌شود.
+ */
+export async function fetchPolymarketMap(ttlMs = 5 * 60_000): Promise<Map<string, PolyMarketLine>> {
+  if (polyMapCache && Date.now() - polyMapCache.at < ttlMs) return polyMapCache.map;
+  const map = new Map<string, PolyMarketLine>();
+  const res = await fetchJson(POLYMARKET_URL).catch(() => null);
+  const data = res?.data as { title?: string; markets?: { question?: string; outcomes?: string; outcomePrices?: string }[] }[] | null;
+  if (Array.isArray(data)) {
+    for (const ev of data) {
+      for (const mk of ev.markets ?? []) {
+        let outcomes: string[] = [];
+        let prices: string[] = [];
+        try { outcomes = JSON.parse(mk.outcomes ?? "[]"); } catch { continue; }
+        try { prices = JSON.parse(mk.outcomePrices ?? "[]"); } catch { continue; }
+        if (outcomes.length < 2 || prices.length < 2) continue;
+        const dec = outcomes.map((o, i) => {
+          const pv = parseFloat(prices[i]);
+          return Number.isFinite(pv) && pv > 0.01 && pv < 0.99 ? Number((1 / pv).toFixed(2)) : null;
+        });
+        const drawIdx = outcomes.findIndex((o) => o.toLowerCase() === "draw");
+        const teamIdx = outcomes
+          .map((o, i) => (i === drawIdx ? null : i))
+          .filter((i): i is number => i !== null && dec[i] !== null);
+        if (teamIdx.length < 2) continue;
+        const [iA, iB] = teamIdx;
+        const line: PolyMarketLine = {
+          a: normTokens(outcomes[iA]).join(" "),
+          b: normTokens(outcomes[iB]).join(" "),
+          oddsA: dec[iA] as number,
+          oddsB: dec[iB] as number,
+          draw: drawIdx >= 0 && dec[drawIdx] !== null ? (dec[drawIdx] as number) : null,
+          question: mk.question ?? "",
+        };
+        if (!line.a || !line.b || line.oddsA <= 1 || line.oddsB <= 1) continue;
+        map.set(line.a, line);
+        map.set(line.b, line);
+      }
+    }
+  }
+  polyMapCache = { at: Date.now(), map };
+  return map;
+}
+
+/** تطبیق فازی یک مسابقه ESPN با بازار Polymarket — خروجی: خط اعشاری 1X2 */
+export function matchPolymarketLine(
+  map: Map<string, PolyMarketLine>,
+  homeTeam: string,
+  awayTeam: string
+): { home: number; draw: number | null; away: number } | null {
+  const hTok = normTokens(homeTeam).join(" ");
+  const aTok = normTokens(awayTeam).join(" ");
+  if (!hTok || !aTok) return null;
+  const line = map.get(hTok) ?? map.get(aTok);
+  if (!line) return null;
+  const fuzzy = (x: string, y: string) => x === y || (x.length > 2 && y.includes(x)) || (y.length > 2 && x.includes(y));
+  const sameMarket = (fuzzy(line.a, hTok) && fuzzy(line.b, aTok)) || (fuzzy(line.a, aTok) && fuzzy(line.b, hTok));
+  if (!sameMarket) return null;
+  const homeIsA = fuzzy(line.a, hTok);
+  const home = homeIsA ? line.oddsA : line.oddsB;
+  const away = homeIsA ? line.oddsB : line.oddsA;
+  if (!(home > 1) || !(away > 1)) return null;
+  return { home, draw: line.draw, away };
+}

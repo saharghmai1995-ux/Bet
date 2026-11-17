@@ -33,6 +33,7 @@ import {
   MonitorSmartphone,
   RefreshCw,
   Rocket,
+  Scale,
   ScrollText,
   Send,
   SendHorizonal,
@@ -265,6 +266,40 @@ export function SettlementTab() {
       setRecalcing(false);
     }
   }, [loadLedger, loadCategories, loadFeed]);
+
+  // ─── v22.0 — بازمحاسبه ۱۰۰٪ صادقانه بانک (باخت −۱۰۰u · حذف کارت‌های ضریب فرضی) ───
+  const recalcV22 = useCallback(async () => {
+    setRecalcing(true);
+    try {
+      const res = await fetch("/api/settlement/v22-recalculate", { method: "POST" });
+      const data = (await res.json()) as {
+        success: boolean;
+        error?: string;
+        recomputed?: number;
+        voided?: number;
+        scanned?: number;
+        bank?: { finalBank: number; netProfit: number };
+      };
+      if (!data.success) {
+        toast.error(data.error ?? "بازمحاسبه v22.0 ناموفق بود");
+        return;
+      }
+      toast.success(
+        `⚖️ بازمحاسبه صادقانه v22.0 انجام شد — ${faNum(data.recomputed ?? 0, 0)} سطر بازمحاسبه (باخت دقیقاً −۱۰۰u) · ${faNum(data.voided ?? 0, 0)} کارت ضریب فرضی VOID`,
+        {
+          description: data.bank
+            ? `بانک ۱۰۰۰ واحدی → ${faNum(data.bank.finalBank, 1)} واحد (سود خالص ${data.bank.netProfit >= 0 ? "+" : "−"}${faNum(Math.abs(data.bank.netProfit), 1)}u) — منبع واحد حقیقت settledCards`
+            : undefined,
+        }
+      );
+      await loadLedger();
+      await loadCategories();
+    } catch {
+      toast.error("خطای شبکه در بازمحاسبه v22.0");
+    } finally {
+      setRecalcing(false);
+    }
+  }, [loadLedger, loadCategories]);
 
   // ─── ساخت بدنه صدور از آیتم‌های سبد (تطبیق میکس دو بازی با externalId ESPN) ───
   const buildIssueItem = useCallback(
@@ -1008,6 +1043,17 @@ export function SettlementTab() {
               {feedOpen ? "بستن شبیه‌ساز فید کانال" : "پیش‌نمایش زنده فید کانال (شبیه‌ساز)"}
             </Button>
             {/* ═══ v16.0 — بازمحاسبه Verified-Ledger با ۳ الگوی طلایی اتمیک ═══ */}
+            {/* ═══ v22.0 — بازمحاسبه ۱۰۰٪ صادقانه بانک (Strict Live-Odds) ═══ */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-300 hover:bg-amber-500/20"
+              onClick={recalcV22}
+              disabled={recalcing}
+            >
+              {recalcing ? <Loader2 className="size-3 animate-spin" /> : <Scale className="size-3" />}
+              ⚖️ بازمحاسبه صادقانه بانک v22.0 (−۱۰۰u · حذف ضریب فرضی)
+            </Button>
             <Button
               size="sm"
               variant="outline"

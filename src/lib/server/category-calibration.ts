@@ -10,8 +10,8 @@ import { db } from "@/lib/db";
 import { getSetting, setSetting } from "./telegram-service";
 import { computeMasterLedgerMetrics, type MasterLedgerMetrics } from "./master-metrics";
 
-/** کلیدهای ۵ دسته فلش‌کارت + اسنایپر تاریخی */
-export type CategoryKey = "DUAL_HEDGE" | "COMBO" | "BANKER" | "CS_CLUSTER" | "ACCUMULATOR" | "SNIPER";
+/** کلیدهای دسته‌های فلش‌کارت — v22.0: DEEP_VALUE (تک‌گزینه عمیق) + اسنایپر تاریخی */
+export type CategoryKey = "DUAL_HEDGE" | "COMBO" | "BANKER" | "CS_CLUSTER" | "ACCUMULATOR" | "SNIPER" | "DEEP_VALUE";
 
 export const CALIBRATION_SETTING_KEY = "category_calibration_state_v20";
 
@@ -19,12 +19,13 @@ export const CALIBRATION_SETTING_KEY = "category_calibration_state_v20";
 export const CALIBRATION_MIN_SAMPLE = 3;
 
 export const CATEGORY_LABELS_FA: Record<CategoryKey, string> = {
-  DUAL_HEDGE: "زوج‌تیپ دوقلو",
-  COMBO: "کمبوی رسمی",
-  CS_CLUSTER: "خوشه نتیجه دقیق",
-  BANKER: "بنکر ستون فقرات",
-  ACCUMULATOR: "آکومولاتور",
+  DUAL_HEDGE: "زوج‌تیپ دوقلو (منسوخ v22)",
+  COMBO: "کمبوی رسمی (منسوخ v22)",
+  CS_CLUSTER: "خوشه نتیجه دقیق (منسوخ v22)",
+  BANKER: "🏦 تک‌ستون بنکر (خط ۳)",
+  ACCUMULATOR: "🔗 میکس ۲ تایی هوشمند (خط ۱)",
   SNIPER: "شکارچی ضرایب بالا",
+  DEEP_VALUE: "🎯 تک‌گزینه عمیق کالیبره‌شده (خط ۲)",
 };
 
 export interface CategoryCalibrationState {
@@ -62,6 +63,8 @@ function categoryOf(productLine: string | null): CategoryKey {
       return "ACCUMULATOR";
     case "SNIPER":
       return "SNIPER";
+    case "DEEP_VALUE":
+      return "DEEP_VALUE";
     default:
       return "DUAL_HEDGE";
   }
@@ -135,7 +138,7 @@ export async function evaluateCategoryCalibration(): Promise<CategoryCalibration
     // snapshot خراب — از صفر می‌سازیم
   }
 
-  const keys: CategoryKey[] = ["DUAL_HEDGE", "COMBO", "CS_CLUSTER", "BANKER", "ACCUMULATOR", "SNIPER"];
+  const keys: CategoryKey[] = ["DEEP_VALUE", "BANKER", "ACCUMULATOR", "DUAL_HEDGE", "COMBO", "CS_CLUSTER", "SNIPER"];
   const states = keys.map((k) => stateOf(k, byCat.get(k) ?? [], prior));
   const active = states.filter((s) => !s.suspended && s.roiPct !== null && s.roiPct > 0);
   const bestCategory = active.length > 0

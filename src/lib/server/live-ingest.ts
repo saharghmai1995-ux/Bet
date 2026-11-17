@@ -32,7 +32,37 @@ import { runDixonColes, fairOdds } from "@/lib/engine/poisson";
 import { solveMarketImpliedLambdas, type MarketImpliedResult } from "@/lib/engine/reverse-poisson";
 // v21.0 — جدول جهانی Elo: پایان کارت کور λ=۱.۰۰–۰.۹۲ در بازی‌های ملی
 import { lambdaFromEloRatings, lookupTeamRating } from "@/lib/engine/elo-ratings";
+// v22.0 — ترکیب ۱۰۰٪ اتوماتیک با بازار آزاد Polymarket (Zero-Vig)
+import { fetchPolymarketMap, matchPolymarketLine, type PolyMarketLine, fetchEspnCoreOdds, parseEspnExternalId, type EspnCoreOdds } from "./odds-providers";
 import type { LiveFeedDTO, LiveFeedSourceDTO } from "@/lib/types";
+
+// ═══ v22.0 — کش اندپوینت مستقیم ESPN Core Odds (Bet365/Unibet/William Hill/DraftKings) ═══
+// هر رویداد حداکثر هر ۱۰ دقیقه یک‌بار واکشی می‌شود — ضد Rate-Limit.
+const espnCoreCache = new Map<string, { at: number; core: EspnCoreOdds | null }>();
+const ESPN_CORE_TTL_MS = 10 * 60_000;
+async function fetchEspnCoreOddsCached(slug: string, eventId: string): Promise<EspnCoreOdds | null> {
+  const key = `${slug}-${eventId}`;
+  const hit = espnCoreCache.get(key);
+  if (hit && Date.now() - hit.at < ESPN_CORE_TTL_MS) return hit.core;
+  const core = await fetchEspnCoreOdds(slug, eventId).catch(() => null);
+  if (espnCoreCache.size > 400) espnCoreCache.clear();
+  espnCoreCache.set(key, { at: Date.now(), core });
+  return core;
+}
+
+/** بهترین خط 1X2 بین بوک‌میکرهای رسمی ESPN Core (Bet365/Unibet/William Hill/...) */
+function bestEspnCoreLine(core: EspnCoreOdds | null): { provider: string; home: number; draw: number; away: number } | null {
+  if (!core) return null;
+  let best: { provider: string; home: number; draw: number; away: number } | null = null;
+  const impliedSum = (l: { home: number; draw: number; away: number }) => 1 / l.home + 1 / l.draw + 1 / l.away;
+  for (const b of core.bookmakers) {
+    if (!b.home || !b.draw || !b.away) continue;
+    if (b.home <= 1.01 || b.draw <= 1.01 || b.away <= 1.01) continue;
+    const line = { provider: b.name, home: b.home, draw: b.draw, away: b.away };
+    if (!best || impliedSum(line) < impliedSum(best)) best = line; // کم‌حاشیه‌ترین خط
+  }
+  return best;
+}
 
 
 // ═════════════════════ تنظیمات کش و throttle ═════════════════════
@@ -83,7 +113,7 @@ function oddsApiKey(userKey?: string): string {
 const marketSolverCache = new Map<string, MarketImpliedResult | null>();
 const MARKET_SOLVER_CACHE_MAX = 600;
 
-function marketLambdasFor(odds: { oddsHome: number; oddsDraw: number; oddsAway: number; oddsOver25: number; oddsUnder25: number }): { home: number | null; away: number | null; fitError: number | null } {
+export function marketLambdasFor(odds: { oddsHome: number; oddsDraw: number; oddsAway: number; oddsOver25: number; oddsUnder25: number }): { home: number | null; away: number | null; fitError: number | null } {
   const key = [odds.oddsHome, odds.oddsDraw, odds.oddsAway, odds.oddsOver25, odds.oddsUnder25].join("|");
   if (!marketSolverCache.has(key)) {
     if (marketSolverCache.size > MARKET_SOLVER_CACHE_MAX) marketSolverCache.clear();
@@ -381,19 +411,30 @@ interface ResolvedOdds {
   oddsOver25: number;
   oddsUnder25: number;
   odds1x: number;
-  source: "ENGINE" | "ESPN_DRAFTKINGS" | "ODDS_API";
+  source: "ENGINE" | "ESPN_DRAFTKINGS" | "ODDS_API" | "POLYMARKET";
   /** تا ۳ ردیف بوک‌میکر با کلیدهای کنونیکال (Pinnacle = کم‌حاشیه‌ترین) */
-  books: { bookmaker: "PINNACLE" | "SOFT_A" | "SOFT_B"; bookmakerLabel: string; home: number; draw: number; away: number; over25: number | null; under25: number | null }[];
+  books: { bookmaker: "PINNACLE" | "SOFT_A" | "SOFT_B" | "POLYMARKET"; bookmakerLabel: string; home: number; draw: number; away: number; over25: number | null; under25: number | null }[];
 }
 
-function resolveOdds(ev: LiveMatchEvent, oddsEv: OddsApiEvent | null, probs: ReturnType<typeof modelProbs>): ResolvedOdds {
+/**
+ * v22.0 — ترکیب ضرایب زنده بوک‌میکرها با بازار آزاد Polymarket (Zero-Vig):
+ * خط Polymarket به‌عنوان ردیف بوک‌میکر مستقل اضافه می‌شود و بهترین قیمت هر نتیجه
+ * بین بوک‌میکرهای رسمی + بازار آزاد انتخاب می‌گردد؛ در نبود بوک‌میکر رسمی،
+ * خط کامل سه‌گانه Polymarket تنها منبع واقعی است (source=POLYMARKET).
+ */
+function resolveOdds(
+  ev: LiveMatchEvent,
+  oddsEv: OddsApiEvent | null,
+  probs: ReturnType<typeof modelProbs>,
+  poly?: { home: number; draw: number | null; away: number } | null
+): ResolvedOdds {
   // ─── ۱) ضرایب زنده The Odds API — بهترین قیمت هر انتخاب + سه بوک نماینده ───
   if (oddsEv && oddsEv.books.length > 0) {
     const booksSorted = [...oddsEv.books].sort(
       (a, b) => 1 / a.line.home + 1 / a.line.draw + 1 / a.line.away - (1 / b.line.home + 1 / b.line.draw + 1 / b.line.away)
     );
     const canon = ["PINNACLE", "SOFT_A", "SOFT_B"] as const;
-    const books = booksSorted.slice(0, 3).map((b, i) => ({
+    const books: ResolvedOdds["books"] = booksSorted.slice(0, 3).map((b, i) => ({
       bookmaker: canon[i],
       bookmakerLabel: `${b.label}${i === 0 ? " (Sharp)" : ""}`,
       home: b.line.home,
@@ -402,6 +443,17 @@ function resolveOdds(ev: LiveMatchEvent, oddsEv: OddsApiEvent | null, probs: Ret
       over25: b.line.over25,
       under25: b.line.under25,
     }));
+    if (poly && poly.home > 1 && poly.away > 1) {
+      books.push({
+        bookmaker: "POLYMARKET",
+        bookmakerLabel: "Polymarket (Zero-Vig)",
+        home: poly.home,
+        draw: poly.draw ?? fairOdds(probs.pDraw, 1.06),
+        away: poly.away,
+        over25: null,
+        under25: null,
+      });
+    }
     const best = (sel: (b: ResolvedOdds["books"][number]) => number | null): number => {
       const vals = books.map(sel).filter((v): v is number => v !== null && v >= 1.01);
       return vals.length > 0 ? Math.max(...vals) : 0;
@@ -418,29 +470,66 @@ function resolveOdds(ev: LiveMatchEvent, oddsEv: OddsApiEvent | null, probs: Ret
     return { oddsHome, oddsDraw, oddsAway, oddsOver25, oddsUnder25, odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06), source: "ODDS_API", books };
   }
 
-  // ─── ۲) خط پایه ESPN (معمولاً DraftKings) ───
+  // ─── ۲) خط پایه ESPN (معمولاً DraftKings) + ترکیب Polymarket ───
   if (ev.espnOdds && ev.espnOdds.home && ev.espnOdds.draw && ev.espnOdds.away) {
     const o = ev.espnOdds;
     const h = o.home as number;
     const d2 = o.draw as number;
     const a2 = o.away as number;
+    const books: ResolvedOdds["books"] = [
+      {
+        bookmaker: "SOFT_A",
+        bookmakerLabel: `${o.provider} (ESPN)`,
+        home: h,
+        draw: d2,
+        away: a2,
+        over25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
+        under25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
+      },
+    ];
+    if (poly && poly.home > 1 && poly.away > 1) {
+      books.push({
+        bookmaker: "POLYMARKET",
+        bookmakerLabel: "Polymarket (Zero-Vig)",
+        home: poly.home,
+        draw: poly.draw ?? d2,
+        away: poly.away,
+        over25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
+        under25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
+      });
+    }
+    const best = (sel: (b: ResolvedOdds["books"][number]) => number): number => Math.max(...books.map(sel));
     return {
-      oddsHome: h,
-      oddsDraw: d2,
-      oddsAway: a2,
-      oddsOver25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
-      oddsUnder25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
+      oddsHome: best((b) => b.home),
+      oddsDraw: best((b) => b.draw),
+      oddsAway: best((b) => b.away),
+      oddsOver25: books[0].over25 ?? fairOdds(probs.pOver25, 1.06),
+      oddsUnder25: books[0].under25 ?? fairOdds(probs.pUnder25, 1.06),
       odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
       source: "ESPN_DRAFTKINGS",
+      books,
+    };
+  }
+
+  // ─── ۲.۵) v22.0 — بازار آزاد Polymarket (Zero-Vig) — تنها منبع واقعی بدون بوک‌میکر رسمی ───
+  if (poly && poly.home > 1 && poly.away > 1 && poly.draw && poly.draw > 1) {
+    return {
+      oddsHome: poly.home,
+      oddsDraw: poly.draw,
+      oddsAway: poly.away,
+      oddsOver25: fairOdds(probs.pOver25, 1.06),
+      oddsUnder25: fairOdds(probs.pUnder25, 1.06),
+      odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
+      source: "POLYMARKET",
       books: [
         {
-          bookmaker: "SOFT_A",
-          bookmakerLabel: `${o.provider} (ESPN)`,
-          home: h,
-          draw: d2,
-          away: a2,
-          over25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
-          under25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
+          bookmaker: "POLYMARKET",
+          bookmakerLabel: "Polymarket (Zero-Vig)",
+          home: poly.home,
+          draw: poly.draw,
+          away: poly.away,
+          over25: null,
+          under25: null,
         },
       ],
     };
@@ -653,6 +742,11 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
   let oddsApiMatched = 0;
   let marketSolvedCount = 0;
 
+  // ═══ v22.0 — بازار آزاد Polymarket (Zero-Vig) — کش ۵ دقیقه‌ای، بدون کلید ═══
+  const polyMap = await fetchPolymarketMap().catch(() => new Map<string, PolyMarketLine>());
+  let polyMatched = 0;
+  let espnCoreOddsCount = 0;
+
   for (const ev of keepEvents) {
     const kick = Date.parse(ev.kickoff);
     const weather = weatherMap.get(ev.venueCity ?? "") ?? null;
@@ -662,7 +756,22 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     const probs = modelProbs(d);
     const oddsEv = matchOddsEvent(ev, oddsEvents);
     if (oddsEv) oddsApiMatched += 1;
-    const odds = resolveOdds(ev, oddsEv, probs);
+    // v22.0 — اندپوینت مستقیم ESPN Core Odds (Bet365/Unibet/William Hill/DraftKings)
+    // وقتی نه Odds API و نه اسکوربورد خط داشت — ۱۰۰٪ اتوماتیک، بدون کلید
+    if (!oddsEv && !(ev.espnOdds && ev.espnOdds.home)) {
+      const parsedId = parseEspnExternalId(ev.externalId);
+      if (parsedId) {
+        const coreLine = bestEspnCoreLine(await fetchEspnCoreOddsCached(parsedId.slug, parsedId.eventId));
+        if (coreLine) {
+          ev.espnOdds = { provider: `${coreLine.provider} (ESPN Core)`, home: coreLine.home, draw: coreLine.draw, away: coreLine.away, over25: null, under25: null };
+          espnCoreOddsCount += 1;
+        }
+      }
+    }
+    // v22.0 — ترکیب با بازار آزاد Polymarket (100% اتوماتیک — بدون ورود دستی)
+    const polyLine = matchPolymarketLine(polyMap, ev.homeTeam, ev.awayTeam);
+    if (polyLine) polyMatched += 1;
+    const odds = resolveOdds(ev, oddsEv, probs, polyLine);
 
     // v4.0: حفظ ضرایب زنده معتبر قبلی — سینک بدون Odds API نباید ضرایب بوک‌میکرها
     // را با ضرایب مدل جایگزین کند (فقط ضرایب کهنه‌تر از ۶ ساعت بازمحاسبه می‌شوند)
@@ -835,7 +944,29 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     detail:
       marketSolvedCount > 0
         ? `${marketSolvedCount} بازی با حل معکوس پواسون — λ ترکیبی = ۶۵٪ بازار + ۳۵٪ آمار فصل`
-        : "خط بازار واقعی در دسترس نبود — مسیر STATS_ONLY",
+        : "خط بازار واقعی در دسترس نبود — مسیر STATS_ONLY (صدور کارت ممنوع v22)",
+    latencyMs: 0,
+  });
+  // ═══ v22.0 — نبض بازار آزاد Polymarket ═══
+  sources.push({
+    key: "polymarket",
+    label: "Polymarket Gamma (Zero-Vig) — v22.0",
+    ok: polyMatched > 0,
+    detail:
+      polyMatched > 0
+        ? `${polyMatched} بازی با خط بدون کارمزد بازار آزاد ترکیب شد`
+        : "تطبیق بازی‌های امروز در بازار Polymarket یافت نشد",
+    latencyMs: 0,
+  });
+  // ═══ v22.0 — نبض اندپوینت مستقیم ESPN Core Odds ═══
+  sources.push({
+    key: "espn-core-odds",
+    label: "ESPN Core Odds — v22.0 (Bet365/Unibet/William Hill)",
+    ok: espnCoreOddsCount > 0,
+    detail:
+      espnCoreOddsCount > 0
+        ? `${espnCoreOddsCount} بازی با خط مستقیم بوک‌میکرهای ESPN Core تقویت شد`
+        : "هیچ رویدادی هنوز خط ESPN Core نداشت (بوک‌میکرها خط را باز نکرده‌اند) — قانون آهنین: کارت صادر نمی‌شود",
     latencyMs: 0,
   });
   sources.push({
