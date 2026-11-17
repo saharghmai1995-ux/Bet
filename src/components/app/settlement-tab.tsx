@@ -1252,8 +1252,9 @@ export function SettlementTab() {
             </p>
           </div>
         ) : (
-          <ScrollArea className="max-h-[480px]">
-            <Table>
+          // v24.0 — رفع سرریز افقی موبایل: overflow دو محوره به‌جای ScrollArea عمودی
+          <div className="max-h-[480px] overflow-auto">
+            <Table className="min-w-[640px]">
               <TableHeader className="sticky top-0 z-10 bg-[rgba(9,13,24,0.95)] backdrop-blur">
                 <TableRow className="border-white/8">
                   <TableHead className="text-right text-[10px]">بازی (نتیجه FT واقعی)</TableHead>
@@ -1271,7 +1272,7 @@ export function SettlementTab() {
                 ))}
               </TableBody>
             </Table>
-          </ScrollArea>
+          </div>
         )}
       </div>
 

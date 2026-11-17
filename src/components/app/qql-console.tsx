@@ -124,7 +124,7 @@ export function QqlConsole() {
             </p>
             <div className="overflow-hidden rounded-xl border border-white/10">
               <div className="max-h-72 overflow-auto">
-                <table className="w-full text-[10px]" aria-label={`نتایج ${result.queryId}`}>
+                <table className="w-full min-w-[420px] text-[10px]" aria-label={`نتایج ${result.queryId}`}>
                   <thead className="sticky top-0 bg-black/60 text-muted-foreground">
                     <tr>
                       {result.columns.map((c) => (
@@ -145,7 +145,7 @@ export function QqlConsole() {
                       result.rows.map((r, i) => (
                         <tr key={i} className="border-t border-white/6">
                           {r.map((cell, j) => (
-                            <td key={j} className={cn("px-2.5 py-1.5 text-right text-foreground/90", j === 0 && "font-semibold")} dir="auto">
+                            <td key={j} className={cn("max-w-[220px] break-words px-2.5 py-1.5 text-right text-foreground/90", j === 0 && "font-semibold")} dir="auto">
                               {cell === null ? "—" : String(cell)}
                             </td>
                           ))}

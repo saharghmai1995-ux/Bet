@@ -36,6 +36,7 @@ import { VipBotTab } from "@/components/app/vip-bot-tab";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
 import { HeroPerformance } from "@/components/app/hero-performance";
+import { QqlConsole } from "@/components/app/qql-console";
 import { RolloverLadder } from "@/components/app/autopilot/rollover-ladder";
 import { SupervisorRadar } from "@/components/app/fx/supervisor-radar";
 import { useQuantStore } from "@/lib/store";
@@ -188,7 +189,7 @@ export default function Home() {
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                معماری برنده همپوشانی دوقلو v19.0 (⚖️ G1 فاوریت بالای ۱.۵ تیمی ↔ زیر ۲.۵ · ⚖️ G2 برد میزبان ↔ زیر ۲.۵ · ⚖️ G3 BTTS بله ↔ برد کلین‌شیت) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله ≤ ۱۱.۵٪) + تخصیص نامتقارن ۶۵/۳۵ + سپر استاپ‌لاس دقیقه ۶۵ (−۴۵u) + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson + تسویه خودکار ESPN + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
+                ⚛️ حل‌کننده کوانتومی v23.0 (استخر باز ۱۲ آپشن × ۶۶ ترکیب — انتخاب اختصاصی هر بازی با تابع انرژی U و قید همپوشانی مثبت ۰.۸۶۵) + 🔬 موتور QQL/RCA v24.0 (زبان پرس‌وجوی درون‌حافظه‌ای + دوقلوهای K-NN + وتوی تحلیل ریشه‌ای RCA_01/02/03) + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵/۳۵ + خط لوله ESPN · TheSportsDB · Polymarket + تسویه خودکار ESPN + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -289,6 +290,8 @@ export default function Home() {
             <FlashcardDeck />
             {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (بالای داشبورد سریع) */}
             <RolloverLadder startBank={100} />
+            {/* 💻 v24.0 — کنسول تعاملی QQL / AI RCA (زبان پرس‌وجوی علوم داده) */}
+            <QqlConsole />
             {/* 📅 v21.0 — برنامه روزانه حرفه‌ای پخش (زمان‌بندی مشخص عمومی + خصوصی) */}
             <DailyProgramBoard />
             <NewsTickerStrip />
@@ -405,7 +408,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v19.0 Restore Edition (بازگشت به معماری برنده همپوشانی دوقلو) · ⚖️ سه الگوی طلایی G1/G2/G3 با ناحیه برد دوبل 1-0/2-0 (Double-Win +۱۲۰..+۱۸۰u) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه تضمینی ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله میانی ≤ ۱۱.۵٪ — مابقی وتو و دفتر سایه) + تخصیص نامتقارن ۶۵u/۳۵u + سپر استاپ‌لاس زنده دقیقه ۶۵ (−۴۵.۰u در تله میانی) + رژیم زیان‌ده خوشه نتیجه دقیق (−۱۶u) غیرفعال + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson بدون قفل توقف + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت settledCards + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v24.0 Quantum Annealing & QQL/RCA Edition (حل‌کننده کوانتومی ۱۲×۱۲ + موتور پرس‌وجوی تحلیلی درون‌حافظه‌ای + تحلیل ریشه‌ای هوش مصنوعی) · ⚛️ استخر باز M1..M12 با ۶۶ ترکیب و تابع انرژی U = P_union×100 + P_overlap×65 + (O_eff−1)×120 − (1−P_union)²×400 + قید همپوشانی مثبت ۱/O_a + ۱/O_b ≤ ۰.۸۶۵ · 🔬 QQL ۴ مرحله‌ای (K-NN twins Δλ_Fav ≤ ۰.۲۸ · فیلتر قید · وتوی RCA_01/02/03 · LIMIT 1) + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵u/۳۵u + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت computeMasterLedgerMetrics + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه + برد/باخت) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />
