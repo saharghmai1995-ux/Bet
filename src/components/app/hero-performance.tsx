@@ -24,7 +24,7 @@ import { useSupervisorStats } from "@/lib/autopilot-derive";
 import { faNum } from "@/lib/format";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import type { LedgerDTO } from "@/lib/types";
+import type { LedgerDTO, BankPeriodStat } from "@/lib/types";
 import { ParticlePipeline } from "@/components/app/fx/particle-pipeline";
 
 const START_BANK = 1000; // بانک مرجع ۱۰۰۰ واحدی — استیک فلت ۱۰۰ واحدی هر کارت
@@ -580,6 +580,242 @@ function LedgerPulse({ ledger, savedByVeto }: { ledger: LedgerDTO | null; savedB
   );
 }
 
+// ═══ v21.0 — تحلیل حرفه‌ای منحنی رشد بانک (Bank Growth Analytics Pro) ═══
+// نمودار تغییرات روزانه/هفتگی/ماهانه + تعداد بازی‌های روزانه + برد/باخت +
+// بهترین/بدترین روز + رگبار برد/باخت + بیشترین افت سرمایه + اوج بانک.
+// همه اعداد از تسویه واقعی ESPN (هم‌مبنای stats تیتر) — صفر عدد جعلی.
+
+type Granularity = "daily" | "weekly" | "monthly";
+
+function PeriodBarChart({ data }: { data: BankPeriodStat[] }) {
+  const W = 560;
+  const H = 150;
+  const padB = 26;
+  const padT = 16;
+  const maxAbs = Math.max(1, ...data.map((d) => Math.abs(d.netProfit)));
+  const barW = W / Math.max(1, data.length);
+  const zeroY = H - padB; // خط صفر پایین نمودار وقتی همه مثبت‌اند
+  // خط صفر وسط اگر منفی و مثبت داریم
+  const hasNeg = data.some((d) => d.netProfit < 0);
+  const hasPos = data.some((d) => d.netProfit > 0);
+  const midZero = hasNeg && hasPos;
+  const zeroLine = midZero ? (H - padB + padT) / 2 : zeroY;
+  const upScale = midZero ? (zeroLine - padT) / maxAbs : (H - padB - padT) / maxAbs;
+  const downScale = midZero ? (H - padB - zeroLine) / maxAbs : upScale;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="h-[150px] w-full" role="img" aria-label="نمودار تغییرات بانک در بازه‌های انتخابی">
+      <line x1="0" y1={zeroLine} x2={W} y2={zeroLine} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="3 3" />
+      {data.map((d, i) => {
+        const v = d.netProfit;
+        const h = v >= 0 ? v * upScale : Math.abs(v) * downScale;
+        const x = i * barW + barW * 0.18;
+        const bw = barW * 0.64;
+        const y = v >= 0 ? zeroLine - h : zeroLine;
+        const tone = v > 0 ? "#34d399" : v < 0 ? "#fb7185" : "rgba(255,255,255,0.14)";
+        const label = d.label.length > 9 ? d.label.slice(0, 9) : d.label;
+        return (
+          <g key={d.key}>
+            <title>{`${d.label}: ${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}u · ${d.settled} بازی (${d.wins} برد / ${d.losses} باخت) · بانک پایان: ${d.bankAtEnd.toFixed(0)}u`}</title>
+            <rect x={x} y={v >= 0 ? zeroLine - h : zeroLine} width={bw} height={Math.max(v === 0 ? 1.5 : 0, h)} rx="2" fill={tone} opacity={0.88} />
+            {Math.abs(v) > 0 && (
+              <text
+                x={x + bw / 2}
+                y={v >= 0 ? zeroLine - h - 3 : zeroLine + h + 8}
+                textAnchor="middle"
+                fontSize="7.5"
+                fontWeight="700"
+                fill={v > 0 ? "#6ee7b7" : "#fda4af"}
+              >
+                {v > 0 ? "+" : "−"}{Math.abs(v).toFixed(0)}
+              </text>
+            )}
+            <text x={x + bw / 2} y={H - 8} textAnchor="middle" fontSize="7" fill="rgba(255,255,255,0.55)">
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function BankGrowthAnalytics({ equity }: { equity: LedgerDTO["equity"] | null }) {
+  const [gran, setGran] = useState<Granularity>("daily");
+  if (!equity || !Array.isArray(equity.daily) || equity.daily.length === 0) {
+    return (
+      <div className="border-t border-white/8 px-4 py-4">
+        <p className="flex items-center gap-1 text-xs font-bold">
+          <TrendingUp className="size-4 text-emerald-400" />
+          تحلیل حرفه‌ای منحنی رشد بانک
+        </p>
+        <p className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-muted-foreground">
+          تفکیک روزانه/هفتگی/ماهانه به‌محض ثبت اولین تسویه رسمی ESPN فعال می‌شود — اعداد فقط از کارنامه واقعی ساخته می‌شوند (صفر عدد جعلی).
+        </p>
+      </div>
+    );
+  }
+
+  const data = gran === "daily" ? equity.daily : gran === "weekly" ? equity.weekly : equity.monthly;
+  const today = equity.daily[equity.daily.length - 1];
+  const thisWeek = equity.weekly[equity.weekly.length - 1] ?? null;
+  const thisMonth = equity.monthly[equity.monthly.length - 1] ?? null;
+  const best = [...equity.daily].sort((a, b) => b.netProfit - a.netProfit)[0] ?? null;
+  const worst = [...equity.daily].sort((a, b) => a.netProfit - b.netProfit)[0] ?? null;
+  const streakLabel =
+    equity.streak.type === "W"
+      ? `${equity.streak.count} برد متوالی`
+      : equity.streak.type === "L"
+        ? `${equity.streak.count} باخت متوالی`
+        : "—";
+
+  const statChip = (label: string, value: React.ReactNode, tone = "text-foreground") => (
+    <div className="rounded-lg border border-white/8 bg-white/[0.03] px-2.5 py-1.5">
+      <p className="text-[9px] leading-3 text-muted-foreground">{label}</p>
+      <p className={cn("font-num mt-0.5 text-[11px] font-bold leading-4", tone)}>{value}</p>
+    </div>
+  );
+  const unit = (v: number, digits = 1) =>
+    `${v >= 0 ? "+" : "−"}${faNum(Math.abs(v), digits)}u`;
+
+  const granBtn = (g: Granularity, label: string) => (
+    <Button
+      key={g}
+      size="sm"
+      variant="ghost"
+      role="tab"
+      aria-selected={gran === g}
+      className={cn(
+        "h-7 whitespace-nowrap px-3 py-1 text-[10px] font-bold",
+        gran === g ? "bg-emerald-500/20 text-emerald-300" : "text-muted-foreground"
+      )}
+      onClick={() => setGran(g)}
+    >
+      {label}
+    </Button>
+  );
+
+  return (
+    <div className="border-t border-white/8 px-4 py-3" aria-label="تحلیل حرفه‌ای منحنی رشد بانک">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1 text-xs font-bold">
+          <TrendingUp className="size-4 text-emerald-400" />
+          تحلیل حرفه‌ای منحنی رشد بانک
+          <span className="hidden rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-300 sm:inline" dir="ltr">
+            Bank Growth Analytics Pro
+          </span>
+        </p>
+        <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist" aria-label="بازه نمودار">
+          {granBtn("daily", "روزانه")}
+          {granBtn("weekly", "هفتگی")}
+          {granBtn("monthly", "ماهانه")}
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-5">
+        {/* نمودار میله‌ای تغییرات */}
+        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3 lg:col-span-3">
+          <p className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>
+              {gran === "daily" ? "تغییرات روزانه — ۱۴ روز اخیر" : gran === "weekly" ? "تغییرات هفتگی — ۸ هفته اخیر" : "تغییرات ماهانه — ۶ ماه اخیر"}
+            </span>
+            <span dir="ltr" className="font-num">
+              {faNum(equity.finalBank, 0)}u · {equity.roiPct >= 0 ? "+" : ""}{faNum(equity.roiPct, 1)}% ROI
+            </span>
+          </p>
+          <PeriodBarChart data={data} />
+          <p className="mt-1 text-[9px] text-muted-foreground/70">
+            هر میله = تغییر خالص بانک در آن بازه (سبز = سود، قرمز = زیان) — عدد روی میله به واحد. نشانگر روی میله: بازی‌ها، برد/باخت و بانک پایان دوره.
+          </p>
+        </div>
+
+        {/* پنل آمار حرفه‌ای */}
+        <div className="space-y-2 rounded-xl border border-white/8 bg-white/[0.02] p-3 lg:col-span-2">
+          <p className="text-[10px] font-semibold text-muted-foreground">آمار زنده عملکرد — تعداد بازی‌ها، برد و باخت</p>
+          <div className="grid grid-cols-3 gap-1.5">
+            {statChip("بازی‌های امروز", faNum(today?.settled ?? 0, 0))}
+            {statChip("برد امروز", faNum(today?.wins ?? 0, 0), "text-emerald-300")}
+            {statChip("باخت امروز", faNum(today?.losses ?? 0, 0), "text-rose-300")}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {statChip(
+              "سود امروز",
+              unit(today?.netProfit ?? 0),
+              (today?.netProfit ?? 0) >= 0 ? "text-emerald-300" : "text-rose-300"
+            )}
+            {statChip(
+              "سود این هفته",
+              thisWeek ? unit(thisWeek.netProfit) : "—",
+              (thisWeek?.netProfit ?? 0) >= 0 ? "text-emerald-300" : "text-rose-300"
+            )}
+            {statChip(
+              "سود این ماه",
+              thisMonth ? unit(thisMonth.netProfit) : "—",
+              (thisMonth?.netProfit ?? 0) >= 0 ? "text-emerald-300" : "text-rose-300"
+            )}
+            {statChip(
+              "رگبار فعلی",
+              streakLabel,
+              equity.streak.type === "W" ? "text-emerald-300" : equity.streak.type === "L" ? "text-rose-300" : "text-muted-foreground"
+            )}
+            {statChip(
+              "بهترین روز",
+              best && best.netProfit > 0 ? `${best.label} (${unit(best.netProfit)})` : "—",
+              "text-emerald-300"
+            )}
+            {statChip(
+              "بدترین روز",
+              worst && worst.netProfit < 0 ? `${worst.label} (${unit(worst.netProfit)})` : "—",
+              "text-rose-300"
+            )}
+            {statChip("بیشترین افت تاریخی", `${faNum(equity.maxDrawdownPct, 1)}٪`, "text-amber-300")}
+            {statChip("اوج تاریخی بانک", `${faNum(equity.peakBank, 0)}u`, "text-cyan-300")}
+          </div>
+          <p className="text-[9px] leading-3 text-muted-foreground/70">
+            مبنا: بانک ۱۰۰۰ واحدی · فقط کارت‌های تایید سوپروایزر تسویه‌شده ESPN · بازه‌ها بر تقویم تهران.
+          </p>
+        </div>
+      </div>
+
+      {/* جدول تفکیک بازه انتخابی */}
+      <div className="mt-3 overflow-hidden rounded-xl border border-white/8">
+        <div className="max-h-40 overflow-y-auto">
+          <table className="w-full text-[10px]" aria-label={`جدول تفکیک ${gran === "daily" ? "روزانه" : gran === "weekly" ? "هفتگی" : "ماهانه"}`}>
+            <thead className="sticky top-0 bg-black/50 text-muted-foreground">
+              <tr>
+                <th className="px-2.5 py-1.5 text-right font-semibold">بازه</th>
+                <th className="px-2 py-1.5 text-center font-semibold">بازی‌ها</th>
+                <th className="px-2 py-1.5 text-center font-semibold">برد</th>
+                <th className="px-2 py-1.5 text-center font-semibold">باخت</th>
+                <th className="px-2 py-1.5 text-center font-semibold">وین‌ریت</th>
+                <th className="px-2 py-1.5 text-center font-semibold">تغییر بانک</th>
+                <th className="px-2.5 py-1.5 text-center font-semibold">بانک پایان</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...data].reverse().map((d) => (
+                <tr key={d.key} className="border-t border-white/6">
+                  <td className="px-2.5 py-1.5 text-right text-foreground/90">{d.label}</td>
+                  <td className="font-num px-2 py-1.5 text-center" dir="ltr">{faNum(d.settled, 0)}</td>
+                  <td className="font-num px-2 py-1.5 text-center text-emerald-300" dir="ltr">{faNum(d.wins, 0)}</td>
+                  <td className="font-num px-2 py-1.5 text-center text-rose-300" dir="ltr">{faNum(d.losses, 0)}</td>
+                  <td className="font-num px-2 py-1.5 text-center" dir="ltr">
+                    {d.settled > 0 ? `${faNum((d.wins / d.settled) * 100, 0)}٪` : "—"}
+                  </td>
+                  <td className={cn("font-num px-2 py-1.5 text-center", d.netProfit > 0 ? "text-emerald-300" : d.netProfit < 0 ? "text-rose-300" : "text-muted-foreground")} dir="ltr">
+                    {unit(d.netProfit)}
+                  </td>
+                  <td className="font-num px-2.5 py-1.5 text-center" dir="ltr">{faNum(d.bankAtEnd, 0)}u</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** ═══ ماژول اصلی هیرو ═══ */
 export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
   const [ledger, setLedger] = useState<LedgerDTO | null>(null);
@@ -740,6 +976,9 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           </Button>
         </div>
       </div>
+
+      {/* ═══ v21.0 — تحلیل حرفه‌ای منحنی رشد بانک (روزانه/هفتگی/ماهانه + برد/باخت) ═══ */}
+      <BankGrowthAnalytics equity={ledger?.equity ?? null} />
 
       {/* خط لوله جریان داده با ذرات نوری */}
       <div className="border-t border-white/8 px-4 py-3">

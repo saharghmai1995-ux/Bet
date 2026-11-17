@@ -117,6 +117,9 @@ function gradeLegs(
   let anyLost = false;
   let hasOffBoard = false;
   let allFinal = true;
+  // v21.0-fix — باگ ReferenceError: شمارنده اصلاحات سمت میزبان/میهمان هرگز اعلان نشده بود
+  // و کل مسیر auto-settle را با ReferenceError می‌شکست (خطای dev.log).
+  let sideCorrections = 0;
 
   for (const leg of legs) {
     const ext = leg.matchExternalId || fallbackExternalId;
@@ -1325,18 +1328,115 @@ export async function getLedger(): Promise<LedgerDTO> {
       status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
       settledAt: { not: null },
     },
-    select: { netProfit: true, settledAt: true },
+    select: { netProfit: true, settledAt: true, status: true },
     orderBy: { settledAt: "asc" },
   });
   const START_BANK = 1000;
   let equityAcc = START_BANK;
   const equityPoints = [equityAcc];
+  const equitySeries: { t: string; v: number }[] = [{ t: (curveRows[0]?.settledAt ?? new Date()).toISOString(), v: START_BANK }];
   for (const r of curveRows) {
     equityAcc += r.netProfit ?? 0;
     equityPoints.push(Math.round(equityAcc * 100) / 100);
+    if (r.settledAt) equitySeries.push({ t: r.settledAt.toISOString(), v: Math.round(equityAcc * 100) / 100 });
   }
   const firstSettled = curveRows[0]?.settledAt ?? null;
   const lastSettled = curveRows[curveRows.length - 1]?.settledAt ?? null;
+
+  // ═══ v21.0 — ماژول حرفه‌ای منحنی بانک: تجمیع روزانه/هفتگی/ماهانه + streak + drawdown ═══
+  // همه بازه‌ها بر اساس تقویم تهران (UTC+3:30) — روزهای بدون تسویه هم با صفر می‌آیند تا
+  // محور زمان پیوسته باشد؛ wins/losses/settled از وضعیت واقعی تسویه ESPN می‌آیند.
+  const TZ = 3.5 * 3600_000;
+  const dayKeyOf = (t: number) => Math.floor((t + TZ) / 86_400_000);
+  const weekKeyOf = (t: number) => Math.floor((t + TZ) / (7 * 86_400_000));
+  const monthKeyOf = (t: number) => {
+    const d = new Date(t + TZ);
+    return d.getUTCFullYear() * 12 + d.getUTCMonth();
+  };
+  const dateFa = (iso: number, opts: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat("fa-IR", opts).format(new Date(iso));
+
+  const buildPeriodStats = (
+    keyOf: (t: number) => number,
+    windowKeys: number[],
+    labelFor: (k: number) => string
+  ): { key: string; label: string; netProfit: number; settled: number; wins: number; losses: number; bankAtEnd: number }[] => {
+    const keySet = new Set(windowKeys.map(String));
+    const windowMin = windowKeys.length > 0 ? Math.min(...windowKeys) : Infinity;
+    const buckets = new Map<string, { net: number; settled: number; wins: number; losses: number }>();
+    let bankBefore = START_BANK;
+    for (const r of curveRows) {
+      if (!r.settledAt) continue;
+      const k = String(keyOf(r.settledAt.getTime()));
+      const win = r.status !== "MIDDLE_TRAP";
+      if (!keySet.has(k)) {
+        // ردیف‌های خارج پنجره — فقط در مبنا بانک شروع پنجره لحاظ می‌شوند
+        if (keyOf(r.settledAt.getTime()) < windowMin) bankBefore += r.netProfit ?? 0;
+        continue;
+      }
+      const b = buckets.get(k) ?? { net: 0, settled: 0, wins: 0, losses: 0 };
+      b.net += r.netProfit ?? 0;
+      b.settled += 1;
+      if (win) b.wins += 1;
+      else b.losses += 1;
+      buckets.set(k, b);
+    }
+    let bank = bankBefore;
+    return windowKeys.map((wk) => {
+      const k = String(wk);
+      const b = buckets.get(k) ?? { net: 0, settled: 0, wins: 0, losses: 0 };
+      bank += b.net;
+      return {
+        key: k,
+        label: labelFor(wk),
+        netProfit: Math.round(b.net * 100) / 100,
+        settled: b.settled,
+        wins: b.wins,
+        losses: b.losses,
+        bankAtEnd: Math.round(bank * 100) / 100,
+      };
+    });
+  };
+
+  const nowMs = Date.now();
+  const todayKey = dayKeyOf(nowMs);
+  const daily = buildPeriodStats(
+    dayKeyOf,
+    Array.from({ length: 14 }, (_, i) => todayKey - (13 - i)),
+    (k) => dateFa(k * 86_400_000 - TZ, { month: "short", day: "numeric" })
+  );
+  const thisWeekKey = weekKeyOf(nowMs);
+  const weekly = buildPeriodStats(
+    weekKeyOf,
+    Array.from({ length: 8 }, (_, i) => thisWeekKey - (7 - i)),
+    (k) => `هفتهٔ ${dateFa(k * 7 * 86_400_000 - TZ, { month: "short", day: "numeric" })}`
+  );
+  const thisMonthKey = monthKeyOf(nowMs);
+  const monthly = buildPeriodStats(
+    monthKeyOf,
+    Array.from({ length: 6 }, (_, i) => thisMonthKey - (5 - i)),
+    (k) => dateFa(Date.UTC(Math.floor(k / 12), k % 12, 1) - TZ, { month: "long" })
+  );
+
+  // رگبار فعلی — از آخرین تسویه به عقب: برد/باخت متوالی
+  let streakType: "W" | "L" | null = null;
+  let streakCount = 0;
+  for (let i = curveRows.length - 1; i >= 0; i--) {
+    const isWin = curveRows[i].status !== "MIDDLE_TRAP";
+    const t: "W" | "L" = isWin ? "W" : "L";
+    if (streakType === null) streakType = t;
+    if (t !== streakType) break;
+    streakCount += 1;
+  }
+  // بیشترین افت سرمایه تاریخی (peak-to-trough ٪) + اوج بانک
+  let peak = START_BANK;
+  let maxDD = 0;
+  for (const v of equityPoints) {
+    if (v > peak) peak = v;
+    const dd = peak > 0 ? ((peak - v) / peak) * 100 : 0;
+    if (dd > maxDD) maxDD = dd;
+  }
+
   const equity = {
     startBank: START_BANK,
     points: equityPoints,
@@ -1346,6 +1446,14 @@ export async function getLedger(): Promise<LedgerDTO> {
     /** v13.5.1 — بازه زمانی واقعی منحنی برای برچسب محور زیر نمودار */
     firstSettledAt: firstSettled ? firstSettled.toISOString() : null,
     lastSettledAt: lastSettled ? lastSettled.toISOString() : null,
+    // v21.0 — تحلیل حرفه‌ای بانک
+    series: equitySeries,
+    daily,
+    weekly,
+    monthly,
+    streak: { type: streakType, count: streakCount },
+    maxDrawdownPct: Math.round(maxDD * 10) / 10,
+    peakBank: Math.round(peak * 100) / 100,
   };
 
   // ─── v18.0 — نبض کارنامه (Ledger Pulse): تشخیص صادقانه «چرا آمار تغییر نکرده» ───

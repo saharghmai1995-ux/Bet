@@ -546,6 +546,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
           {
             lambdaHome: engine.dc.lambdaHome,
             lambdaAway: engine.dc.lambdaAway,
+            // v21.0 — No Blind Card Gate: خط واقعی بازار (OddsRecord یا λ_Market حل‌شده از ضرایب)
+            hasMarketOdds: match.lambdaMarketHome != null || match.lambdaMarketAway != null || Boolean(priceRow),
           },
           regimeCtx
         );

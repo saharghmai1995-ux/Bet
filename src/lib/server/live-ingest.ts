@@ -30,6 +30,8 @@ import {
 import { getLeagueStandings, findStandingsEntry, type LeagueStandings } from "./espn-standings";
 import { runDixonColes, fairOdds } from "@/lib/engine/poisson";
 import { solveMarketImpliedLambdas, type MarketImpliedResult } from "@/lib/engine/reverse-poisson";
+// v21.0 — جدول جهانی Elo: پایان کارت کور λ=۱.۰۰–۰.۹۲ در بازی‌های ملی
+import { lambdaFromEloRatings, lookupTeamRating } from "@/lib/engine/elo-ratings";
 import type { LiveFeedDTO, LiveFeedSourceDTO } from "@/lib/types";
 
 
@@ -148,7 +150,8 @@ interface DerivedStrength {
   awayFieldTilt: number;
   weatherAdjusted: boolean;
   // ─── v6.0 — راستی‌آزمایی از جدول رسمی رده‌بندی فصل جاری ───
-  statsSource: "ESPN_STANDINGS" | "RECORD_FALLBACK";
+  // v21.0 — مسیر سوم GLOBAL_ELO_FALLBACK (جدول Elo جهانی وقتی جدول رده‌بندی غایب است)
+  statsSource: "ESPN_STANDINGS" | "RECORD_FALLBACK" | "GLOBAL_ELO_FALLBACK";
   homeRank: number | null;
   homeGF: number | null;
   homeGA: number | null;
@@ -225,7 +228,57 @@ export function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null, 
     };
   }
 
-  // ═══ مسیر شفاف جایگزین — فقط رکورد/فرم واقعی ESPN (جدول رده‌بندی در دسترس نیست) ═══
+  // ═══ v21.0 — مسیر Elo جهانی: پایان λ کور ۱.۰۰–۰.۹۲ برای بازی‌های ملی ═══
+  // وقتی جدول رده‌بندی ESPN در دسترس نیست، امید گل از «اختلاف واقعی Elo دو تیم»
+  // (جدول GLOBAL_TEAM_ELO_AND_XG_RATINGS — ۱۲۰ تیم ملی + باشگاه‌های برتر) مشتق می‌شود.
+  // ژاپن × پاراگوئه دیگر با قرقیزستان × ویتنام عدد یکسان نمی‌گیرد!
+  const eloSolved = lambdaFromEloRatings(ev.homeTeam, ev.awayTeam, null, null);
+  if (eloSolved) {
+    // اولویت Elo جدول جهانی؛ تیم ناشناخته → Elo رکورد واقعی ESPN (۱۵۰۰ = متوسط)
+    const eloHome = lookupTeamRating(ev.homeTeam)?.elo ?? eloFromRecord(ev.homeRecord);
+    const eloAway = lookupTeamRating(ev.awayTeam)?.elo ?? eloFromRecord(ev.awayRecord);
+
+    const lambdaHome = clamp(eloSolved.lambdaHome * wAdj, 0.3, 3.8);
+    const lambdaAway = clamp(eloSolved.lambdaAway * wAdj, 0.25, 3.6);
+
+    const homeAttack = clamp(lambdaHome / (1.35 * 1.12), 0.35, 2.3);
+    const awayAttack = clamp(lambdaAway / 1.35, 0.3, 2.2);
+
+    const homeFieldTilt = Math.round(clamp(50 + (eloHome - 1500) / 12, 42, 63));
+    const awayFieldTilt = Math.round(clamp(50 + (eloAway - 1500) / 12, 40, 62));
+    const homePpda = r2(clamp(12 - (lambdaHome / 1.35 - 1) * 7, 8.5, 15));
+    const awayPpda = r2(clamp(12.4 - (lambdaAway / 1.35 - 1) * 7, 8.5, 15.5));
+
+    return {
+      lambdaHome: r2(lambdaHome),
+      lambdaAway: r2(lambdaAway),
+      homeAttack: r2(homeAttack),
+      awayAttack: r2(awayAttack),
+      homeDefense: 1.0,
+      awayDefense: 1.0,
+      homeElo: eloHome,
+      awayElo: eloAway,
+      homePpda,
+      awayPpda,
+      homeFieldTilt,
+      awayFieldTilt,
+      weatherAdjusted: adverse,
+      statsSource: "GLOBAL_ELO_FALLBACK",
+      homeRank: null,
+      homeGF: null,
+      homeGA: null,
+      homeGP: null,
+      awayRank: null,
+      awayGF: null,
+      awayGA: null,
+      awayGP: null,
+      leagueTeamAvg: null,
+    };
+  }
+
+  // ═══ مسیر شفاف جایگزین — فقط رکورد/فرم واقعی ESPN (جدول رده‌بندی و جدول Elo هم در دسترس نیستند) ═══
+  // ⚠️ v21.0: اگر λ نهایی این مسیر در بازه کور ۰.۹۰–۱.۰۵ بماند و خط بازار هم غایب باشد،
+  // گیت «No Blind Card» سوپروایزر این بازی را وتو می‌کند (کارت کور صادر نمی‌شود).
   const homeStr = 0.55 * formFactor(ev.homeForm) + 0.45 * seasonFactor(ev.homeRecord);
   const awayStr = 0.55 * formFactor(ev.awayForm) + 0.45 * seasonFactor(ev.awayRecord);
 

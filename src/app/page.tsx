@@ -184,7 +184,7 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v20.0 Verified Audit & Closed-Loop Calibration @AINEOBET
+                  <Sparkles className="size-2.5" /> v21.0 1xBet Real-Market Calibration & Zero-Blind-Stats @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
@@ -405,7 +405,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v20.0 Verified Audit & Closed-Loop Calibration Edition · حسابداری صادقانه کارنامه (منبع واحد حقیقت — بدون حذف رژیم زیان‌ده، باخت کامل −۱۰۰u/−۵۰u واقعی) + تسویه درست میزبان/میهمان (فیکس Tenerife) + حذف ردیف‌های ساختگی ACC و ضریب تکراری ۳.۹۵/۱.۸۲ + حلقه کالیبراسیون خودکار دسته‌ها (تعلیق خودکار ROI منفی) + بلک‌لیست قطعی دوستانه‌ها + مسیریاب غیرخطی ۵ رژیم + ضرایب ارزش‌محور یکتای هر بازی + سیستم دو‌سطحی تاج (👑 طلایی ۱۰۰u · 🥈 نقره‌ای ۵۰u Half-Kelly) + قیف کانال عمومی↔VIP (@aineobet) + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v21.0 1xBet Real-Market Calibration & Zero-Blind-Stats Edition · حسابداری صادقانه کارنامه (منبع واحد حقیقت — بدون حذف رژیم زیان‌ده، باخت کامل −۱۰۰u/−۵۰u واقعی) + تسویه درست میزبان/میهمان (فیکس Tenerife) + حذف ردیف‌های ساختگی ACC و ضریب تکراری ۳.۹۵/۱.۸۲ + حلقه کالیبراسیون خودکار دسته‌ها (تعلیق خودکار ROI منفی) + بلک‌لیست قطعی دوستانه‌ها + مسیریاب غیرخطی ۵ رژیم + ضرایب ارزش‌محور یکتای هر بازی + سیستم دو‌سطحی تاج (👑 طلایی ۱۰۰u · 🥈 نقره‌ای ۵۰u Half-Kelly) + قیف کانال عمومی↔VIP (@aineobet) + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

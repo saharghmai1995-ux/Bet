@@ -51,7 +51,13 @@ export function supervisorFor(
   const categoryBoost = leagueName ? patternBoostForCategory(categoryForLeagueName(leagueName)) : null;
   const lambdaCtx =
     portfolio.primary?.lambdaHome && portfolio.primary?.lambdaAway
-      ? { lambdaHome: portfolio.primary.lambdaHome, lambdaAway: portfolio.primary.lambdaAway }
+      ? {
+          lambdaHome: portfolio.primary.lambdaHome,
+          lambdaAway: portfolio.primary.lambdaAway,
+          // v21.0 — No Blind Card Gate: خط واقعی بازار در دسترس بود؟ (λ_Market وجود دارد؟)
+          hasMarketOdds:
+            portfolio.primary.lambdaMarketHome != null && portfolio.primary.lambdaMarketAway != null,
+        }
       : null;
   // v18.0 — زمینه رژیم منتخب مسیریاب: گیت اختصاصی همان رژیم جایگزین گیت ثابت λ می‌شود.
   // سند v18.0: رژیمِ «بالاترین شارپ» تعیین‌کننده گیت است — حتی وقتی رأی نهایی مسیریاب وتو است.

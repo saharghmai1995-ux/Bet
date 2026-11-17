@@ -17,6 +17,85 @@
 import { buildScoreMatrix, aggregateMatrix } from "./poisson";
 import { shinDevig, shinDevigPair } from "./devig";
 
+// ═══════════ v21.0 — Reverse-Poisson 1xBet Solver (پنل تطبیق زنده فلش‌کارت) ═══════════
+
+/**
+ * v21.0 — مهندسی معکوس λ از «ضریب فعلی 1xBet یک مارکت واحد».
+ * کاربر ضریب لحظه‌ای مارکت (مثلاً تیپ A) را در 1xBet می‌بیند و وارد پنل می‌کند؛
+ * این حل‌کننده با جستجوی دوبخشی ضریب مقیاس k پیدا می‌کند که در آن
+ * P_leg(λ_H×k, λ_A×k) = 0.945 ÷ O_user  (احتمال بدون کارمزد 1xBet)
+ * — امید گل واقعی مستتر در تابلوی لحظه‌ای 1xBet استخراج می‌شود.
+ */
+export function solveImpliedLambdaForLeg(input: {
+  /** گزاره مارکت روی سلول‌های ماتریس (h, a) — مثل (h,a)=>h>a برای برد میزبان */
+  pred: (h: number, a: number) => boolean;
+  /** ضریب فعلی کاربر در 1xBet */
+  userOdds: number;
+  /** λ مدل جاری */
+  lambdaHome: number;
+  lambdaAway: number;
+  rho?: number;
+}): { scale: number; lambdaHome: number; lambdaAway: number; impliedProb: number } | null {
+  const { pred, userOdds, lambdaHome, lambdaAway, rho = -0.08 } = input;
+  if (!Number.isFinite(userOdds) || userOdds <= 1.01) return null;
+  if (!Number.isFinite(lambdaHome) || !Number.isFinite(lambdaAway) || lambdaHome <= 0 || lambdaAway <= 0) return null;
+
+  // احتمال بدون کارمزد 1xBet از ضریب کاربر (سند v21.0: 0.945 ÷ O)
+  const impliedProb = Math.max(0.02, Math.min(0.97, 0.945 / userOdds));
+
+  const probAt = (k: number): number => {
+    const matrix = buildScoreMatrix(lambdaHome * k, lambdaAway * k, rho, 8);
+    let p = 0;
+    for (let h = 0; h < matrix.length; h++) {
+      const row = matrix[h] ?? [];
+      for (let a = 0; a < row.length; a++) {
+        if (pred(h, a)) p += row[a] ?? 0;
+      }
+    }
+    return p;
+  };
+
+  // جستجوی دوبخشی روی مقیاس مشترک λ (بازه ۰.۲ تا ۳.۰)
+  let lo = 0.2;
+  let hi = 3.0;
+  // اگر احتمال فعلی مدل بالاتر از هدف است، k باید کاهش یابد (P با k رشد یکنواخت دارد)
+  let bestK = 1;
+  for (let i = 0; i < 42; i++) {
+    const mid = (lo + hi) / 2;
+    const p = probAt(mid);
+    bestK = mid;
+    if (Math.abs(p - impliedProb) < 0.0005) break;
+    if (p > impliedProb) hi = mid;
+    else lo = mid;
+  }
+
+  const k = Math.round(bestK * 1000) / 1000;
+  return {
+    scale: k,
+    lambdaHome: Math.round(lambdaHome * k * 100) / 100,
+    lambdaAway: Math.round(lambdaAway * k * 100) / 100,
+    impliedProb: Math.round(impliedProb * 1000) / 1000,
+  };
+}
+
+/** درصد سود خالص داچینگ سود-برابر روی ضرایب کاربر — null یعنی 1/O_A+1/O_B ≥ 1 (بدون پوشش سودده) */
+export function dutchProfitAtUserOdds(oddsA: number, oddsB: number, budget = 100): {
+  stakeA: number;
+  stakeB: number;
+  profit: number;
+  profitPct: number;
+  impliedSum: number;
+} | null {
+  if (!Number.isFinite(oddsA) || !Number.isFinite(oddsB) || oddsA <= 1.01 || oddsB <= 1.01) return null;
+  const impliedSum = 1 / oddsA + 1 / oddsB;
+  if (impliedSum >= 1) return null;
+  const stakeA = Math.round((budget * oddsB / (oddsA + oddsB)) * 10) / 10;
+  const stakeB = Math.round((budget - stakeA) * 10) / 10;
+  const payout = stakeA * oddsA; // = stakeB * oddsB
+  const profit = Math.round((payout - budget) * 10) / 10;
+  return { stakeA, stakeB, profit, profitPct: Math.round((profit / budget) * 1000) / 10, impliedSum: Math.round(impliedSum * 1000) / 1000 };
+}
+
 /** وزن طلایی بازار در فرمول ترکیبی (سند ارتقا: ۶۵٪ بازار / ۳۵٪ آمار فصل) */
 export const MARKET_WEIGHT = 0.65;
 /** بازه و گام جستجوی شبکه‌ای سند ارتقا */

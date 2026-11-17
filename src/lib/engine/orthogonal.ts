@@ -260,25 +260,38 @@ export function orthoLegOdds(key: string, p: number, ctx: OrthoContext): number 
   return Math.max(1.02, Math.round((1 / Math.max(0.02, p)) * 0.955 * 100) / 100);
 }
 
-// ═══════════ v16.0 — فرمول واقعی ضریب بوک‌میکر بدون سقف مصنوعی ═══════════
+// ═══════════ v21.0 — 1xBet Real-Market Calibration & Zero-Blind-Stats Edition ═══════════
 
 /**
- * v20.0 — فرمول واقع‌گرایانه بازار با ضریب یکتای هر مسابقه (سند §۲-۲)
- * ═══ حذف باگ کپی شدن ضریب ثابت ۳.۹۵ و ۱.۸۲ روی بازی‌های مختلف ═══
- * باگ نسخه‌های قبل: سقف مصنوعی Math.min(3.95, ...) و کف Math.max(1.82, ...) باعث می‌شد
- * در چند بازی مختلف دقیقاً ضریب یکسان تکرار شود. فرمول سند:
- *     odds = (1.02 + (matchHashSeed % 7) × 0.01) ÷ prob
- * هر مسابقه با بذر هش منحصربه‌فرد خودش ضریب واقعی خودش را می‌گیرد — صفر کلیپ یکسان.
- * فقط یک محدوده وسیع سلامت (۱.۳۰ تا ۶.۵۰) برای جلوگیری از قیمت‌های بی‌معنا باقی است
- * (این محدوده هرگز با هر ضریب طبیعی بازار برخورد یکسان‌سازی نمی‌کند — آستانه‌های
- * قبلی 1.82/3.95 تنگ بودند و ضریب‌های میانی را همه به دو عدد ثابت می‌خوردند).
+ * v21.0 — کارمزد استاندارد واقعی تابلوی 1xBet (اورراند ۵.۵٪).
+ * تمام ضرایب مشتق‌شده از ماتریس اکنون دقیقاً با همین پارامتر کالیبره می‌شوند.
  */
-export function computeValueMarketOdds(trueModelProb: number, _edgeBoost = 1.18, matchSeed = 3): number {
-  const prob = Math.max(0.02, Math.min(0.97, trueModelProb));
-  const seed = Number.isFinite(matchSeed) ? Math.abs(Math.floor(matchSeed)) : 3;
-  const edgeNudge = 1.02 + (seed % 7) * 0.01; // ۱.۰۲ تا ۱.۰۸ — تنوع واقعی خط هر بازی
-  const rawValueOdds = edgeNudge / prob;
-  return Number(Math.max(1.3, Math.min(6.5, rawValueOdds)).toFixed(2));
+export const ONE_X_BET_PAYOUT_FACTOR = 0.945;
+
+/**
+ * v21.0 — فرمول واقعی ضریب تابلوی 1xBet (حذف کامل تورم مصنوعی).
+ * سند v21.0: ضریب هر مارکت مشتق‌شده از ماتریس ۶×۶ دیکسون-کولز دقیقاً با
+ * «ضریب کارمزد استاندارد 1xBet (0.945 / prob)» محاسبه می‌شود — صفر edgeNudge.
+ * اگر قیمت واقعی بازار (فید ESPN / کاربر) موجود باشد، همان لنگر می‌شود.
+ */
+export function computeRealistic1xBetOdds(matrixProb: number, realMarketPrice?: number | null): number {
+  if (realMarketPrice && realMarketPrice > 1.05) {
+    return Number(realMarketPrice.toFixed(2));
+  }
+  const clampedProb = Math.max(0.04, Math.min(0.92, matrixProb));
+  const realisticBookieOdds = ONE_X_BET_PAYOUT_FACTOR / clampedProb;
+  return Number(Math.max(1.12, Math.min(9.50, realisticBookieOdds)).toFixed(2));
+}
+
+/**
+ * v21.0 — حذف باگ ۲ سند: فرمول تورم مصنوعی `edgeNudge = 1.02..1.08` در این تابع
+ * ضریب را ۱۰٪ تا ۱۴٪ بالاتر از تابلوی واقعی 1xBet نشان می‌داد — کاملاً حذف شد.
+ * اکنون این تابع مستقیماً به کالیبراسیون واقعی 1xBet (0.945/prob) تفویض می‌کند و
+ * ضریب نمایش‌داده‌شده روی کارت هیچ تورم مصنوعی ندارد.
+ * (پارامترهای قدیمی _edgeBoost و matchSeed برای سازگاری امضا نگه داشته شده‌اند و نادیده گرفته می‌شوند.)
+ */
+export function computeValueMarketOdds(trueModelProb: number, _edgeBoost = 1.18, _matchSeed = 3): number {
+  return computeRealistic1xBetOdds(trueModelProb);
 }
 
 /** v20.0 — بذر هش پایدار از شناسه بازی (برای ضریب یکتا) */

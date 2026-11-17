@@ -108,7 +108,7 @@ model Match {
   awayGA          Int?
   awayGP          Int?
   leagueTeamAvg   Float?    // میانگین گل هر تیم در هر بازی لیگ (از جدول واقعی فصل)
-  statsSource     String?   // ESPN_STANDINGS | RECORD_FALLBACK
+  statsSource     String?   // ESPN_STANDINGS | RECORD_FALLBACK | GLOBAL_ELO_FALLBACK (v21.0)
   statsFetchedAt  DateTime? // زمان دقیق آخرین واکشی جدول رده‌بندی
 
   // ─── v9.0 — موتور مهندسی معکوس ضرایب بوک‌میکر (Reverse-Poisson Market-Implied λ) ───

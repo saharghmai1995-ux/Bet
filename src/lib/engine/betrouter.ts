@@ -21,7 +21,8 @@
 
 import type { PortfolioPairDTO } from "../types";
 // v19.0 — قیمت‌گذاری ارزش‌محور + تخصیص نامتقارن آلفا (۶۵/۳۵)
-import { computeValueMarketOdds, edgeBoostForMispricing, asymmetricAlphaStakes, matchSeedOf } from "./orthogonal";
+// v21.0 — کالیبراسیون واقعی تابلوی 1xBet (computeRealistic1xBetOdds)
+import { computeRealistic1xBetOdds, computeValueMarketOdds, asymmetricAlphaStakes, matchSeedOf } from "./orthogonal";
 
 // ═══════════════════════════════ تایپ‌ها ═══════════════════════════════
 
@@ -318,8 +319,8 @@ export function buildBankerCandidates(
   matrix: number[][],
   prices: MarketPrices,
   structure: MatrixStructure,
-  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه */
-  matchSeed = 3
+  /** v20.0 — بذر هش بازی (در v21 نادیده گرفته می‌شود — کالیبراسیون قطعی 1xBet) */
+  _matchSeed = 3
 ): BetTypeCandidate[] {
   const out: BetTypeCandidate[] = [];
 
@@ -351,12 +352,10 @@ export function buildBankerCandidates(
   for (const v of variants) {
     // v18.0 — شرط ساختاری بنکر: احتمال پایه ≥ ۸۰٪ (BANKER_BASE_PROB_MIN_V18)
     if (v.prob < BANKER_BASE_PROB_MIN_V18) continue;
-    // v19.0 — قیمت‌گذاری ارزش‌محور (سند جراحی High-ROI): به‌جای ضریب واقعی بازار ۱.۰۸x
-    // که EV منفی و شارپ منفی می‌داد و بنکر را از تاج طلایی حذف می‌کرد، ضریب بنکر با
-    // لبه ارزش مدل ۱.۱۶/احتمال محاسبه می‌شود (هم‌دکترین با همه کارت‌های v19).
-    // v20.0 — سند §۲-۲: اولاً ضریب واقعی بوک‌میکر فید ESPN؛ ثانیاً فرمول یکتای هر بازی —
-    // ضریب ثابت/کپی‌شده بین بازی‌ها حذف شد (بریدن یکسان ۳.۹۵/۱.۸۲ حذف شد)
-    const valueOdds = r2(v.odds > 1.01 ? v.odds : computeValueMarketOdds(v.prob, 1.16, matchSeed));
+    // v21.0 — 1xBet Real-Market Calibration: ضریب بنکر دقیقاً با کارمزد واقعی تابلوی
+    // 1xBet (0.945/prob) کالیبره می‌شود — صفر تورم مصنوعی (edgeNudge حذف شد).
+    // لنگر اول: ضریب واقعی فید ESPN؛ لنگر دوم: فرمول واقعی تابلو.
+    const valueOdds = r2(v.odds > 1.01 ? v.odds : computeRealistic1xBetOdds(v.prob));
     // محدوده منطقی ضریب تک‌ستون امن (سند: ۱.۳۸..۱.۶۸ — با قیمت‌گذاری v19 بازه ۱.۲۰..۱.۴۵)
     if (valueOdds < 1.15 || valueOdds > 2.0) continue;
     // v18.0 — تریگر بنکر: عدم تقارن قدرت ≥ ۱.۶۵ (BANKER_R_LAMBDA_MIN_V18) یا احتمال پایه ≥ ۸۰٪
@@ -410,8 +409,8 @@ export function buildComboCandidates(
   matrix: number[][],
   prices: MarketPrices,
   structure: MatrixStructure,
-  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه */
-  matchSeed = 3
+  /** v20.0 — بذر هش بازی (در v21 نادیده گرفته می‌شود — کالیبراسیون قطعی 1xBet) */
+  _matchSeed = 3
 ): BetTypeCandidate[] {
   const out: BetTypeCandidate[] = [];
 
@@ -509,13 +508,10 @@ export function buildComboCandidates(
     const biasCover = d.coverKey === "U25" ? biasOf("O25") : 1;
     const realCoverProb = Math.min(0.97, Math.max(0.02, pCover * biasCover));
 
-    // v19.0 — قیمت‌گذاری ارزش‌محور کمبو (+EV Market-Edge): فرمول بی‌لبه (1/prob)×0.96 حذف شد؛
-    // ضریب کمبو = computeValueMarketOdds با لبه مدل (بایاس < ۱ یعنی بازار کم‌قیمت → boost بزرگ‌تر)
-    const mainBoost = edgeBoostForMispricing(pMain, realMainProb > 0 ? 1 / realMainProb : null);
-    const coverBoost = edgeBoostForMispricing(pCover, realCoverProb > 0 ? 1 / realCoverProb : null);
-    // v20.0 — قیمت‌گذاری کمبو با فرمول یکتای هر بازی (حذف ضریب تکراری بین مسابقات)
-    const mainOdds = computeValueMarketOdds(realMainProb, mainBoost, matchSeed);
-    const coverOdds = computeValueMarketOdds(realCoverProb, coverBoost, matchSeed + 13);
+    // v21.0 — قیمت‌گذاری کمبو با کالیبراسیون واقعی 1xBet (0.945/prob):
+    // لبه مدل و تورم مصنوعی حذف شد — ضریب نمایش‌داده‌شده = تابلوی واقعی 1xBet.
+    const mainOdds = computeRealistic1xBetOdds(realMainProb);
+    const coverOdds = computeRealistic1xBetOdds(realCoverProb);
     if (mainOdds < 1.28 || mainOdds > 2.20) continue;
     const implied = 1 / mainOdds + 1 / coverOdds;
 
@@ -592,11 +588,10 @@ export function buildCorrectScoreCandidate(
     if (cluster.reduce((s, c) => s + c.p, 0) < 0.6) cluster = cells.slice(0, i + 1);
   }
 
-  // ضرایب نتیجه دقیق — v20.0: فرمول یکتای هر بازی (سند §۲-۲) — بذر هش بازی از آنتروپی/ماتریس همان بازی
-  // ضریب ثابت کپی‌شده بین بازی‌ها حذف شد؛ فقط سقف سلامت ۱۱.۵x برای قیمت‌های بی‌معنا باقی است.
-  const csSeed = matchSeedOf(`CS|${structure.entropy.toFixed(4)}|${cluster.map((c) => c.score).join(",")}`);
+  // ضرایب نتیجه دقیق — v21.0: کالیبراسیون واقعی 1xBet (0.945/prob) — بدون بذر/تورم مصنوعی
+  // سقف سلامت ۱۱.۵x برای قیمت‌های بی‌معنا باقی است.
   const items = cluster.map((c) => {
-    const odds = Math.min(11.5, computeValueMarketOdds(c.p, 1.16, csSeed));
+    const odds = Math.min(11.5, computeRealistic1xBetOdds(c.p));
     return { score: c.score, odds, prob: c.p };
   });
   // تقسیم ۱۰۰ واحد بودجه به نسبت معکوس ضرایب (Equal-Profit Dutching)

@@ -118,6 +118,31 @@ export function score100Of(raw: number): number {
 export interface SupervisorLambdaContext {
   lambdaHome: number;
   lambdaAway: number;
+  /**
+   * v21.0 — خط واقعی بازار (ESPN / Polymarket / Odds Feed) در دسترس بود؟
+   * false = مسیر STATS_ONLY کور → گیت «No Blind Card» فعال می‌شود.
+   * undefined = اطلاعات مسیر موجود نیست (سازگاری با داده‌های قدیمی — گیت بسته نمی‌شود)
+   */
+  hasMarketOdds?: boolean;
+}
+
+/**
+ * v21.0 — No Blind Card Gate (وتوی داده ناقص):
+ * اگر برای مسابقه‌ای نه ضریب واقعی بازار وجود داشت و λ_H و λ_A هر دو در
+ * بازه کور ۰.۹۰–۱.۰۵ باقی مانده باشند (یعنی هیچ‌یک از دو تیم در جدول Elo
+ * شناخته نشده و همه ورودی‌ها پیش‌فرض شده‌اند)، سوپروایزر آن بازی را وتو می‌کند
+ * و هرگز کارت کور صادر نمی‌شود.
+ */
+export const BLIND_LAMBDA_LO = 0.9;
+export const BLIND_LAMBDA_HI = 1.05;
+
+export function isBlindData(lambdaCtx: SupervisorLambdaContext | null | undefined): boolean {
+  if (!lambdaCtx) return false;
+  if (lambdaCtx.hasMarketOdds === true) return false;
+  if (lambdaCtx.hasMarketOdds === undefined) return false; // داده مسیر نامشخص — گیت نمی‌بندد
+  const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
+  const dog = Math.min(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
+  return fav <= BLIND_LAMBDA_HI && dog >= BLIND_LAMBDA_LO;
 }
 
 /**
@@ -175,7 +200,16 @@ export function scorePair(
   let veto = false;
   let vetoReason: string | null = null;
   let tier: "GOLD" | "SILVER" | null = null;
-  if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_HARD_RED) {
+  // ═══ v21.0 — گیت صفر: No Blind Card (وتوی داده ناقص — مقدم بر همه گیت‌های دیگر) ═══
+  // بدون خط ضریب بازار + λ کور ۰.۹۰–۱.۰۵ = هیچ کارتی صادر نمی‌شود؛
+  // همچنین قانون بلک‌لیست بازی‌های دوستانه (fifa.friendly) در TOXIC_LEAGUE_SLUGS
+  // و POISON_LEAGUES مسیریاب همچنان مقدم بر همه الگوها برقرار است.
+  if (isBlindData(lambdaCtx)) {
+    veto = true;
+    const fav = Math.max(lambdaCtx?.lambdaHome ?? 0, lambdaCtx?.lambdaAway ?? 0);
+    const dog = Math.min(lambdaCtx?.lambdaHome ?? 0, lambdaCtx?.lambdaAway ?? 0);
+    vetoReason = `⏸️ وتوی داده ناقص v21.0 — عدم وجود خط ضریب بازار و عدم شناسایی تیم‌ها در جدول Elo جهانی (λ کور ${dog.toFixed(2)}–${fav.toFixed(2)} در بازه ۰.۹۰–۱.۰۵) — صدور کارت کور ممنوع`;
+  } else if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_HARD_RED) {
     veto = true;
     vetoReason = `🚫 وتوی قرمز مطلق v18.0 (سطح ۳): ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۵٪ — بازی واقعاً خطرناک؛ فقط تسویه کاغذی دفتر سایه`;
   } else if (jointLossRiskPct > riskCapPct) {

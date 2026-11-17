@@ -798,6 +798,27 @@ export interface SettlementSyncResultDTO {
   error?: string;
 }
 
+/**
+ * v21.0 — آمار تفکیکی بانک در یک بازه (روز / هفته / ماه) — ماژول حرفه‌ای منحنی بانک.
+ * هر ردیف: تغییر خالص بانک + تعداد بازی‌های روز + برد/باخت + سطح بانک پایان دوره.
+ */
+export interface BankPeriodStat {
+  /** کلید مرتب‌سازی زمانی (اندیس روز/هفته/ماه با شیفت تهران) */
+  key: string;
+  /** برچسب نمایشی شمسی (مثل «۱۶ آبان» یا «آبان» یا «هفتهٔ ۱۲ آبان») */
+  label: string;
+  /** تغییر خالص بانک در این بازه (واحد) */
+  netProfit: number;
+  /** تعداد بازی‌های تسویه‌شده در این بازه */
+  settled: number;
+  /** تعداد برد (WON_A / WON_B / DOUBLE_WIN) */
+  wins: number;
+  /** تعداد باخت (MIDDLE_TRAP — تله میانی) */
+  losses: number;
+  /** سطح بانک در پایان این بازه (واحد) */
+  bankAtEnd: number;
+}
+
 /** خروجی کامل کارنامه + صندوق تلگرام */
 export interface LedgerDTO {
   success: boolean;
@@ -884,6 +905,23 @@ export interface LedgerDTO {
     /** v13.5.1 — بازه زمانی واقعی تسویه‌های منحنی برای برچسب محور نمودار */
     firstSettledAt: string | null;
     lastSettledAt: string | null;
+    /**
+     * v21.0 — ماژول حرفه‌ای منحنی بانک (Bank Growth Analytics):
+     * سری زمان‌دار کامل + تجمیع روزانه/هفتگی/ماهانه + streak/drawdown.
+     */
+    series: { t: string; v: number }[];
+    /** تغییرات روزانه — ۱۴ روز اخیر تهران (شامل روزهای خالی) */
+    daily: BankPeriodStat[];
+    /** تغییرات هفتگی — ۸ هفته اخیر */
+    weekly: BankPeriodStat[];
+    /** تغییرات ماهانه — ۶ ماه اخیر */
+    monthly: BankPeriodStat[];
+    /** رگبار فعلی (برد/باخت متوالی) از آخرین تسویه رسمی */
+    streak: { type: "W" | "L" | null; count: number };
+    /** بیشترین افت سرمایه تاریخی (peak-to-trough ٪) */
+    maxDrawdownPct: number;
+    /** اوج تاریخی بانک */
+    peakBank: number;
   };
   /**
    * v18.0 — نبض کارنامه: تشخیص شفاف «چرا آمار/وین‌ریت/منحنی تغییری نکرده».

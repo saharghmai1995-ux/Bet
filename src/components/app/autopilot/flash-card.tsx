@@ -38,8 +38,10 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { buildScoreMatrix, coverageGrid, coverColor } from "@/lib/engine/coverage";
+import { buildScoreMatrix, coverageGrid, coverColor, selectionCoversCell, isOffMatrixKey } from "@/lib/engine/coverage";
 import { allocationPlans } from "@/lib/engine/asymmetric";
+import { solveImpliedLambdaForLeg, dutchProfitAtUserOdds } from "@/lib/engine/reverse-poisson";
+import { computeRealistic1xBetOdds, ONE_X_BET_PAYOUT_FACTOR } from "@/lib/engine/orthogonal";
 import { computePairTiming, faDuration, type TimingStatus } from "@/lib/timing-window";
 import { faNum, faPct } from "@/lib/format";
 import { useQuantStore } from "@/lib/store";
@@ -74,7 +76,7 @@ export function cardCopyText(v: FlashcardView): string {
   const p = v.pair;
   const sup = v.supervisor;
   const bt = v.betType;
-  const head = `⚽ فوتبال‌کوانت v17.0 Bet-Type Router — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
+  const head = `⚽ فوتبال‌کوانت v21.0 1xBet Real-Market Calibration — ${v.match.homeTeam} مقابل ${v.match.awayTeam} (${v.match.league})`;
   const crownLine = bt
     ? `${bt.icon} استراتژی منتخب سوپروایزر: ${bt.labelFa} — امتیاز غیرخطی ${Math.round(bt.score)} · شارپ ${bt.sharpe.toFixed(2)}`
     : sup
@@ -127,6 +129,208 @@ export function cardCopyText(v: FlashcardView): string {
 }
 
 export type DeepLlmState = "IDLE" | "RUNNING" | "CACHED" | "RATELIMITED";
+
+// ═══ v21.0 — پنل تعاملی «تطبیق زنده با ضریب فعلی 1xBet» (Live 1xBet Odds Calibrator) ═══
+// سند v21.0 (باگ ۳ — عدم تطبیق با ضریب لحظه‌ای بوک‌میکر کاربر):
+//   · کاربر ضریب لحظه‌ای که در سایت 1xBet می‌بیند را وارد می‌کند؛
+//   · Reverse-Poisson 1xBet Solver همان لحظه امید گل واقعی مستتر در ضریب را استخراج می‌کند؛
+//   · استیک تیپ A/B (از ۱۰۰ واحد) و درصد سود خالص واقعی بازمحاسبه می‌شود؛
+//   · اگر 1/O_A + 1/O_B ≥ 0.96 → هشدار قرمز «افت ضریب — ورود ممنوع» + استراتژی جایگزین.
+
+/** گزاره برد یک تیپ روی سلول ماتریس — از پایه‌های واقعی ساختار (legsA/legsB) */
+function legPredicateOf(legs: string[] | undefined, fallbackKey: string): (h: number, a: number) => boolean {
+  const mat = (legs ?? []).filter((k) => !isOffMatrixKey(k));
+  if (mat.length === 0) return (h, a) => selectionCoversCell(fallbackKey, h, a);
+  const isCluster = mat.length > 1 && mat.every((k) => k.startsWith("CS_"));
+  if (isCluster) return (h, a) => mat.some((k) => selectionCoversCell(k, h, a));
+  return (h, a) => mat.every((k) => selectionCoversCell(k, h, a));
+}
+
+function LiveOddsCalibrator({ view }: { view: FlashcardView }) {
+  const { pair } = view;
+  const probA = Math.max(0.03, Math.min(0.96, pair.selectionA.modelProb));
+  const probB = Math.max(0.03, Math.min(0.96, pair.selectionB?.modelProb ?? 0));
+  // v17.0 — بنکر تک‌ستون: تیپ B ندارد → پنل حالت تک‌مارکت می‌گیرد
+  const legsB = pair.structure.legsB ?? [];
+  const singleOnly = legsB.length === 0 && view.betType?.key === "BANKER";
+
+  const fairA = computeRealistic1xBetOdds(probA);
+  const fairB = computeRealistic1xBetOdds(probB);
+  const [oddsA, setOddsA] = useState<string>(fairA.toFixed(2));
+  const [oddsB, setOddsB] = useState<string>(fairB.toFixed(2));
+
+  const numA = parseFloat(oddsA);
+  const numB = parseFloat(oddsB);
+  const validA = Number.isFinite(numA) && numA > 1.01;
+  const validB = !singleOnly && Number.isFinite(numB) && numB > 1.01;
+
+  const solveA = useMemo(
+    () =>
+      validA
+        ? solveImpliedLambdaForLeg({
+            pred: legPredicateOf(pair.structure.legsA, pair.structure.varAKey),
+            userOdds: numA,
+            lambdaHome: view.lambdaHome,
+            lambdaAway: view.lambdaAway,
+          })
+        : null,
+    [validA, numA, view.lambdaHome, view.lambdaAway, pair.structure.legsA, pair.structure.varAKey]
+  );
+
+  const dutch = useMemo(
+    () => (validA && validB ? dutchProfitAtUserOdds(numA, numB, 100) : null),
+    [validA, validB, numA, numB]
+  );
+  const impliedSum = validA && validB ? 1 / numA + 1 / numB : null;
+  // سند v21.0 — آستانه هشدار قرمز: 1/O_A + 1/O_B ≥ 0.96 → ارزش ریاضی از دست رفته
+  const oddsDropAlert = impliedSum != null && impliedSum >= 0.96;
+
+  // ─── استراتژی جایگزین (Banker / Combo / Under) با قیمت‌گذاری واقعی 1xBet ───
+  // هر ردیف: احتمال مدل + «ضریب عادلانه تابلوی 1xBet» — هر ضریب زنده بالاتر از این عدد = ارزش مثبت
+  const alternatives = useMemo(() => {
+    const matrix = buildScoreMatrix(view.lambdaHome, view.lambdaAway);
+    const prob = (key: string) => {
+      let p = 0;
+      for (let h = 0; h < matrix.length; h++) {
+        for (let a = 0; a < (matrix[h]?.length ?? 0); a++) {
+          if (selectionCoversCell(key, h, a)) p += matrix[h][a];
+        }
+      }
+      return p;
+    };
+    const cand: { key: string; fa: string; en: string }[] = [
+      { key: "DC_1X", fa: "شانس مجدد میزبان (بنکر امن)", en: "Double Chance 1X" },
+      { key: "DC_X2", fa: "شانس مجدد میهمان", en: "Double Chance X2" },
+      { key: "U25", fa: "زیر ۲.۵ گل (زیر)", en: "Under 2.5 Goals" },
+      { key: "U35", fa: "زیر ۳.۵ گل", en: "Under 3.5 Goals" },
+      { key: "BTTS_N", fa: "هر دو گل نمی‌زنند", en: "BTTS No" },
+    ];
+    return cand
+      .map((c) => {
+        const p = prob(c.key);
+        return { ...c, p, fairOdds: computeRealistic1xBetOdds(p) };
+      })
+      .filter((c) => c.p >= 0.42)
+      .sort((x, y) => y.p - x.p)
+      .slice(0, 3);
+  }, [view.lambdaHome, view.lambdaAway]);
+
+  return (
+    <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/[0.05] p-2.5" onClick={(e) => e.stopPropagation()}>
+      <p className="flex flex-wrap items-center gap-1 text-[11px] font-bold text-emerald-300">
+        🎛️ تطبیق زنده با ضریب فعلی 1xBet شما
+        <Badge variant="outline" className="gap-0.5 border-emerald-400/40 px-1 py-0 text-[8px] text-emerald-200">v21.0 Reverse-Poisson Solver</Badge>
+      </p>
+      <p className="mt-1 text-[9.5px] leading-3.5 text-muted-foreground">
+        ضریب لحظه‌ای این تیپ را که الان در سایت 1xBet می‌بینید وارد کنید — سیستم همان لحظه امید گل مستتر در تابلوی 1xBet را استخراج و استیک + سود خالص واقعی را بازمحاسبه می‌کند (پیش‌فرض: قیمت‌گذاری واقعی ۰٫۹۴۵ ÷ احتمال).
+      </p>
+      <div className={`mt-2 grid gap-2 ${singleOnly ? "grid-cols-1" : "grid-cols-2"}`}>
+        <div>
+          <label className="mb-0.5 block text-[9px] font-semibold text-muted-foreground" htmlFor={`cal-a-${view.key}`}>
+            ضریب فعلی در 1xBet — تیپ A ({pair.labelA})
+          </label>
+          <input
+            id={`cal-a-${view.key}`}
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            min="1.02"
+            dir="ltr"
+            value={oddsA}
+            onChange={(e) => setOddsA(e.target.value)}
+            className={`font-num h-8 w-full rounded-lg border bg-black/40 px-2 text-[11px] text-foreground outline-none ${validA ? "border-emerald-500/40" : "border-rose-500/50"}`}
+            aria-label="ضریب فعلی تیپ A در 1xBet"
+          />
+        </div>
+        {!singleOnly && (
+          <div>
+            <label className="mb-0.5 block text-[9px] font-semibold text-muted-foreground" htmlFor={`cal-b-${view.key}`}>
+              ضریب فعلی در 1xBet — تیپ B ({pair.labelB})
+            </label>
+            <input
+              id={`cal-b-${view.key}`}
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min="1.02"
+              dir="ltr"
+              value={oddsB}
+              onChange={(e) => setOddsB(e.target.value)}
+              className={`font-num h-8 w-full rounded-lg border bg-black/40 px-2 text-[11px] text-foreground outline-none ${validB ? "border-emerald-500/40" : "border-rose-500/50"}`}
+              aria-label="ضریب فعلی تیپ B در 1xBet"
+            />
+          </div>
+        )}
+      </div>
+
+      {validA && solveA && (
+        <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+          🎯 امید گل مستتر در تابلوی 1xBet شما (Reverse-Poisson):{" "}
+          <b className="font-num text-sky-200" dir="ltr">
+            {faNum(solveA.lambdaHome, 2)}-{faNum(solveA.lambdaAway, 2)}
+          </b>{" "}
+          · احتمال بدون کارمزد:{" "}
+          <b className="font-num text-emerald-300" dir="ltr">{faPct(solveA.impliedProb * 100, 1)}</b>
+          {solveA.scale < 0.94 && " · بازار انتظار بازی کم‌گل‌تر از مدل دارد"}
+          {solveA.scale > 1.06 && " · بازار انتظار بازی پرگل‌تر از مدل دارد"}
+        </p>
+      )}
+
+      {oddsDropAlert ? (
+        <div className="mt-2 rounded-lg border border-rose-500/50 bg-rose-500/[0.10] p-2" role="alert">
+          <p className="text-[10.5px] font-bold leading-4 text-rose-300">
+            🚨 هشدار افت ضریب در 1xBet — ضریب فعلی ارزش ریاضی ندارد (ورود ممنوع / تغییر به رژیم جایگزین)
+          </p>
+          <p className="mt-0.5 text-[9.5px] leading-3.5 text-rose-200/80">
+            مجموع احتمال ضمنی 1/O<sub>A</sub> + 1/O<sub>B</sub> ={" "}
+            <b className="font-num" dir="ltr">{impliedSum ? impliedSum.toFixed(3) : "—"}</b> ≥ ۰٫۹۶ — داچینگ سودده نیست.
+          </p>
+        </div>
+      ) : null}
+
+      {dutch && !oddsDropAlert ? (
+        <div className="mt-2 rounded-lg border border-emerald-500/35 bg-emerald-500/[0.08] p-2" role="status">
+          <p className="text-[10.5px] font-bold text-emerald-300">💰 بازمحاسبه واقعی با ضریب 1xBet شما (از ۱۰۰ واحد):</p>
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-muted-foreground">
+            <span>استیک تیپ A: <b className="font-num text-foreground" dir="ltr">{faNum(dutch.stakeA, 1)}u</b></span>
+            <span>· استیک تیپ B: <b className="font-num text-foreground" dir="ltr">{faNum(dutch.stakeB, 1)}u</b></span>
+            <span>· سود خالص واقعی: <b className="font-num text-emerald-300" dir="ltr">+{faNum(dutch.profit, 1)}u ({faPct(dutch.profitPct, 2)})</b></span>
+          </p>
+        </div>
+      ) : null}
+
+      {validA && singleOnly && (
+        <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
+          🏦 بنکر تک‌ستون با ضریب 1xBet شما: استیک ۱۰۰ واحدی ⬅️ سود خالص در صورت برد{" "}
+          <b className="font-num text-emerald-300" dir="ltr">+{faNum(100 * (numA - 1), 1)}u</b>
+          {" "}· EV مدل:{" "}
+          <b className={`font-num ${probA * numA - 1 >= 0 ? "text-emerald-300" : "text-rose-300"}`} dir="ltr">
+            {faPct((probA * numA - 1) * 100, 1)}
+          </b>
+        </p>
+      )}
+
+      {alternatives.length > 0 && (
+        <div className="mt-2 border-t border-white/8 pt-1.5">
+          <p className="text-[9.5px] font-semibold text-muted-foreground">
+            🧭 بهترین استراتژی جایگزین (قیمت‌گذاری واقعی تابلوی 1xBet — ضریب {ONE_X_BET_PAYOUT_FACTOR}/احتمال): هر ضریب زنده 1xBet بالاتر از عدد زیر = ورود ارزشمند
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {alternatives.map((c) => (
+              <li key={c.key} className="flex items-center justify-between gap-2 rounded-md bg-white/[0.04] px-1.5 py-1 text-[10px]">
+                <span className="min-w-0 truncate text-foreground/85">{c.fa}</span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  <b className="font-num text-emerald-300" dir="ltr">{c.fairOdds.toFixed(2)}×</b>
+                  <span className="font-num text-[9px] text-muted-foreground" dir="ltr">{faPct(c.p * 100, 0)}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ═══ v10.0 — نشانگر بهترین ساعت ثبت ضریب (Optimal Odds Timing Window) ═══
 
@@ -743,6 +947,11 @@ export function FlashCard({
                   <> · خطای برازش بازار: <b className="font-num" dir="ltr">{view.lambdaFitError.toExponential(1)}</b></>
                 )}
               </p>
+            ) : view.match.statsSource === "GLOBAL_ELO_FALLBACK" ? (
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                خط بازار واقعی در دسترس نبود — v21.0: λ از <b className="text-sky-300">جدول Elo جهانی</b> (اختلاف واقعی قدرت دو تیم، نه عدد ثابت) :{" "}
+                <b className="font-num text-emerald-300" dir="ltr">{faNum(view.lambdaStatsHome, 2)}-{faNum(view.lambdaStatsAway, 2)}</b> (مسیر GLOBAL_ELO_RATINGS)
+              </p>
             ) : (
               <p className="mt-1 text-[10px] text-muted-foreground">
                 خط بازار واقعی در دسترس نبود — λ از مدل آماری جدول و فرم فصل:{" "}
@@ -750,6 +959,9 @@ export function FlashCard({
               </p>
             )}
           </div>
+
+          {/* ═══ v21.0 — پنل تطبیق زنده با ضریب فعلی 1xBet (Live 1xBet Odds Calibrator) ═══ */}
+          {!vetoed && <LiveOddsCalibrator view={view} />}
 
           {/* ═══ v9.0 — درس کالیبراسیون اعمال‌شده روی این کارت (حلقه فعال) ═══ */}
           {view.calibrationRule.length > 0 && (
@@ -930,7 +1142,11 @@ export function FlashCard({
                 {view.match.statsSource && (
                   <p>
                     <span className="text-muted-foreground">منبع لامبدا:</span>{" "}
-                    {view.match.statsSource === "ESPN_STANDINGS" ? "جدول رسمی رده‌بندی ESPN Standings (بدون کلید)" : "رکورد/فرم واقعی ESPN (جدول رده‌بندی در دسترس نبود)"}
+                    {view.match.statsSource === "ESPN_STANDINGS"
+                      ? "جدول رسمی رده‌بندی ESPN Standings (بدون کلید)"
+                      : view.match.statsSource === "GLOBAL_ELO_FALLBACK"
+                        ? "جدول جهانی Elo تیم‌های ملی و باشگاهی (v21.0 — بدون λ کور)"
+                        : "رکورد/فرم واقعی ESPN (جدول رده‌بندی در دسترس نبود)"}
                   </p>
                 )}
                 {view.match.statsFetchedAt && (
