@@ -413,6 +413,27 @@ export interface PortfolioPairDTO {
   sharpEdgePct: number | null;
   /** v5.0 — متادیتای الگوی متعامد (روی فلش‌کارت نمایش داده می‌شود) */
   archetype?: { code: string; name: string; short: string; rationale: string; orthogonalityPct: number; coveragePct: number; overlapPct: number };
+  /** v23.0 — متادیتای حل‌کننده کوانتومی ۱۲×۱۲ (انتخاب اختصاصی این بازی از ۶۶ ترکیب) */
+  quantum?: {
+    pairCode: string;
+    evaluated: number;
+    qualifying: number;
+    utility: number;
+    cardLine: string;
+    doubleWinScenarios: string[];
+    aOnlyScenarios: string[];
+    bOnlyScenarios: string[];
+  };
+  /** v24.0 — گزارش اجرای موتور QQL + تحلیل ریشه‌ای هوش مصنوعی (AI RCA Trace) */
+  qql?: {
+    executedQueryLog: string[];
+    aiRcaDiagnosis: string;
+    firedRules: string[];
+    knnTwins: number;
+    knnSummary: string | null;
+    winnerPairCode: string | null;
+    vetoedPairs: string[];
+  };
   trap: { verdict: "NONE" | "WARNING" | "CRITICAL"; title: string; message: string };
   verdict: string;
 }
@@ -460,6 +481,24 @@ export interface PortfolioResultDTO {
    * Non-Linear Sharpe & Kelly Utility + واریانت برنده سوپروایزر.
    */
   betTypeRouter?: import("./engine/betrouter").BetTypeRouteResult | null;
+  /**
+   * v23.0/v24.0 — گزارش اجرای حل‌کننده کوانتومی ۱۲×۱۲ + موتور QQL/RCA برای این بازی:
+   * متن کوئری اجراشده، تحلیل ریشه‌ای هوش مصنوعی، دوقلوهای K-NN و بهترین ترکیب کوانتومی.
+   */
+  qql?: {
+    executedQueryLog: string[];
+    aiRcaDiagnosis: string;
+    firedRules: string[];
+    vetoedPairs: string[];
+    knnTwins: number;
+    knnSummary: string | null;
+    winnerPairCode: string | null;
+    stageCounts: { stage0: number; stage1: number; stage2: number; stage3: number };
+    quantumBestPairCode: string | null;
+    quantumCardLine: string | null;
+    quantumQualifying: number;
+    quantumEvaluated: number;
+  } | null;
 }
 
 // ═══════════════════════════════════════════════════════

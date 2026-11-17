@@ -184,7 +184,7 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v19.0 Restore · Orthogonal Dual-Hedge G1/G2/G3 + Strict Positive Overlap Filter @AINEOBET
+                  <Sparkles className="size-2.5" /> v24.0 Quantum · 12-Market Solver + QQL/RCA Edition @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">

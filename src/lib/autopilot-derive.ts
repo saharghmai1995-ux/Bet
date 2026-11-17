@@ -215,6 +215,22 @@ export function buildFlashcard(
     bullLine: firstSentence(debate?.bull?.thesis ?? null),
     bearLine: firstSentence(debate?.bear?.thesis ?? null),
     judgeLine: firstSentence(debate?.judge?.thesis ?? null),
+    // v23.0/v24.0 — خط کوانتومی + گزارش QQL/RCA از پرتفوی بازی
+    quantumLine:
+      effectivePair.quantum?.cardLine ||
+      portfolio?.qql?.quantumCardLine ||
+      null,
+    qql: portfolio?.qql
+      ? {
+          executedQueryLog: portfolio.qql.executedQueryLog,
+          aiRcaDiagnosis: portfolio.qql.aiRcaDiagnosis,
+          firedRules: portfolio.qql.firedRules,
+          vetoedPairs: portfolio.qql.vetoedPairs,
+          knnTwins: portfolio.qql.knnTwins,
+          knnSummary: portfolio.qql.knnSummary,
+          winnerPairCode: portfolio.qql.winnerPairCode,
+        }
+      : null,
     lambdaHome: portfolio?.primary?.lambdaHome ?? 1.35,
     lambdaAway: portfolio?.primary?.lambdaAway ?? 1.25,
     lambdaMarketHome: portfolio?.primary?.lambdaMarketHome ?? null,
