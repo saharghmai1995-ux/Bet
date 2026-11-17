@@ -175,20 +175,20 @@ export default function Home() {
     <div className="flex min-h-screen flex-col">
       {/* ─── هدر v3.0 — سوییچ دو حالته + مودال تنظیمات ─── */}
       <header className="sticky top-0 z-40 border-b border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
-          <div className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="relative flex items-center justify-center size-10 rounded-xl border border-emerald-500/30 bg-emerald-500/10 shadow-[0_0_18px_rgba(16,185,129,0.25)]">
               <Target className="size-5 text-emerald-400" />
               <span className="agent-live-dot absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-emerald-500" />
             </div>
             <div className="min-w-0">
-              <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
+              <h1 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
-                <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v24.0 Quantum · 12-Market Solver + QQL/RCA Edition @AINEOBET
+                <Badge className="max-w-full gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
+                  <Sparkles className="size-2.5 shrink-0" /> v24.0 Quantum · 12-Market Solver + QQL/RCA Edition @AINEOBET
                 </Badge>
               </h1>
-              <p className="text-[11px] text-muted-foreground sm:text-xs">
+              <p className="min-w-0 text-[11px] text-muted-foreground sm:text-xs">
                 ⚛️ حل‌کننده کوانتومی v23.0 (استخر باز ۱۲ آپشن × ۶۶ ترکیب — انتخاب اختصاصی هر بازی با تابع انرژی U و قید همپوشانی مثبت ۰.۸۶۵) + 🔬 موتور QQL/RCA v24.0 (زبان پرس‌وجوی درون‌حافظه‌ای + دوقلوهای K-NN + وتوی تحلیل ریشه‌ای RCA_01/02/03) + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵/۳۵ + خط لوله ESPN · TheSportsDB · Polymarket + تسویه خودکار ESPN + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
@@ -196,7 +196,7 @@ export default function Home() {
             <SupervisorRadar className="hidden sm:inline-flex" />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* نشانگر زنده فید چند-API + دکمه همگام‌سازی */}
             <LiveSyncBadge />
 
