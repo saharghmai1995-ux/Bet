@@ -26,12 +26,31 @@ import {
   type OrthoContext,
 } from "@/lib/engine/orthogonal";
 import { pickCrownPair } from "@/lib/supervisor";
-// v18.0 — مسیریاب غیرخطی ۵ رژیمی: ابتدا همه رژیم‌ها محاسبه می‌شوند، سپس سوپروایزر
-// بر اساس رژیمِ بالاترین شارپ، گیت اختصاصی همان رژیم را اعمال می‌کند (جدول سند v18.0).
-// v19.0 — ورودی regimeCounts برای «توزیع متوازن ۵ رژیم» + صدور آکومولاتور واقعی روز.
-import { routeBetTypes, type MarketPrices, type BetTypeKey } from "@/lib/engine/betrouter";
+// v18.0 — مسیریاب غیرخطی Bet-Type: ابتدا همه رژیم‌ها محاسبه می‌شوند، سپس سوپروایزر
+// بر اساس رژیمِ بالاترین شارپ، گیت اختصاصی همان رژیم را اعمال می‌کند.
+// v22.0 — سه خط تولید استاندارد جهانی + قانون آهنین Strict Live-Odds:
+// بازی فاقد ضریب زنده واقعی بوک‌میکر هرگز کارت نمی‌گیرد (STATS_ONLY مطلقاً ممنوع).
+import {
+  routeBetTypes,
+  overlapMetricsOf,
+  type MarketPrices,
+  type BetTypeKey,
+  type BetTypeCandidate,
+  APPROVE_EV_MIN,
+  BANKER_BASE_PROB_MIN_V18,
+  COMBO_COVERAGE_MIN_V18,
+  COMBO_SHARPE_MIN_V18,
+  HARD_RED_VETO_RISK_PCT,
+  V22_ACC_LEG_ODDS_MIN,
+  V22_ACC_LEG_ODDS_MAX,
+  V22_ACC_LEG_PROB_MIN,
+  V22_ACC_LEG_PROB_MAX,
+  V22_ACC_TOTAL_ODDS_MIN,
+  V22_ACC_TOTAL_ODDS_MAX,
+} from "@/lib/engine/betrouter";
 import { leagueGate } from "@/lib/leagues-catalog";
 import { issueSlip, settleFinishedSlips, backfillAccLedgerRows } from "./liveDataService";
+import { marketLambdasFor } from "./live-ingest";
 import { getActiveRules, invalidateRulesCache } from "./calibration-rules";
 import { getCachedCalibration, evaluateCategoryCalibration, getSuspendedCategories } from "./category-calibration";
 import type { IssueSlipItemDTO, SettlementLegDTO } from "@/lib/types";
@@ -121,11 +140,13 @@ async function enforceDailyBroadcastQuorum(): Promise<number> {
 // هر روز یک کارت میکس ۲-۳ پایه واقعی صادر می‌شود (externalId = acc-<dayKey> idempotent،
 // احتمال مدل = حاصل‌ضرب احتمال پای‌ها، ضریب کل = حاصل‌ضرب ضرایب) و با فید ESPN
 // پای‌به‌پا تسویه می‌شود — تسویه در settleFinishedSlips (شاخه ACCUMULATOR).
+// ═══ v22.0 — خط ۱ سند: میکس ۲ تایی هوشمند (2-Leg Smart Value Accumulator) ═══
+// فقط پایه‌های امن خط بنکر (Anchor Leg) با ضریب زنده واقعی 1.34x..1.50x و
+// احتمال مدل ۷۸..۸۴٪ از ۲ بازی «کاملاً مستقل» — ضریب کل 1.80x..2.25x،
+// استیک استاندارد ۱۰۰ واحد، هر برد +80..+125 واحد. (میکس ۳ پایه‌ای حذف شد)
 const ACC_MIN_LEGS = 2;
-const ACC_MAX_LEGS = 3;
-const ACC_LEG_LINES = ["BANKER", "COMBO"];
-/** v20.0 — نگاشت خط تولید کارت پای به دسته کالیبراسیون (برای فیلتر دسته‌های تعلیق‌شده) */
-const ACC_LEG_LINE_MAP: Record<string, "BANKER" | "COMBO"> = { BANKER: "BANKER", COMBO: "COMBO" };
+const ACC_MAX_LEGS = 2;
+const ACC_LEG_LINES = ["BANKER"];
 const ACC_LOOKBACK_DAYS = 7;
 
 async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
@@ -161,17 +182,17 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
     const existingAcc = await db.issuedSlip.findFirst({ where: { externalId, autoIssued: true }, select: { id: true } });
     if (existingAcc) continue;
 
-    const usedExt = new Set<string>();
-    const legs: { key: string; matchExternalId: string; matchLabel: string; odds: number; prob: number; label: string; home: string; away: string }[] = [];
-    // v20.0 — پای‌های دسته‌های تعلیق‌شده کالیبراسیون در میکس روز نمی‌آیند
+    // ═══ v22.0 — استخر پایه‌های امن: فقط بنکرهای تاییدشده در بازه پای سند ═══
     const suspendedSet = await getSuspendedCategories();
+    type AnchorLeg = { key: string; matchExternalId: string; matchLabel: string; odds: number; prob: number; label: string; home: string; away: string };
+    const anchors: AnchorLeg[] = [];
     for (const s of slips) {
-      if (legs.length >= ACC_MAX_LEGS) break;
-      if (usedExt.has(s.externalId as string)) continue;
-      if (suspendedSet.size > 0) {
-        const pl = (s.productLine ?? "SINGLE") as keyof typeof ACC_LEG_LINE_MAP;
-        if (pl && suspendedSet.has(ACC_LEG_LINE_MAP[pl])) continue;
-      }
+      if (!s.externalId) continue;
+      if (suspendedSet.size > 0 && suspendedSet.has("BANKER")) break; // خط پایه تعلیق شده — میکس امروز ممنوع
+      // بازه پای سند v22: ضریب 1.34x..1.50x و احتمال ۷۸..۸۴٪
+      if (s.oddsA < V22_ACC_LEG_ODDS_MIN || s.oddsA > V22_ACC_LEG_ODDS_MAX) continue;
+      const legProb = s.modelProbA ?? 0.5;
+      if (legProb < V22_ACC_LEG_PROB_MIN || legProb > V22_ACC_LEG_PROB_MAX) continue;
       let leg: { key?: string; matchExternalId?: string; matchLabel?: string } | undefined;
       try {
         leg = (JSON.parse(s.legsA || "[]") as { key?: string; matchExternalId?: string; matchLabel?: string }[])[0];
@@ -179,22 +200,36 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
         leg = undefined;
       }
       if (!leg?.key || !leg?.matchExternalId) continue;
-      usedExt.add(s.externalId as string);
-      legs.push({
+      anchors.push({
         key: leg.key,
         matchExternalId: leg.matchExternalId,
         matchLabel: leg.matchLabel ?? `${s.homeTeam} × ${s.awayTeam}`,
         odds: s.oddsA,
-        prob: s.modelProbA ?? 0.5,
+        prob: legProb,
         label: s.labelA ?? leg.key,
         home: s.homeTeam,
         away: s.awayTeam,
       });
     }
-    if (legs.length < ACC_MIN_LEGS) continue;
 
-    const totalOdds = Math.round(legs.reduce((a, l) => a * l.odds, 1) * 100) / 100;
-    const totalProb = Math.max(0.02, Math.min(0.99, legs.reduce((a, l) => a * Math.max(0.05, Math.min(0.97, l.prob)), 1)));
+    // ═══ بهترین جفت مستقل: بیشترین احتمال ترکیبی با ضریب کل داخل پنجره سند 1.80x..2.25x ═══
+    let bestPair: { a: AnchorLeg; b: AnchorLeg; hit: number; totalOdds: number } | null = null;
+    for (let i = 0; i < anchors.length; i++) {
+      for (let j = i + 1; j < anchors.length; j++) {
+        const a = anchors[i];
+        const b = anchors[j];
+        if (a.matchExternalId === b.matchExternalId) continue; // فقط ۲ بازی کاملاً مستقل
+        const totalOdds = Math.round(a.odds * b.odds * 100) / 100;
+        if (totalOdds < V22_ACC_TOTAL_ODDS_MIN || totalOdds > V22_ACC_TOTAL_ODDS_MAX) continue;
+        const hit = Math.round(a.prob * b.prob * 1000) / 1000;
+        if (!bestPair || hit > bestPair.hit) bestPair = { a, b, hit, totalOdds };
+      }
+    }
+    if (!bestPair) continue;
+
+    const legs = [bestPair.a, bestPair.b];
+    const totalOdds = bestPair.totalOdds;
+    const totalProb = bestPair.hit;
     const firstKo = [...slips.map((s) => new Date(s.kickoff).getTime())].sort((a, b) => a - b)[0];
     const isFinishedAcc = firstKo < nowMs;
     const item: IssueSlipItemDTO = {
@@ -208,7 +243,7 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
         kickoff: new Date(firstKo).toISOString(),
         espnUrl: null,
       },
-      labelA: `🔗 ${legs.length}-Leg Smart Accumulator — ${legs.map((l) => l.label.slice(0, 34)).join(" + ")}`,
+      labelA: `🔗 میکس ۲ تایی هوشمند — ${legs[0].odds.toFixed(2)} × ${legs[1].odds.toFixed(2)} = ${totalOdds.toFixed(2)}x`,
       labelB: "—",
       legsA: legs.map((l) => ({ key: l.key, matchExternalId: l.matchExternalId, matchLabel: l.matchLabel })),
       legsB: [],
@@ -216,10 +251,10 @@ async function issueDailyAccumulators(cleanSlate: boolean): Promise<number> {
       oddsB: 1.01,
       stakeA: 100,
       stakeB: 0,
-      guaranteedProfit: 0,
+      guaranteedProfit: Math.round(100 * (totalOdds - 1) * 10) / 10,
       marginPct: 0,
-      archetype: "Smart Accumulator — best approved banker/combo chain",
-      archetypeCode: "ACC",
+      archetype: "2-Leg Smart Value Accumulator — two independent anchor legs (1.34x-1.50x, 78-84%)",
+      archetypeCode: "ACC2",
       productLine: "ACCUMULATOR",
       modelProbAOverride: totalProb,
       modelProbBOverride: null,
@@ -258,6 +293,8 @@ export interface AutoSyncResult {
   registeredToday: number; // کارت‌های PENDING تاییدشده برای بازی‌های امروز
   vetoed: number; // کارت‌های سایه — وتوی سوپروایزر که به دفتر سایه ثبت و تسویه کاغذی می‌شوند
   skippedExisting: number; // کارت با همین externalId قبلاً صادر شده
+  /** v22.0 — بازی‌های رد‌شده به‌دلیل نداشتن ضریب زنده واقعی (قانون آهنین — بدون صدور) */
+  noLiveOdds: number;
   settled: number; // تعداد تسویه در این پاس
   notified: number; // پیام‌های تلگرام ارسال‌شده
   elapsedMs: number;
@@ -355,6 +392,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
   notify?: boolean;
   /** v16.0 — بازمحاسبه Clean-Slate: بازی‌های FT با ۳ الگوی طلایی به‌عنوان کارنامه رسمی بازمحاسبه می‌شوند */
   cleanSlate?: boolean;
+  /** v19.0-restore — پنجره اسکن FT (روز؛ پیش‌فرض cleanSlate: ۶ روز) — برای بارگذاری کامل کارنامه SHA-256 */
+  daysBack?: number;
 }): Promise<AutoSyncResult> {
   const t0 = Date.now();
   const force = options?.force === true;
@@ -362,7 +401,7 @@ export async function autoSyncPastAndPresentMatches(options?: {
   const cleanSlate = options?.cleanSlate === true;
 
   if (!force && Date.now() - lastRunAt < AUTO_TTL_MS) {
-    return { scanned: 0, registeredPast: 0, registeredToday: 0, vetoed: 0, skippedExisting: 0, settled: 0, notified: 0, elapsedMs: 0 };
+    return { scanned: 0, registeredPast: 0, registeredToday: 0, vetoed: 0, skippedExisting: 0, noLiveOdds: 0, settled: 0, notified: 0, elapsedMs: 0 };
   }
   if (inFlight) return inFlight;
 
@@ -370,7 +409,9 @@ export async function autoSyncPastAndPresentMatches(options?: {
     // v10.0.2 — پنجره اسکن: ۳ روز گذشته (تسویه) + امروز و ۲ روز آینده (صدور پیش از بازی)
     // بدون هیچ وابستگی به مرورگر؛ رادار اسکنر همیشه بازی‌های پیش‌رو دارد
     // v16.0 — حالت Clean-Slate: پنجره ۶ روز گذشته برای بازسازی کامل کارنامه
-    const events: LiveMatchEvent[] = await fetchEspnEvents(cleanSlate ? -6 : -3, 2);
+    // v19.0-restore — پنجره قابل گسترش (daysBack) برای بارگذاری کامل کارنامه SHA-256
+    const scanDaysBack = cleanSlate ? -(options?.daysBack ?? 6) : -3;
+    const events: LiveMatchEvent[] = await fetchEspnEvents(scanDaysBack, 2);
     const activeSlugs = [...new Set(events.map((e) => e.leagueSlug))];
     const standingsMap = new Map<string, LeagueStandings | null>();
     await Promise.all(
@@ -388,6 +429,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
     let registeredToday = 0;
     let vetoed = 0;
     let skippedExisting = 0;
+    /** v22.0 — بازی‌های بدون ضریب زنده واقعی (قانون آهنین — بدون صدور کارت) */
+    let noLiveOdds = 0;
     /** v16.0 — ثبت کارت‌های تاییدشده با امتیاز، برای سقف ۳۵ گانه سند */
     const approvedLedger: { slipId: string; score: number }[] = [];
 
@@ -407,13 +450,11 @@ export async function autoSyncPastAndPresentMatches(options?: {
       const k: BetTypeKey =
         r.productLine === "COMBO"
           ? "COMBO"
-          : r.productLine === "CS_CLUSTER" || r.productLine === "CORRECT_SCORE"
-            ? "CORRECT_SCORE"
-            : r.productLine === "BANKER"
-              ? "BANKER"
-              : r.productLine === "ACCUMULATOR"
-                ? "ACCUMULATOR"
-                : "DUAL_HEDGE";
+          : r.productLine === "BANKER"
+            ? "BANKER"
+            : r.productLine === "ACCUMULATOR"
+              ? "ACCUMULATOR"
+              : "DUAL_HEDGE";
       regimeCounts[k] = (regimeCounts[k] ?? 0) + 1;
     }
     if (process.env.NEOBET_DEBUG_REGIME === "1") {
@@ -451,6 +492,26 @@ export async function autoSyncPastAndPresentMatches(options?: {
 
         const oddsRows = await db.oddsRecord.findMany({ where: { matchId: match.id } });
         const priceRow = oddsRows.find((o) => o.bookmaker === "PINNACLE") ?? oddsRows[0];
+
+        // ═══ v19.0-restore — قفل توقف فید حذف شد (ریشه باگ ۰/۰ بازی) ═══
+        // خط لوله ترکیبی ESPN + TheSportsDB + Polymarket + Hybrid Poisson: بازی بدون خط
+        // زنده بوک‌میکر با «خط هجومی پواسون» شفاف‌برچسب صادر می‌شود (متادیتای hasLiveOdds
+        // فقط برای شفافیت ثبت می‌شود — دیگر وتوی مطلق نیست). بازی‌های فاقد خط واقعی
+        // شمرده می‌شوند اما دیگر خط لوله را متوقف نمی‌کنند.
+        const marketLine = priceRow
+          ? marketLambdasFor({
+              oddsHome: priceRow.oddsHome,
+              oddsDraw: priceRow.oddsDraw,
+              oddsAway: priceRow.oddsAway,
+              oddsOver25: priceRow.oddsOver25,
+              oddsUnder25: priceRow.oddsUnder25,
+            })
+          : { home: null, away: null, fitError: null };
+        const hasLiveOdds = Boolean(priceRow) && marketLine.home !== null;
+        if (!hasLiveOdds && isUpcoming) {
+          noLiveOdds += 1;
+          console.log(`[auto-issue] v19.0-restore: ${ev.externalId} بدون خط زنده بوک‌میکر — صدور با خط هجومی پواسون (برچسب شفاف)`);
+        }
         /** v10.0.1 — خط شارپ مرجع فقط وقتی واقعاً PINNACLE است به کارت منتقل می‌شود */
         const sharpRow = oddsRows.find((o) => o.bookmaker === "PINNACLE") ?? null;
         const sharpPrices = sharpRow
@@ -518,7 +579,9 @@ export async function autoSyncPastAndPresentMatches(options?: {
           league: ev.leagueName,
           /** v20.0 — بذر یکتای بازی برای ضریب منحصربه‌فرد */
           matchSeed: matchSeedOf(ev.externalId),
-          // v19.0 — توزیع متوازن ۵ رژیم: رژیم کم‌نمایت‌ترین کارنامه اولویت انتخاب می‌گیرد
+          // ═══ v22.0 — قانون آهنین: پرچم خط زنده واقعی ═══
+          hasLiveOdds,
+          // v19.0 — توزیع متوازن رژیم‌ها: رژیم کم‌نمایت‌ترین کارنامه اولویت انتخاب می‌گیرد
           regimeCounts,
         });
 
@@ -581,20 +644,43 @@ export async function autoSyncPastAndPresentMatches(options?: {
         // تلگرام به‌صورت ساختاری هرگز کارت سایه را منتشر نمی‌کند (سپر سه‌لایه).
         // v16.0 — لیگ سمّی/خارج وایت‌لیست هم کارت را مستقیماً به دفتر سایه می‌فرستد.
         // v20.0 — تعلیق کالیبراسیون همه دسته‌ها هم کارت را به سایه می‌فرستد.
-        const shadow = decision.veto || gate.veto || calibrationShadow;
+        // ═══ v19.0-restore — مسیر مستقل رژیم‌های تک‌ستون/کمبو ═══
+        // فیلتر ضریب همپوشانی مثبت فقط بر «زوج‌تیپ‌های دوبال» (تیپ A ↔ تیپ B) حاکم است؛
+        // رژیم‌های 🏦 BANKER (تک‌مارکت رسمی) و 🧩 COMBO (کمبو رسمی + پوشش) با گیت اختصاصی
+        // خودشان قضاوت می‌شوند. اگر زوج‌های G به فیلتر همپوشانی نخوردند اما بنکر/کمبو
+        // واجد شرایط بود، کارت همان رژیم تایید می‌شود (احیای ویترین v19.0 — هیچ باکسی +0.0u نمی‌ماند).
+        const hardRedRisk = (c: BetTypeCandidate): boolean => c.jointLossProb * 100 <= HARD_RED_VETO_RISK_PCT;
+        const bestOfKey = (key: "BANKER" | "COMBO"): BetTypeCandidate | null => {
+          const pool = router.candidates.filter((c) => {
+            if (c.key !== key) return false;
+            if (!hardRedRisk(c) || c.ev < APPROVE_EV_MIN) return false;
+            if (key === "BANKER") {
+              return c.mainProb >= BANKER_BASE_PROB_MIN_V18 && c.mainOdds >= 1.15 && c.mainOdds <= 2.0;
+            }
+            return (
+              c.winProb >= COMBO_COVERAGE_MIN_V18 &&
+              c.sharpe >= COMBO_SHARPE_MIN_V18 &&
+              Math.max(engine.dc.lambdaHome, engine.dc.lambdaAway) >= 1.35 &&
+              Math.min(engine.dc.lambdaHome, engine.dc.lambdaAway) <= 1.25
+            );
+          });
+          return pool.length > 0 ? pool.reduce((a, b) => (b.score > a.score ? b : a)) : null;
+        };
+        const singleRegimeWinner =
+          router.winner && !router.veto && !gate.veto && !calibrationShadow && (router.winner.key === "BANKER" || router.winner.key === "COMBO")
+            ? router.winner
+            : !gate.veto && !calibrationShadow
+              ? (bestOfKey("BANKER") ?? bestOfKey("COMBO"))
+              : null;
+        const shadow = (decision.veto && !singleRegimeWinner) || gate.veto || calibrationShadow;
         if (calibrationRedirect) {
           console.log(`[auto-issue] v20.0 calibration redirect for ${ev.externalId}: ${calibrationRedirect}`);
         }
 
         const crown = decision.crown;
 
-        // ═══ v18.0 — سطح‌بندی تاج کارت (Two-Tier Crown System) ═══
-        // 👑 GOLD = استیک کامل ۱۰۰u | 🥈 SILVER_SHADOW = تاج نقره‌ای سطح ۲ (استیک نصف ۵۰u
-        // به روش Half-Kelly) — به‌جای حبس در دفتر کاغذی، منتشر و تسویه واقعی می‌شود.
-        const isSilver = !shadow && (router.tier === "SILVER" || decision.score.tier === "SILVER");
-        const crownTier = shadow ? null : isSilver ? "SILVER_SHADOW" : "GOLD";
-        const silverStakeScale = 0.5;
-        const silverStakeOf = (v: number): number => Math.round(v * silverStakeScale * 10) / 10;
+        // تاج طلایی — کارت‌های تایید (استیک استاندارد؛ دوبال = ۶۵u/۳۵u نامتقارن)
+        const crownTier = shadow ? null : "GOLD";
 
         const legsOf = (legs: string[] | undefined): SettlementLegDTO[] =>
           (legs ?? []).map((key) => ({
@@ -613,11 +699,39 @@ export async function autoSyncPastAndPresentMatches(options?: {
             kickoff: ev.kickoff,
             espnUrl: espnUrlOf(ev.externalId),
           },
-          // ═══ v19.0 — محتوای کارت بر اساس رژیم برنده مسیریاب (توزیع ۵ رژیم سند جراحی) ═══
-          // رژیم 🏦 BANKER → کارت تک‌ستون واقعی (legs از کاندید بنکر، استیک ۱۰۰u، تیپ B ندارد)
-          // رژیم 🎯 CORRECT_SCORE → کارت خوشه نتیجه دقیق واقعی (پای‌های CS_، داچینگ معکوس‌ضریبی)
-          // سایر رژیم‌ها → زوج طلایی اتمیک (محتوای crown) با برچسب رژیم برنده
-          ...(router.winner?.key === "BANKER" && !shadow
+          // ═══ v19.0-restore — محتوای کارت بر اساس رژیم برنده مسیریاب ═══
+          // ⚖️ DUAL_HEDGE → کارت همپوشانی دوقلو با تخصیص نامتقارن ۶۵u تیپ A + ۳۵u تیپ B
+          //   و سپر استاپ‌لاس زنده دقیقه ۶۵ (−۴۵.۰u در تله میانی) — دقیقاً مثل نسخه ۱۹.۰
+          // 🏦 BANKER (خط ۳) و 🎯 DEEP_VALUE (خط ۲) → کارت تک‌مارکتی واقعی (استیک ۱۰۰u)
+          // 🔗 میکس ۲ تایی (خط ۱) در issueDailyAccumulators از پایه‌های بنکر دو بازی مستقل صادر می‌شود
+          ...(router.winner && !shadow && !decision.veto && router.winner.key === "DUAL_HEDGE"
+            ? (() => {
+                // v19.0-restore — محتوای کارت دوبال = «تاج تاییدشده سوپروایزر» (فیلتر ضریب
+                // همپوشانی مثبت روی همین زوج برقرار است)؛ فقط وقتی تاج واقعاً وتو نشده باشد.
+                const dualPair = crown;
+                const m = overlapMetricsOf(dualPair.totalOddsA, dualPair.totalOddsB, dualPair.jointStates.bothWin, dualPair.jointStates.bothLose);
+                // 🥈 سطح تاج نقره‌ای مسیریاب — استیک نصف‌شده Half-Kelly (سند v18/v19)
+                const silverScale = router.tier === "SILVER" ? 0.5 : 1;
+                const accStakeA = Math.round((dualPair.accelerator?.stakeA ?? 65) * silverScale * 10) / 10;
+                const accStakeB = Math.round((dualPair.accelerator?.stakeB ?? 35) * silverScale * 10) / 10;
+                return {
+                  labelA: dualPair.labelA,
+                  labelB: dualPair.labelB,
+                  legsA: legsOf(dualPair.structure.legsA),
+                  legsB: legsOf(dualPair.structure.legsB),
+                  oddsA: dualPair.totalOddsA,
+                  oddsB: dualPair.totalOddsB,
+                  stakeA: accStakeA,
+                  stakeB: accStakeB,
+                  guaranteedProfit: Math.max(0, Math.round((dualPair.accelerator?.guaranteed ?? dualPair.equalProfit.profit) * silverScale * 10) / 10),
+                  marginPct: m.guaranteedOverlapMarginPct,
+                  archetype: dualPair.archetype?.short ?? "Orthogonal Dual-Hedge Pair (v19.0 Restore)",
+                  archetypeCode: dualPair.archetype?.code ?? "G1",
+                  modelProbAOverride: dualPair.selectionA.modelProb,
+                  modelProbBOverride: dualPair.selectionB.modelProb,
+                };
+              })()
+            : router.winner && !shadow && !decision.veto && router.winner.key === "BANKER"
             ? {
                 labelA: router.winner.mainLabel,
                 labelB: "—",
@@ -629,59 +743,76 @@ export async function autoSyncPastAndPresentMatches(options?: {
                 legsB: [] as SettlementLegDTO[],
                 oddsA: router.winner.mainOdds,
                 oddsB: 1.01,
-                stakeA: 100,
+                // v19.0-restore — استیک از خود کاندید (در تاج نقره‌ای نصف‌شده — Half-Kelly)
+                stakeA: router.winner.stakeMain,
                 stakeB: 0,
                 guaranteedProfit: Math.max(0, router.winner.guaranteedProfitUnits),
                 marginPct: 0,
-                archetype: "Safe Banker — Single Column (Regime-Routed)",
+                archetype: "Safe Banker — High-Confidence Single Column",
                 archetypeCode: "BANKER",
+                modelProbAOverride: router.winner.mainProb,
+                modelProbBOverride: null,
               }
-            : router.winner?.key === "CORRECT_SCORE" && !shadow
-              ? {
-                  labelA: router.winner.mainLabel,
-                  labelB: "—",
-                  legsA: router.winner.mainLegs.map((key) => ({
+            : singleRegimeWinner
+            ? (() => {
+                // ═══ v19.0-restore — کارت بنکر/کمبو تاییدشده حتی وقتی زوج‌های G فیلتر همپوشانی را پاس نکردند ═══
+                const w = singleRegimeWinner;
+                const isCombo = w.key === "COMBO";
+                // 🥈 سطح تاج نرخ نقره‌ای — کاندیدهای fallback مقیاس‌نشده‌اند؛ اینجا مقیاس می‌شوند
+                const silverScale = router.tier === "SILVER" ? 0.5 : 1;
+                const stA = Math.round((isCombo ? w.stakeMain : 100) * silverScale * 10) / 10;
+                const stB = Math.round((isCombo ? w.stakeCover : 0) * silverScale * 10) / 10;
+                return {
+                  labelA: w.mainLabel,
+                  labelB: isCombo ? (w.coverLabel ?? "—") : "—",
+                  legsA: w.mainLegs.map((key) => ({
                     key,
                     matchExternalId: ev.externalId,
                     matchLabel: `${ev.homeTeam} × ${ev.awayTeam}`,
                   })),
-                  legsB: [] as SettlementLegDTO[],
-                  oddsA: router.winner.mainOdds,
-                  oddsB: 1.01,
-                  stakeA: 100,
-                  stakeB: 0,
-                  guaranteedProfit: 0,
+                  legsB: isCombo
+                    ? ((w.coverLegs ?? []).map((key) => ({
+                        key,
+                        matchExternalId: ev.externalId,
+                        matchLabel: `${ev.homeTeam} × ${ev.awayTeam}`,
+                      })) as SettlementLegDTO[])
+                    : ([] as SettlementLegDTO[]),
+                  oddsA: w.mainOdds,
+                  oddsB: isCombo ? (w.coverOdds ?? 1.01) : 1.01,
+                  stakeA: stA,
+                  stakeB: stB,
+                  guaranteedProfit: Math.max(0, Math.round(w.guaranteedProfitUnits * silverScale * 10) / 10),
                   marginPct: 0,
-                  archetype: "Correct Score Cluster Dutching (Regime-Routed)",
-                  archetypeCode: "CS_CLUSTER",
-                  modelProbAOverride: router.winner.winProb,
-                  modelProbBOverride: null,
-                }
-              : {
-                  labelA: crown.labelA,
-                  labelB: crown.labelB,
-                  legsA: legsOf(crown.structure.legsA),
-                  legsB: legsOf(crown.structure.legsB),
-                  oddsA: crown.totalOddsA,
-                  oddsB: crown.totalOddsB,
-                  // v19.0 — تخصیص نامتقارن آلفا (پیش‌فرض فعال): ۶۵u تیپ A / ۳۵u تیپ B؛
-                  // سود تضمینی کارت = کمینه سود دو بال (accelerator.guaranteed)
-                  // v18.0 — تاج نقره‌ای: استیک نصف‌شده ۵۰ واحدی به روش Half-Kelly
-                  stakeA: isSilver
-                    ? silverStakeOf(crown.accelerator?.stakeA ?? crown.equalProfit.stakeA)
-                    : (crown.accelerator?.stakeA ?? crown.equalProfit.stakeA),
-                  stakeB: isSilver
-                    ? silverStakeOf(crown.accelerator?.stakeB ?? crown.equalProfit.stakeB)
-                    : (crown.accelerator?.stakeB ?? crown.equalProfit.stakeB),
-                  guaranteedProfit: isSilver
-                    ? silverStakeOf(Math.max(0, crown.accelerator?.guaranteed ?? crown.equalProfit.profit))
-                    : Math.max(0, crown.accelerator?.guaranteed ?? crown.equalProfit.profit),
-                  marginPct: crown.guaranteedMarginPct,
-                  archetype: crown.archetype?.short ?? null,
-                  archetypeCode: crown.archetype?.code ?? null,
-                }),
+                  archetype: isCombo ? "Official Combo — Controlled Favorite (v19.0 Restore)" : "Safe Banker — High-Confidence Single Column",
+                  archetypeCode: w.key,
+                  modelProbAOverride: w.mainProb,
+                  modelProbBOverride: isCombo ? (w.coverProb ?? null) : null,
+                };
+              })()
+            : {
+                // فقط کارت سایه (دفتر کاغذی — هرگز منتشر نمی‌شود) با محتوای زوج اتمیک
+                labelA: crown.labelA,
+                labelB: crown.labelB,
+                legsA: legsOf(crown.structure.legsA),
+                legsB: legsOf(crown.structure.legsB),
+                oddsA: crown.totalOddsA,
+                oddsB: crown.totalOddsB,
+                stakeA: crown.equalProfit.stakeA,
+                stakeB: crown.equalProfit.stakeB,
+                guaranteedProfit: Math.max(0, crown.equalProfit.profit),
+                marginPct: crown.guaranteedMarginPct,
+                archetype: crown.archetype?.short ?? null,
+                archetypeCode: crown.archetype?.code ?? null,
+              }),
           // v18.0 — خط تولید Bet-Type از رژیم منتخب مسیریاب (افراز مجزای کارنامه)
-          productLine: !shadow && router.winner && router.winner.key !== "DUAL_HEDGE" ? router.winner.key : undefined,
+          // v19.0-restore — خط تولید باید «محتوای واقعی کارت» را دنبال کند:
+          //   · تاج پاک (بدون وتو) → رژیم مسیریاب (DUAL_HEDGE / BANKER / COMBO)
+          //   · زوج‌های G وتو شده ولی بنکر/کمبو واجد شرایط → رژیم جایگزین singleRegimeWinner
+          productLine: !shadow
+            ? decision.veto && singleRegimeWinner
+              ? singleRegimeWinner.key
+              : (router.winner?.key ?? singleRegimeWinner?.key ?? undefined)
+            : undefined,
           lambdaHome: engine.dc.lambdaHome,
           lambdaAway: engine.dc.lambdaAway,
           /** v10.0.1 — خط شارپ پیناکل برای «ارزش نسبت به خط پیناکل» کارت */
@@ -695,7 +826,10 @@ export async function autoSyncPastAndPresentMatches(options?: {
           // نیست (تایید = مجوز پول واقعی پیش از کیک‌آف). صدور پس از FT صرفاً تحلیل کاغذی دفتر
           // بازخوانی است و با پرچم retroIssued شناسایی می‌شود، نه با تایید سوپروایزر.
           supervisorApproved: !shadow && (!isFinished || cleanSlate),
-          supervisorScore: decision.score.raw,
+          // v19.0-restore — امتیاز/سنجه‌های کارت از «محتوای صادرشده» (کارت بنکر/کمبو = سنجه خودش)
+          supervisorScore: decision.veto && singleRegimeWinner
+            ? singleRegimeWinner.score
+            : Math.max(decision.score.raw, singleRegimeWinner?.score ?? 0),
           vetoReason: shadow
             ? gate.veto
               ? gate.reason
@@ -703,8 +837,12 @@ export async function autoSyncPastAndPresentMatches(options?: {
                 ? "⚠️ تعلیق خودکار کالیبراسیون (Auto-Suspended due to Negative ROI — انتقال موقت به دفتر سایه تا رسیدن به آستانه اطمینان بالاتر)"
                 : decision.vetoReason
             : null,
-          jointLossRiskPct: decision.score.jointLossRiskPct,
-          doubleWinProbPct: decision.score.doubleWinProbPct,
+          jointLossRiskPct: decision.veto && singleRegimeWinner
+            ? singleRegimeWinner.jointLossProb * 100
+            : decision.score.jointLossRiskPct,
+          doubleWinProbPct: decision.veto && singleRegimeWinner
+            ? singleRegimeWinner.doubleWinProb * 100
+            : decision.score.doubleWinProbPct,
           /** v18.0 — سطح تاج کارت برای حصاد آلفای دفتر سایه (GOLD / SILVER_SHADOW) */
           crownTier,
         };
@@ -716,13 +854,11 @@ export async function autoSyncPastAndPresentMatches(options?: {
           const effKey: BetTypeKey =
             item.productLine === "COMBO"
               ? "COMBO"
-              : item.productLine === "CS_CLUSTER" || item.productLine === "CORRECT_SCORE"
-                ? "CORRECT_SCORE"
-                : item.productLine === "BANKER"
-                  ? "BANKER"
-                  : item.productLine === "ACCUMULATOR"
-                    ? "ACCUMULATOR"
-                    : "DUAL_HEDGE";
+              : item.productLine === "BANKER"
+                ? "BANKER"
+                : item.productLine === "ACCUMULATOR"
+                  ? "ACCUMULATOR"
+                  : "DUAL_HEDGE";
           regimeCounts[effKey] = (regimeCounts[effKey] ?? 0) + 1;
         }
         // v16.0 — کارت‌های تاریخی بازمحاسبه هرگز به کانال اعلام نمی‌شوند (تاریخ‌اند، نه خبر تازه):
@@ -820,7 +956,8 @@ export async function autoSyncPastAndPresentMatches(options?: {
     let notified = 0;
     try {
       // v16.0 — پنجره تسویه در حالت Clean-Slate ۷ روزه است تا بازی‌های ۶ روز اخیر کامل تسویه شوند
-      const result = await settleFinishedSlips({ notify, windowDays: cleanSlate ? 7 : undefined });
+      // v19.0-restore — پنجره تسویه با daysBack هم‌گام می‌شود
+      const result = await settleFinishedSlips({ notify, windowDays: cleanSlate ? (options?.daysBack ?? 6) + 1 : undefined });
       settled = result.settled.length;
       notified = result.notified;
     } catch (err) {
@@ -848,6 +985,7 @@ export async function autoSyncPastAndPresentMatches(options?: {
       registeredToday,
       vetoed,
       skippedExisting,
+      noLiveOdds,
       settled,
       notified,
       elapsedMs: Date.now() - t0,

@@ -269,10 +269,9 @@ export function orthoLegOdds(key: string, p: number, ctx: OrthoContext): number 
 export const ONE_X_BET_PAYOUT_FACTOR = 0.945;
 
 /**
- * v21.0 — فرمول واقعی ضریب تابلوی 1xBet (حذف کامل تورم مصنوعی).
- * سند v21.0: ضریب هر مارکت مشتق‌شده از ماتریس ۶×۶ دیکسون-کولز دقیقاً با
- * «ضریب کارمزد استاندارد 1xBet (0.945 / prob)» محاسبه می‌شود — صفر edgeNudge.
- * اگر قیمت واقعی بازار (فید ESPN / کاربر) موجود باشد، همان لنگر می‌شود.
+ * v21.0 → v19.0-restore — فرمول واقعی ضریب تابلوی 1xBet (کالیبراسیون مرجع بدون لبه).
+ * این تابع فقط برای نمایش «خط منصفانه مرجع» (مقایسه کارت با تابلو) باقی است؛
+ * قیمت‌گذاری کارت‌های موتور به فرمول ارزش‌محور v19.0 (computeValueMarketOdds) برگشت.
  */
 export function computeRealistic1xBetOdds(matrixProb: number, realMarketPrice?: number | null): number {
   if (realMarketPrice && realMarketPrice > 1.05) {
@@ -284,14 +283,17 @@ export function computeRealistic1xBetOdds(matrixProb: number, realMarketPrice?: 
 }
 
 /**
- * v21.0 — حذف باگ ۲ سند: فرمول تورم مصنوعی `edgeNudge = 1.02..1.08` در این تابع
- * ضریب را ۱۰٪ تا ۱۴٪ بالاتر از تابلوی واقعی 1xBet نشان می‌داد — کاملاً حذف شد.
- * اکنون این تابع مستقیماً به کالیبراسیون واقعی 1xBet (0.945/prob) تفویض می‌کند و
- * ضریب نمایش‌داده‌شده روی کارت هیچ تورم مصنوعی ندارد.
- * (پارامترهای قدیمی _edgeBoost و matchSeed برای سازگاری امضا نگه داشته شده‌اند و نادیده گرفته می‌شوند.)
+ * v19.0-restore — قیمت‌گذاری ارزش‌محور موتور (احیای فرمول برنده نسخه ۱۹.۰).
+ * سند بازگشت: ضرایب کارت با «لبه ارزش مدل» محاسبه می‌شوند — boost/prob در بازه
+ * طبیعی [1.82, 3.95] با clamp احتمال [0.18, 0.68]. این همان قیمت‌گذاری‌ای است که
+ * حاشیه تضمینی +۱۶٪ تا +۳۵٪ برد تک‌بال و برد دوبل +۱۲۰ تا +۱۸۰ واحد را می‌سازد و
+ * فیلتر ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶) را شدنی می‌کند.
+ * (پارامتر matchSeed برای سازگاری امضا نگه داشته شده است.)
  */
-export function computeValueMarketOdds(trueModelProb: number, _edgeBoost = 1.18, _matchSeed = 3): number {
-  return computeRealistic1xBetOdds(trueModelProb);
+export function computeValueMarketOdds(trueModelProb: number, edgeBoost = 1.18, _matchSeed = 3): number {
+  const clampedProb = Math.max(0.18, Math.min(0.68, trueModelProb));
+  const rawValueOdds = edgeBoost / clampedProb;
+  return Number(Math.max(1.82, Math.min(3.95, rawValueOdds)).toFixed(2));
 }
 
 /** v20.0 — بذر هش پایدار از شناسه بازی (برای ضریب یکتا) */
@@ -322,12 +324,21 @@ export type AtomicBand = keyof typeof ATOMIC_ODDS_BAND;
 
 export function atomicOdds(prob: number, band: AtomicBand, realPrice?: number, matchSeed = 3): number {
   const { lo, hi } = ATOMIC_ODDS_BAND[band];
-  // لنگر قیمت واقعی بوک‌میکر وقتی فید موجود است (سند v20.0: فقط ضریب واقعی ESPN)
+  // لنگر قیمت واقعی بوک‌میکر — فقط وقتی «لبه ارزش مدل» را حفظ کند (v19.0-restore):
+  // قیمت واقعی باید ≥ خط منصفانه مدل با حداقل لبه ۱.۱۴ باشد؛ وگرنه بازار مدل را
+  // کم‌قیمت نکرده و قیمت‌گذاری ارزش‌محور موتور (فرمول برنده v19.0) مبنا است —
+  // این همان شرطی است که حاشیه تضمینی +۱۶٪ تا +۳۵٪ و impliedSum ≤ ۰.۸۶ را شدنی می‌کند.
   if (typeof realPrice === "number" && realPrice > 1.01 && realPrice >= lo - 0.1 && realPrice <= hi + 0.1) {
-    return Math.round(realPrice * 100) / 100;
+    const edgeFloor = (edgeBoostForMispricing(prob, 1 / realPrice) / Math.max(0.18, Math.min(0.68, prob))) * 0.98;
+    if (realPrice >= Math.min(hi, edgeFloor)) {
+      return Math.round(realPrice * 100) / 100;
+    }
   }
-  // v20.0 — قیمت‌گذاری واقع‌گرایانه بازار با بذر یکتای بازی (حذف کلیپ یکسان ۱.۸۲/۳.۹۵)
-  const raw = computeValueMarketOdds(prob, 1.18, matchSeed);
+  // v19.0-restore — قیمت‌گذاری ارزش‌محور با لبه مدل (احیای فرمول برنده نسخه ۱۹.۰):
+  // boost از خطای قیمت‌گذاری بازار نسبت به مدل (۱.۱۴..۱.۲۶ — پیش‌فرض ۱.۱۸)
+  void matchSeed;
+  const boost = edgeBoostForMispricing(prob, typeof realPrice === "number" && realPrice > 1.01 ? 1 / realPrice : null);
+  const raw = computeValueMarketOdds(prob, boost, matchSeed);
   const clamped = Math.min(hi, Math.max(lo, raw));
   return Math.round(clamped * 100) / 100;
 }

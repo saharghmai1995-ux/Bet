@@ -1,0 +1,1121 @@
+     1→// ═══════════════════════════════════════════════════════
+     2→// v4.0 — فید زنده چند-API (Live Multi-API Telemetry)
+     3→// ═══════════════════════════════════════════════════════
+     4→
+     5→/** وضعیت سلامت هر منبع داده زنده */
+     6→export interface LiveFeedSourceDTO {
+     7→  key: string;
+     8→  label: string;
+     9→  ok: boolean;
+    10→  detail: string;
+    11→  latencyMs: number;
+    12→}
+    13→
+    14→/** تیتر خبر زنده ESPN */
+    15→export interface LiveNewsDTO {
+    16→  headline: string;
+    17→  description: string;
+    18→  published: string;
+    19→  url: string;
+    20→  leagueSlug: string;
+    21→}
+    22→
+    23→/** خروجی کامل همگام‌سازی فید زنده */
+    24→export interface LiveFeedDTO {
+    25→  success: boolean;
+    26→  mode: "LIVE" | "FALLBACK";
+    27→  lastSyncAt: number;
+    28→  matchesLive: number;
+    29→  matchesUpcoming: number;
+    30→  matchesInPlay: number;
+    31→  news: LiveNewsDTO[];
+    32→  sources: LiveFeedSourceDTO[];
+    33→  odds: {
+    34→    used: boolean;
+    35→    creditsRemaining: number | null;
+    36→    lastOddsSyncAt: number | null;
+    37→    throttled: boolean;
+    38→  };
+    39→  weatherAdjusted: number;
+    40→  calibrated: number;
+    41→  archived: number;
+    42→  elapsedMs: number;
+    43→}
+    44→
+    45→// ─────────────────────────────────────────────
+    46→// تایپ‌های مشترک فرانت‌اند
+    47→// ─────────────────────────────────────────────
+    48→
+    49→export interface MatchDTO {
+    50→  id: string;
+    51→  league: string;
+    52→  homeTeam: string;
+    53→  awayTeam: string;
+    54→  kickoff: string;
+    55→  homeAttack: number;
+    56→  homeDefense: number;
+    57→  awayAttack: number;
+    58→  awayDefense: number;
+    59→  homeElo: number;
+    60→  awayElo: number;
+    61→  homeXg: number;
+    62→  awayXg: number;
+    63→  homePpda: number;
+    64→  awayPpda: number;
+    65→  homeFieldTilt: number;
+    66→  awayFieldTilt: number;
+    67→  homeForm: string;
+    68→  awayForm: string;
+    69→  weather: string;
+    70→  homeAbsence: string | null;
+    71→  awayAbsence: string | null;
+    72→  homeMotivation: string | null;
+    73→  awayMotivation: string | null;
+    74→  tacticalNote: string | null;
+    75→  oddsHome: number;
+    76→  oddsDraw: number;
+    77→  oddsAway: number;
+    78→  oddsOver25: number;
+    79→  oddsUnder25: number;
+    80→  odds1x: number;
+    81→  /** شوک ترکیب T-60 (برای بازسازی زنجیره واکنشی پس از reload) */
+    82→  lineupAnnounced?: boolean;
+    83→  lineupShockHome?: number | null;
+    84→  lineupShockAway?: number | null;
+    85→  // ─── v4.0 — تلهمتری زنده ───
+    86→  dataSource?: string; // SEED | ESPN | SPORTSDB
+    87→  // ─── v6.0 — سند راستی‌آزمایی داده (Data Verification Inspector) ───
+    88→  externalId?: string | null; // espn-<slug>-<eventId>
+    89→  homeTeamId?: string | null;
+    90→  awayTeamId?: string | null;
+    91→  homeRank?: number | null; // رتبه واقعی جدول فصل
+    92→  homeGF?: number | null; // گل زده واقعی فصل میزبان
+    93→  homeGA?: number | null;
+    94→  homeGP?: number | null;
+    95→  awayRank?: number | null;
+    96→  awayGF?: number | null;
+    97→  awayGA?: number | null;
+    98→  awayGP?: number | null;
+    99→  leagueTeamAvg?: number | null; // میانگین گل هر تیم/بازی از جدول واقعی
+   100→  statsSource?: string | null; // ESPN_STANDINGS | RECORD_FALLBACK
+   101→  statsFetchedAt?: string | null; // آخرین واکشی جدول رده‌بندی
+   102→  homeLogo?: string | null;
+   103→  awayLogo?: string | null;
+   104→  venueName?: string | null;
+   105→  venueCity?: string | null;
+   106→  weatherTemp?: number | null;
+   107→  weatherWind?: number | null;
+   108→  weatherPrecip?: number | null;
+   109→  weatherAdjusted?: boolean;
+   110→  oddsSource?: string; // ENGINE | ESPN_DRAFTKINGS | ODDS_API
+   111→  status: string;
+   112→  latestAnalysis: {
+   113→    id: string;
+   114→    bestMarket: string;
+   115→    bestEv: number;
+   116→    confidence: number;
+   117→    source: string;
+   118→  } | null;
+   119→}
+   120→
+   121→export interface AnalysisResultDTO {
+   122→  source: "LLM" | "ENGINE_FALLBACK";
+   123→  match: {
+   124→    id: string;
+   125→    homeTeam: string;
+   126→    awayTeam: string;
+   127→    league: string;
+   128→    oddsHome: number;
+   129→    oddsDraw: number;
+   130→    oddsAway: number;
+   131→    oddsOver25: number;
+   132→    oddsUnder25: number;
+   133→    odds1x: number;
+   134→  };
+   135→  engineBaseline: {
+   136→    lambdaHome: number;
+   137→    lambdaAway: number;
+   138→    pHome: number;
+   139→    pDraw: number;
+   140→    pAway: number;
+   141→  };
+   142→  analysis: {
+   143→    id: string;
+   144→    probabilities: {
+   145→      home: number;
+   146→      draw: number;
+   147→      away: number;
+   148→      over25: number;
+   149→      under25: number;
+   150→      btts?: number;
+   151→    };
+   152→    goalsExpectation: { home: number; away: number };
+   153→    scenarios: { name: string; probability: number; description: string }[];
+   154→    tacticalMatchup: {
+   155→      homeStyle: string;
+   156→      awayStyle: string;
+   157→      tempo: "LOW" | "MEDIUM" | "HIGH";
+   158→      keyBattles: string[];
+   159→      summary: string;
+   160→    };
+   161→    riskFlags: string[];
+   162→    narrative: string;
+   163→    confidence: number;
+   164→    evs: {
+   165→      home: number;
+   166→      draw: number;
+   167→      away: number;
+   168→      over25: number;
+   169→      under25: number;
+   170→    };
+   171→    bestMarket: string;
+   172→    bestEv: number;
+   173→    bestKey: string;
+   174→    riskFlag: string;
+   175→    p1x: number;
+   176→    createdAt: string;
+   177→  };
+   178→}
+   179→
+   180→export interface RiskLegDTO {
+   181→  match: string;
+   182→  market: string;
+   183→  selection: string;
+   184→  odds: number;
+   185→  prob: number;
+   186→}
+   187→
+   188→export interface RiskResultDTO {
+   189→  banker: {
+   190→    match: string;
+   191→    selection: string;
+   192→    marketName: string;
+   193→    odds: number;
+   194→    prob: number;
+   195→    baseSafe: boolean;
+   196→  };
+   197→  variable: {
+   198→    match: string;
+   199→    over: { odds: number; prob: number };
+   200→    under: { odds: number; prob: number };
+   201→  };
+   202→  tips: {
+   203→    id: string;
+   204→    label: string;
+   205→    legs: RiskLegDTO[];
+   206→    totalOdds: number;
+   207→    stake: number;
+   208→    potentialReturn: number;
+   209→    profitIfWin: number;
+   210→    prob: number;
+   211→  }[];
+   212→  dutching: {
+   213→    strategy: string;
+   214→    impliedSum: number;
+   215→    arbitrageFree: boolean;
+   216→    guaranteedMargin: number;
+   217→    bothLoseProb: number;
+   218→    expectedValue: number | null;
+   219→  };
+   220→  trap: {
+   221→    verdict: "NONE" | "WARNING" | "CRITICAL";
+   222→    title: string;
+   223→    message: string;
+   224→  };
+   225→  batchId: string;
+   226→}
+   227→
+   228→export interface BacktestResultDTO {
+   229→  config: {
+   230→    totalMatches: number;
+   231→    minEdge: number;
+   232→    bankroll: number;
+   233→    stakePercent: number;
+   234→    seed: number;
+   235→  };
+   236→  totalBets: number;
+   237→  wins: number;
+   238→  strikeRate: number;
+   239→  roi: number;
+   240→  finalEquity: number;
+   241→  avgClv: number;
+   242→  positiveClvRate: number;
+   243→  maxDrawdown: number;
+   244→  bets: {
+   245→    i: number;
+   246→    market: string;
+   247→    oddsTaken: number;
+   248→    oddsClosing: number;
+   249→    modelProb: number;
+   250→    won: boolean;
+   251→    profit: number;
+   252→    clv: number;
+   253→    equity: number;
+   254→  }[];
+   255→  /** مقایسه سه استراتژی مدیریت سرمایه در یک شبیه‌سازی واحد */
+   256→  strategies: {
+   257→    key: "FIXED" | "KELLY25" | "DUTCH2";
+   258→    label: string;
+   259→    totalBets: number;
+   260→    wins: number;
+   261→    strikeRate: number;
+   262→    roi: number;
+   263→    finalEquity: number;
+   264→    avgClv: number;
+   265→    positiveClvRate: number;
+   266→    maxDrawdown: number;
+   267→    curve: { i: number; equity: number }[];
+   268→  }[];
+   269→  drawdownReduction: number; // کاهش افت سرمایه داچینگ نسبت به Fixed
+   270→  verdict: "EXCELLENT" | "GOOD" | "MARGINAL" | "FAIL";
+   271→  verdictMessage: string;
+   272→}
+   273→
+   274→// ═══════════════════════════════════════════════════════
+   275→// سطح اول (Institutional-Grade) — تایپ‌های ماژول‌های پیشرفته
+   276→// ═══════════════════════════════════════════════════════
+   277→
+   278→/** مقایسه روش‌های حذف حاشیه (Shin / Power / Multiplicative) روی خط هر بوک‌میکر */
+   279→export interface DevigRowDTO {
+   280→  bookmaker: string;
+   281→  bookmakerLabel: string;
+   282→  marginPct: number; // حاشیه خام (Overround)
+   283→  shinProbs: { home: number; draw: number; away: number };
+   284→  shinZ: number; // نسبت معامله‌گران آگاه مدل شین
+   285→  powerK: number;
+   286→  sharp: boolean; // Pinnacle = خط مرجع Sharp
+   287→}
+   288→
+   289→/** خروجی هر زیر-ایجنت در مناظره */
+   290→export interface AgentBriefDTO {
+   291→  role: "BULL" | "BEAR" | "JUDGE";
+   292→  title: string;
+   293→  thesis: string;
+   294→  arguments: string[];
+   295→  factorDeltas?: { home: number; draw: number; away: number; over25: number };
+   296→  confidence: number;
+   297→  source: "LLM" | "ENGINE_FALLBACK" | "LOCAL_QUANT";
+   298→}
+   299→
+   300→/** پاسخ کامل مناظره چندایجنتی */
+   301→export interface DebateResultDTO {
+   302→  success: boolean;
+   303→  source: "LLM" | "ENGINE_FALLBACK" | "LOCAL_QUANT";
+   304→  /** v5.0 — سپر ضد Rate-Limit: true یعنی درخواست LLM به صف خورد و موتور محلی جایگزین شد */
+   305→  rateLimited?: boolean;
+   306→  /** v5.0 — پیام وضعیت سپر (کش / صف / موتور محلی) */
+   307→  notice?: string | null;
+   308→  match: {
+   309→    id: string;
+   310→    homeTeam: string;
+   311→    awayTeam: string;
+   312→    league: string;
+   313→    referee: string | null;
+   314→  };
+   315→  quantitative: {
+   316→    lambdaHome: number;
+   317→    lambdaAway: number;
+   318→    pHome: number;
+   319→    pDraw: number;
+   320→    pAway: number;
+   321→    pOver25: number;
+   322→    pUnder25: number;
+   323→    pBtts: number;
+   324→    gamestateNote: string | null;
+   325→    fatigueNote: string | null;
+   326→    refereeNote: string | null;
+   327→    lineupShockNote: string | null;
+   328→  };
+   329→  devig: DevigRowDTO[];
+   330→  sharpProbs: { home: number; draw: number; away: number } | null;
+   331→  bull: AgentBriefDTO;
+   332→  bear: AgentBriefDTO;
+   333→  judge: AgentBriefDTO;
+   334→  final: {
+   335→    pHome: number;
+   336→    pDraw: number;
+   337→    pAway: number;
+   338→    pOver25: number;
+   339→    analysisId: string;
+   340→    confidence: number;
+   341→    calibrationApplied: string | null;
+   342→  };
+   343→}
+   344→
+   345→/** یک انتخاب (Selection) در پرتفوی با بهترین قیمت یافت‌شده */
+   346→export interface PortfolioSelectionDTO {
+   347→  key: string; // HOME | DRAW | AWAY | DC_1X | DC_X2 | O25 | U25 | BTTS_Y | BTTS_N | C_O95 | C_U95
+   348→  label: string;
+   349→  matchId: string;
+   350→  matchLabel: string;
+   351→  modelProb: number;
+   352→  bestOdds: number;
+   353→  bestBook: string;
+   354→  sharpOdds: number | null;
+   355→  evPct: number;
+   356→}
+   357→
+   358→/** ساختار داخلی زوج — کلیدهای پایه/متغیر برای نقشه پوشش و اشکال‌زدایی */
+   359→export interface PairStructureDTO {
+   360→  baseKey: string; // پایه امن (DC_1X | DC_X2) — برای زوج متعامد v5.0: "ORTHO"
+   361→  varAKey: string; // متغیر تیپ A (O25 | U25 | O15 | U35 | BTTS_Y | BTTS_N | C_O95 | C_U95)
+   362→  varBKey: string; // متغیر تیپ B (مقابل متغیر A یا بازار دوگانه)
+   363→  varAMatchId: string; // بازی متغیر A (میکس دو بازی = بازی دوم)
+   364→  varBMatchId: string;
+   365→  /** v5.0 — زوج متعامد: فهرست کامل شرط‌های تیپ A و B از ۱۵ بازار (بدون پایه مشترک) */
+   366→  legsA?: string[];
+   367→  legsB?: string[];
+   368→  /** زوج باندی (خطوط هم‌خانواده با ناحیه طلایی) — O15_U25 یا O25_U35 */
+   369→  band: "O15_U25" | "O25_U35" | null;
+   370→  /** حاوی خط سینتتیک مبتنی بر مدل (O15/U35 بدون قیمت واقعی بوک‌میکر) */
+   371→  synthetic: boolean;
+   372→  /** زوج دو-برد (Double-Win): هر دو تیپ می‌توانند همزمان ببرند */
+   373→  doubleWin: boolean;
+   374→}
+   375→
+   376→/** زوج تیپ مکمل ساخته‌شده توسط موتور مونت‌کارلو + کلِی */
+   377→export interface PortfolioPairDTO {
+   378→  id: string;
+   379→  kind: "SINGLE_MATCH_BUILDER" | "TWO_MATCH_MIX";
+   380→  labelA: string;
+   381→  labelB: string;
+   382→  /** v15.0 — نام رسمی بین‌المللی مارکت تیپ A (انگلیسی — Institutional Execution Metadata) */
+   383→  marketAEn?: string;
+   384→  /** v15.0 — نام رسمی بین‌المللی مارکت تیپ B (انگلیسی) */
+   385→  marketBEn?: string;
+   386→  /** v15.0 — نشان رسمی قانون تسویه: ۹۰ دقیقه وقت قانونی — بدون وقت اضافه */
+   387→  settlementRule?: string;
+   388→  structure: PairStructureDTO;
+   389→  selectionA: PortfolioSelectionDTO;
+   390→  selectionB: PortfolioSelectionDTO;
+   391→  totalOddsA: number;
+   392→  totalOddsB: number;
+   393→  jointStates: { bothWin: number; aOnly: number; bOnly: number; bothLose: number };
+   394→  impliedSum: number;
+   395→  guaranteedMarginPct: number;
+   396→  equalProfit: { stakeA: number; stakeB: number; profit: number };
+   397→  /** v19.0 — تخصیص شتاب‌دهنده نامتقارن (Asymmetric Alpha Staking) — پیش‌فرض فعال:
+   398→   *  ۶۵ واحد روی تیپ A (~۲.۱۰x) + ۳۵ واحد روی تیپ B (~۳.۱۰x):
+   399→   *  برد A = +۳۶.۵u · برد B = اصل پول + ۸.۵٪ · برد همزمان 1-0/2-0 = جک‌پات +۱۴۵u */
+   400→  accelerator?: {
+   401→    active: boolean;
+   402→    stakeA: number;
+   403→    stakeB: number;
+   404→    profitOnA: number;
+   405→    profitOnB: number;
+   406→    /** کمینه سود دو بال — «سود تضمینی» کارت با استیک نامتقارن */
+   407→    guaranteed: number;
+   408→    profitOnDoubleWin: number;
+   409→    note: string;
+   410→  };
+   411→  kelly: { fA: number; fB: number; growth: number };
+   412→  /** لبه CLV تقریبی نسبت به خط شارپ پیناکل (null = خط سینتتیک/در دسترس نیست) */
+   413→  sharpEdgePct: number | null;
+   414→  /** v5.0 — متادیتای الگوی متعامد (روی فلش‌کارت نمایش داده می‌شود) */
+   415→  archetype?: { code: string; name: string; short: string; rationale: string; orthogonalityPct: number; coveragePct: number; overlapPct: number };
+   416→  trap: { verdict: "NONE" | "WARNING" | "CRITICAL"; title: string; message: string };
+   417→  verdict: string;
+   418→}
+   419→
+   420→/** خروجی کامل ایجنت پرتفوی (مونت‌کارلو کاپولا + کلِی همزمان) */
+   421→export interface PortfolioResultDTO {
+   422→  success: boolean;
+   423→  primary: {
+   424→    matchId: string;
+   425→    matchLabel: string;
+   426→    lambdaHome: number;
+   427→    lambdaAway: number;
+   428→    /** v9.0 — شفافیت کامل λ: الگوی Odds بازار / آمار فصل / ترکیبی نهایی */
+   429→    lambdaMarketHome: number | null;
+   430→    lambdaMarketAway: number | null;
+   431→    lambdaStatsHome: number;
+   432→    lambdaStatsAway: number;
+   433→    lambdaFitError: number | null;
+   434→    lambdaCalibrationHome: number;
+   435→    lambdaCalibrationAway: number;
+   436→  };
+   437→  /** v9.0 — متن قوانین فعال کالیبراسیون لیگ این بازی (برای سطر فلش‌کارت) */
+   438→  calibrationRule: string[];
+   439→  monteCarlo: {
+   440→    sims: number;
+   441→    pHome: number;
+   442→    pDraw: number;
+   443→    pAway: number;
+   444→    pOver25: number;
+   445→    pBtts: number;
+   446→    cornersOver95: number;
+   447→    cardsOver35: number;
+   448→    avgCorners: number;
+   449→    avgCards: number;
+   450→    corrGoalsCorners: number;
+   451→  };
+   452→  selections: PortfolioSelectionDTO[];
+   453→  pairs: PortfolioPairDTO[];
+   454→  recommendedId: string | null;
+   455→  batchId: string | null;
+   456→  bankroll: number;
+   457→  /**
+   458→   * v17.0 — مسیریاب غیرخطی ۵ رژیمی Bet-Type (Non-Linear Multi-Regime Router):
+   459→   * سنجه‌های آنتروپی/Rλ/Top4 ماتریس ۶×۶ + کاندیدهای ۴ روش تک‌بازی با امتیاز
+   460→   * Non-Linear Sharpe & Kelly Utility + واریانت برنده سوپروایزر.
+   461→   */
+   462→  betTypeRouter?: import("./engine/betrouter").BetTypeRouteResult | null;
+   463→}
+   464→
+   465→// ═══════════════════════════════════════════════════════
+   466→// v5.0 — منابع ضرایب رایگان (Free Odds APIs)
+   467→// ═══════════════════════════════════════════════════════
+   468→
+   469→export type OddsSourceKey = "ESPN_CORE" | "POLYMARKET" | "THE_ODDS_API" | "ODDS_API_IO" | "FOOTBALL_DATA";
+   470→
+   471→/** وضعیت سلامت هر منبع ضرایب (مودال API + جدول مقایسه‌ای تب ۲) */
+   472→export interface OddsSourceStatusDTO {
+   473→  key: OddsSourceKey;
+   474→  label: string;
+   475→  ok: boolean;
+   476→  detail: string;
+   477→  latencyMs: number;
+   478→  keyRequired: boolean;
+   479→  keyPresent: boolean;
+   480→  signupUrl: string;
+   481→  docsUrl: string;
+   482→  oddsCount: number;
+   483→}
+   484→
+   485→/** یک سطر جدول مقایسه ضرایب بین منابع */
+   486→export interface OddsComparisonRowDTO {
+   487→  source: string;
+   488→  sourceLabel: string;
+   489→  home: number | null;
+   490→  draw: number | null;
+   491→  away: number | null;
+   492→  note: string;
+   493→}
+   494→
+   495→/** فید واقعی Football-Data.co.uk برای بک‌تست CLV */
+   496→export interface FootballDataDTO {
+   497→  success: boolean;
+   498→  leagueName: string;
+   499→  season: string;
+   500→  rows: {
+   501→    date: string;
+   502→    homeTeam: string;
+   503→    awayTeam: string;
+   504→    fthg: number | null;
+   505→    ftag: number | null;
+   506→    psh: number | null;
+   507→    psd: number | null;
+   508→    psa: number | null;
+   509→    pOver25: number | null;
+   510→    pUnder25: number | null;
+   511→  }[];
+   512→}
+   513→
+   514→/** گزارش شوک T-60 — اعلام ترکیب رسمی و بازمحاسبه قدرت با VAEP/xT */
+   515→export interface LineupShockDTO {
+   516→  success: boolean;
+   517→  matchId: string;
+   518→  home: {
+   519→    team: string;
+   520→    xiVaep: number;
+   521→    xiXt: number;
+   522→    fullStrengthVaep: number;
+   523→    shockDelta: number;
+   524→    missingKeyPlayers: { name: string; position: string; xT: number; vaep: number; status: string }[];
+   525→    unavailableCount: number;
+   526→  };
+   527→  away: {
+   528→    team: string;
+   529→    xiVaep: number;
+   530→    xiXt: number;
+   531→    fullStrengthVaep: number;
+   532→    shockDelta: number;
+   533→    missingKeyPlayers: { name: string; position: string; xT: number; vaep: number; status: string }[];
+   534→    unavailableCount: number;
+   535→  };
+   536→  isShock: boolean;
+   537→  message: string;
+   538→  topPlayers: {
+   539→    side: "HOME" | "AWAY";
+   540→    name: string;
+   541→    position: string;
+   542→    xT: number;
+   543→    vaep: number;
+   544→    status: string;
+   545→    isKey: boolean;
+   546→  }[];
+   547→  // ─── v6.0 — دیتای واقعی ESPN (Zero-Mock) ───
+   548→  /** OFFICIAL = ترکیب رسمی اعلام‌شده از summary · SEASON = آمار فصل واقعی (پیش از اعلام) */
+   549→  mode?: "OFFICIAL" | "SEASON" | "UNAVAILABLE";
+   550→  fetchedAt?: string;
+   551→  /** اندپوینت‌های واقعی استفاده‌شده — برای باکس راستی‌آزمایی */
+   552→  sources?: string[];
+   553→  espnEventUrl?: string | null;
+   554→  espnEventId?: string | null;
+   555→  players?: { home: LineupPlayerDTO[]; away: LineupPlayerDTO[] };
+   556→  /** v6.0 — پیش‌نمایش غیبت بازیکن واقعی (کلیک کاربر روی کلید وضعیت) */
+   557→  absPreview?: LineupAbsPreviewDTO | null;
+   558→}
+   559→
+   560→/** v6.0 — بازیکن واقعی از Roster/Summary API با آمار فصل جاری */
+   561→export interface LineupPlayerDTO {
+   562→  name: string; // displayName واقعی ESPN
+   563→  position: string; // GK | DEF | MID | FW (از position.abbreviation)
+   564→  age: number | null;
+   565→  appearances: number | null; // بازی فصل جاری
+   566→  goals: number | null; // گل واقعی فصل
+   567→  assists: number | null; // پاس گل واقعی فصل
+   568→  shotsOnTarget: number | null;
+   569→  /** شاخص VAEP واقعی: (G×۰.۳۵ + A×۰.۲۵ + SoT×۰.۰۸) / appearances */
+   570→  vaep: number | null;
+   571→  /** شاخص تهدید (xT تقریبی): (G×۰.۴۵ + A×۰.۳۰ + SoT×۰.۱۰) / appearances */
+   572→  xT: number | null;
+   573→  starter: boolean | null; // فقط در حالت OFFICIAL
+   574→  status: "STARTER" | "BENCH" | "SQUAD" | "NO_STATS";
+   575→  isKey: boolean; // ۴ شاخص برتر تیم بر اساس VAEP واقعی
+   576→}
+   577→
+   578→/** v6.0 — اثر غیبت یک بازیکن واقعی روی λ و احتمالات */
+   579→export interface LineupAbsPreviewDTO {
+   580→  name: string;
+   581→  side: "HOME" | "AWAY";
+   582→  vaepShare: number; // سهم بازیکن از VAEP ترکیب
+   583→  shockDelta: number; // دلتای اعمال‌شده روی λ
+   584→  lambdaHome: number;
+   585→  lambdaAway: number;
+   586→  pHome: number;
+   587→  pDraw: number;
+   588→  pAway: number;
+   589→  baseline: { lambdaHome: number; lambdaAway: number; pHome: number; pDraw: number; pAway: number };
+   590→}
+   591→
+   592→/** سیگنال پوشش زنده (In-Play Hedge Trigger) */
+   593→export interface LiveHedgeDTO {
+   594→  success: boolean;
+   595→  minute: number;
+   596→  scenario: string;
+   597→  scenarioLabel: string;
+   598→  score: string;
+   599→  remainingLambdas: { home: number; away: number };
+   600→  updatedProbs: { home: number; draw: number; away: number };
+   601→  fairLiveOdds: { home: number; draw: number; away: number };
+   602→  marketLiveOdds: { home: number; draw: number; away: number };
+   603→  preBet: { selection: string; label: string; odds: number; stake: number };
+   604→  hedge: {
+   605→    targetOdds: number;
+   606→    targetLabel: string;
+   607→    stake: number;
+   608→    profitIfPre: number;
+   609→    profitIfHedge: number;
+   610→  } | null;
+   611→  holdEV: number;
+   612→  recommendation: "HEDGE" | "HOLD";
+   613→  message: string;
+   614→}
+   615→
+   616→// ═══════════════════════════════════════════════════════
+   617→// v9.0 — بردار قانون فعال کالیبراسیون (Active Calibration Rule Vector)
+   618→// ═══════════════════════════════════════════════════════
+   619→
+   620→/** یک قانون فعال لیگ — کلاینت‌سِیف (خروجی GET /api/calibration/rules) */
+   621→export interface ActiveRuleDTO {
+   622→  league: string;
+   623→  /** تعداد بازی‌های تسویه‌شده مبنای قانون */
+   624→  sample: number;
+   625→  /** ٪ انحراف میانگین گل واقعی از λ پیش‌بینی */
+   626→  goalBiasPct: number | null;
+   627→  /** ضریب اعمالی روی λ موتور (مثلاً ۰.۹۴ = −۶٪) */
+   628→  lambdaMultiplier: number;
+   629→  /** پاداش/جریمه عددی UtilityScore هر الگو (A1..A5) */
+   630→  archetypeBoosts: Record<string, number>;
+   631→  archetypeHitRate: Record<string, { wins: number; total: number; profit: number }>;
+   632→  /** متن قوانین فعال فارسی */
+   633→  rules: string[];
+   634→  /** نشان «⚡ اعمال‌شده در فرمول سوپروایزر» */
+   635→  applied: boolean;
+   636→}
+   637→
+   638→/** داشبورد کالیبراسیون (امتیاز بریر + اصلاح خودکار) */
+   639→export interface CalibrationDTO {
+   640→  success: boolean;
+   641→  overall: {
+   642→    count: number;
+   643→    avgBrier: number;
+   644→    hitRate: number;
+   645→    avgPredicted: number;
+   646→    brierSkillVsRandom: number; // 1 − Brier/0.25
+   647→    brierSkillScore: number; // BSS استاندارد = (1 − Brier/0.25) × 100
+   648→    pinnacleBrier: number; // خط مرجع پیناکل = 0.192
+   649→    vsPinnacleDelta: number; // بریر مدل منهای بریر پیناکل (منفی = بهتر از پیناکل)
+   650→  };
+   651→  byLeague: {
+   652→    league: string;
+   653→    count: number;
+   654→    avgBrier: number;
+   655→    hitRate: number;
+   656→    calibrationFactor: number; // ضریب اصلاحی اعمال‌شده در تحلیل بعدی
+   657→    note: string;
+   658→  }[];
+   659→  buckets: { bucket: string; predicted: number; observed: number; n: number }[];
+   660→  logs: {
+   661→    id: string;
+   662→    matchLabel: string;
+   663→    league: string;
+   664→    pick: string;
+   665→    predictedProb: number;
+   666→    outcome: string;
+   667→    brier: number;
+   668→    lesson: string | null;
+   669→  }[];
+   670→  lessons: string[];
+   671→}
+   672→
+   673→// ═══════════════════════════════════════════════════════
+   674→// v7.0 — موتور تسویه خودکار پس از پایان بازی (Automated Post-Match Grader)
+   675→// ═══════════════════════════════════════════════════════
+   676→
+   677→/** یک شرط (Leg) از تیپ — با شناسه ESPN بازی برای تسویه میکس دو بازی */
+   678→export interface SettlementLegDTO {
+   679→  key: string; // HOME | DRAW | AWAY | DC_1X | DC_X2 | O25 | U25 | O15 | U35 | BTTS_Y | ...
+   680→  matchExternalId?: string | null; // espn-<slug>-<id> — پیش‌فرض همان بازی کارت
+   681→  matchLabel?: string | null;
+   682→}
+   683→
+   684→export type SlipStatus = "PENDING" | "LIVE" | "WON_A" | "WON_B" | "DOUBLE_WIN" | "MIDDLE_TRAP" | "MANUAL_REVIEW" | "VOID";
+   685→
+   686→/** ردیف کارنامه — کارت صادرشده با تیپ A/B داچینگ و وضعیت تسویه */
+   687→export interface IssuedSlipDTO {
+   688→  id: string;
+   689→  hash: string; // SHA-256 سند راستی‌آزمایی
+   690→  externalId: string | null;
+   691→  league: string;
+   692→  homeTeam: string;
+   693→  awayTeam: string;
+   694→  kickoff: string;
+   695→  labelA: string;
+   696→  labelB: string;
+   697→  legsA: SettlementLegDTO[];
+   698→  legsB: SettlementLegDTO[];
+   699→  oddsA: number;
+   700→  oddsB: number;
+   701→  stakeA: number;
+   702→  stakeB: number;
+   703→  guaranteedProfit: number;
+   704→  marginPct: number;
+   705→  archetype: string | null;
+   706→  /** v9.0 — کد الگو (A1..A5) برای حلقه فعال کالیبراسیون */
+   707→  archetypeCode: string | null;
+   708→  /** v9.0 — λ ترکیبی نهایی مدل در لحظه صدور (مبنای انحراف گلزنی لیگ) */
+   709→  lambdaHome: number | null;
+   710→  lambdaAway: number | null;
+   711→  /** v9.0 — فقط کارت‌های تایید سوپروایزر به تلگرام می‌روند */
+   712→  supervisorApproved: boolean;
+   713→  /** v9.0 — صادرشده توسط خط لوله خودکار سرور (Zero-Click) */
+   714→  autoIssued: boolean;
+   715→  /** v13.2 — کارت بازخوانی (بازی FT پیش از صدور) — مستثنا از وین‌ریت واقعی و اعلام کانال */
+   716→  retroIssued: boolean;
+   717→  // ─── v11.0 — دفتر سایه (Shadow Ledger) ───
+   718→  supervisorScore: number | null;
+   719→  vetoReason: string | null;
+   720→  jointLossRiskPct: number | null;
+   721→  doubleWinProbPct: number | null;
+   722→  /** v18.0 — سطح تاج: GOLD (استیک کامل ۱۰۰u) | SILVER_SHADOW (استیک نصف ۵۰u) | null */
+   723→  crownTier: string | null;
+   724→  /** v19.0 — خط تولید Bet-Type (SINGLE/COMBO/BANKER/CORRECT_SCORE/ACCUMULATOR) — ویترین ۵ رژیم */
+   725→  productLine: string | null;
+   726→  espnUrl: string | null;
+   727→  status: SlipStatus;
+   728→  homeGoals: number | null;
+   729→  awayGoals: number | null;
+   730→  profitA: number | null;
+   731→  profitB: number | null;
+   732→  netProfit: number | null;
+   733→  settledAt: string | null;
+   734→  settleNote: string | null;
+   735→  telegramCard: boolean;
+   736→  telegramTeaser: boolean;
+   737→  telegramResult: boolean;
+   738→  // ─── v10.0 — ارزش عددی پیناکل + پنجره زمانی طلایی ثبت ───
+   739→  pinnacleOddsA: number | null;
+   740→  pinnacleOddsB: number | null;
+   741→  edgeA: number | null;
+   742→  edgeB: number | null;
+   743→  edgeSourceA: string | null;
+   744→  edgeSourceB: string | null;
+   745→  modelProbA: number | null;
+   746→  modelProbB: number | null;
+   747→  tipKindA: string | null;
+   748→  tipKindB: string | null;
+   749→  timingWindowA: string | null;
+   750→  timingWindowB: string | null;
+   751→  timingStartA: string | null;
+   752→  timingEndA: string | null;
+   753→  timingStartB: string | null;
+   754→  timingEndB: string | null;
+   755→  createdAt: string;
+   756→}
+   757→
+   758→/** آمار تجمیعی کارنامه */
+   759→export interface SettlementStatsDTO {
+   760→  total: number;
+   761→  pending: number;
+   762→  live: number;
+   763→  wonA: number;
+   764→  wonB: number;
+   765→  doubleWin: number;
+   766→  middleTrap: number;
+   767→  manual: number;
+   768→  void: number;
+   769→  settled: number;
+   770→  netProfit: number;
+   771→  /** سود خالص نسبت به مجموع استیک‌های تسویه‌شده (٪) */
+   772→  netProfitPct: number;
+   773→  staked: number;
+   774→  /** ═══ v20.0 — سنجه‌های واحد منبع حقیقت (computeMasterLedgerMetrics) ═══ */
+   775→  /** تعداد برد (wonA + wonB + doubleWin) — تعریف واحد برد در کل سیستم */
+   776→  wins: number;
+   777→  /** تعداد باخت کامل (middleTrap) */
+   778→  losses: number;
+   779→  /** وین‌ریت واقعی = wins ÷ settled × ۱۰۰ */
+   780→  winRatePct: number | null;
+   781→  /** Yield/ROI واقعی روی حجم استیک = netProfit ÷ staked × ۱۰۰ */
+   782→  yieldPct: number | null;
+   783→  /** رشد بانک ۱۰۰۰ واحدی = netProfit ÷ ۱۰۰۰ × ۱۰۰ */
+   784→  bankGrowthPct: number;
+   785→}
+   786→
+   787→/** خروجی همگام‌سازی و تسویه خودکار با سرور ESPN */
+   788→export interface SettlementSyncResultDTO {
+   789→  success: boolean;
+   790→  checkedEspn: number; // تعداد رخدادهای ESPN بررسی‌شده (۳ روز + امروز — v9.0)
+   791→  ftFound: number; // تعداد بازی‌های FT یافت‌شده
+   792→  settled: { id: string; matchLabel: string; status: SlipStatus; netProfit: number }[];
+   793→  live: number;
+   794→  notified: number; // پیام‌های تلگرام ارسال‌شده
+   795→  /** v9.0 — خروجی خط لوله ثبت خودکار بازی‌های ۳ روز اخیر */
+   796→  autoRegistered?: { scanned: number; past: number; today: number; vetoed: number; skippedExisting: number };
+   797→  elapsedMs: number;
+   798→  error?: string;
+   799→}
+   800→
+   801→/**
+   802→ * v21.0 — آمار تفکیکی بانک در یک بازه (روز / هفته / ماه) — ماژول حرفه‌ای منحنی بانک.
+   803→ * هر ردیف: تغییر خالص بانک + تعداد بازی‌های روز + برد/باخت + سطح بانک پایان دوره.
+   804→ */
+   805→export interface BankPeriodStat {
+   806→  /** کلید مرتب‌سازی زمانی (اندیس روز/هفته/ماه با شیفت تهران) */
+   807→  key: string;
+   808→  /** برچسب نمایشی شمسی (مثل «۱۶ آبان» یا «آبان» یا «هفتهٔ ۱۲ آبان») */
+   809→  label: string;
+   810→  /** تغییر خالص بانک در این بازه (واحد) */
+   811→  netProfit: number;
+   812→  /** تعداد بازی‌های تسویه‌شده در این بازه */
+   813→  settled: number;
+   814→  /** تعداد برد (WON_A / WON_B / DOUBLE_WIN) */
+   815→  wins: number;
+   816→  /** تعداد باخت (MIDDLE_TRAP — تله میانی) */
+   817→  losses: number;
+   818→  /** سطح بانک در پایان این بازه (واحد) */
+   819→  bankAtEnd: number;
+   820→}
+   821→
+   822→/** خروجی کامل کارنامه + صندوق تلگرام */
+   823→export interface LedgerDTO {
+   824→  success: boolean;
+   825→  /** v20.0 — جدول کارنامه فقط «کتاب رسمی» است (تاییدشده غیربازخوانی)؛ سایه/بازخوانی در دو ویو جدا */
+   826→  slips: IssuedSlipDTO[];
+   827→  /** v20.0 — ویو کارت‌های وتوشده دفتر سایه (تسویه کاغذی — بدون تیک جکپات در جدول رسمی) */
+   828→  shadowSlips: IssuedSlipDTO[];
+   829→  /** v20.0 — ویو کارت‌های بازخوانی (تحلیل کاغذی پس از FT) */
+   830→  retroSlips: IssuedSlipDTO[];
+   831→  stats: SettlementStatsDTO;
+   832→  /**
+   833→   * v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown):
+   834→   * سود خالص/وین‌ریت/میانگین سود هر برد هر یک از ۵ استراتژی — با افراز مجزا
+   835→   * (هر کارت فقط در خط تولید خودش شمرده می‌شود) — اعداد کاملاً از کارنامه واقعی ESPN.
+   836→   */
+   837→  regimes: {
+   838→    key: "DUAL_HEDGE" | "COMBO" | "CORRECT_SCORE" | "BANKER" | "ACCUMULATOR" | "SNIPER";
+   839→    labelFa: string;
+   840→    labelEn: string;
+   841→    icon: string;
+   842→    settled: number;
+   843→    wins: number;
+   844→    winRatePct: number | null;
+   845→    netProfit: number;
+   846→    avgProfitPerWin: number | null;
+   847→  }[];
+   848→  /** v11.0 — دفتر سایه: آمار تسویه کاغذی کارت‌های وتوشده سوپروایزر (بدون تلگرام) */
+   849→  shadow: {
+   850→    total: number;
+   851→    settled: number;
+   852→    wins: number;
+   853→    losses: number;
+   854→    winRate: number | null;
+   855→    netProfit: number;
+   856→    byStatus: Record<string, number>;
+   857→  };
+   858→  /** v13.2 — دفتر بازخوانی: کارت‌های چندروزه که هرگز پیش‌بازی صادر نشده‌اند (جدا از آمار واقعی) */
+   859→  retroBook: {
+   860→    total: number;
+   861→    settled: number;
+   862→    wins: number;
+   863→    losses: number;
+   864→    winRate: number | null;
+   865→    netProfit: number;
+   866→  };
+   867→  /**
+   868→   * v18.0 — 🥈 حصاد آلفای سایه (Tier-2 Shadow Alpha Harvester):
+   869→   * آمار کارت‌های تاج نقره‌ای سطح ۲ که به‌جای حبس در دفتر کاغذی با استیک نصف
+   870→   * ۵۰ واحدی Half-Kelly منتشر و تسویه واقعی شدند + منحنی بانک جداگانه.
+   871→   */
+   872→  silverHarvest: {
+   873→    total: number;
+   874→    settled: number;
+   875→    wins: number;
+   876→    losses: number;
+   877→    winRate: number | null;
+   878→    netProfit: number;
+   879→    /** منحنی رشد بانک جداگانه کارت‌های نقره‌ای (استیک ۵۰u) — همان START_BANK=1000 */
+   880→    equityPoints: number[];
+   881→    finalBank: number;
+   882→    roiPct: number;
+   883→  };
+   884→  outbox: { id: string; kind: string; ok: boolean; detail: string | null; slipHash: string | null; createdAt: string }[];
+   885→  telegram: { configured: boolean; channelSet: boolean };
+   886→  // ─── v10.0 — ژورنال + دفتر دکترین + وضعیت اتوماسیون سرور + مبنا واحد ───
+   887→  journal: JournalEntryDTO[];
+   888→  doctrine: DoctrineSummaryDTO[];
+   889→  automation: { schedulerActive: boolean; lastTickAt: string | null; lastDailyReportAt: string | null; intervalSec: number };
+   890→  unitBasis: { stakePerTicket: number; unitPctOfBankroll: number; exampleBankrollUsd: number };
+   891→  /**
+   892→   * v13.5 — منحنی رشد بانک ۱۰۰۰ واحدی (محاسبه سمت سرور از «تمام» تاریخ کارنامه).
+   893→   * رفع باگ قبلی: منحنی فقط از ۱۲۰ ردیف آخر دیتابیس ساخته می‌شد و کارت‌های بازخوانی
+   894→   * (retroIssued) را هم شامل می‌شد → انتهای منحنی با «سود خالص مجموع» تیتر یکی نبود.
+   895→   * اکنون سرور همه کارت‌های تاییدشده غیربازخوانی تسویه‌شده را به‌ترتیب settledAt جمع می‌زند
+   896→   * و نقطه اول دقیقاً ۱۰۰۰ و نقطه آخر دقیقاً ۱۰۰۰ + stats.netProfit است.
+   897→   */
+   898→  equity: {
+   899→    startBank: number;
+   900→    points: number[];
+   901→    finalBank: number;
+   902→    roiPct: number;
+   903→    /** تعداد کارت‌های واقعاً لحاظ‌شده در منحنی (هم‌مبنا با stats.settled) */
+   904→    basis: number;
+   905→    /** v13.5.1 — بازه زمانی واقعی تسویه‌های منحنی برای برچسب محور نمودار */
+   906→    firstSettledAt: string | null;
+   907→    lastSettledAt: string | null;
+   908→    /**
+   909→     * v21.0 — ماژول حرفه‌ای منحنی بانک (Bank Growth Analytics):
+   910→     * سری زمان‌دار کامل + تجمیع روزانه/هفتگی/ماهانه + streak/drawdown.
+   911→     */
+   912→    series: { t: string; v: number }[];
+   913→    /** تغییرات روزانه — ۱۴ روز اخیر تهران (شامل روزهای خالی) */
+   914→    daily: BankPeriodStat[];
+   915→    /** تغییرات هفتگی — ۸ هفته اخیر */
+   916→    weekly: BankPeriodStat[];
+   917→    /** تغییرات ماهانه — ۶ ماه اخیر */
+   918→    monthly: BankPeriodStat[];
+   919→    /** رگبار فعلی (برد/باخت متوالی) از آخرین تسویه رسمی */
+   920→    streak: { type: "W" | "L" | null; count: number };
+   921→    /** بیشترین افت سرمایه تاریخی (peak-to-trough ٪) */
+   922→    maxDrawdownPct: number;
+   923→    /** اوج تاریخی بانک */
+   924→    peakBank: number;
+   925→  };
+   926→  /**
+   927→   * v18.0 — نبض کارنامه: تشخیص شفاف «چرا آمار/وین‌ریت/منحنی تغییری نکرده».
+   928→   * آمار رسمی فقط کارت‌های تایید سوپروایزر را می‌شمارد؛ اگر گیت v16 همه کارت‌های
+   929→   * تازه را وتو کند، منحنی تخت می‌ماند — این نبض همان وضعیت را عددی نشان می‌دهد.
+   930→   */
+   931→  pulse: {
+   932→    /** آخرین تسویه رسمی (ISO) */
+   933→    lastSettledAt: string | null;
+   934→    /** تسویه‌های رسمی ۷ روز اخیر */
+   935→    settled7d: number;
+   936→    /** تسویه‌های رسمی امروز تهران */
+   937→    settledToday: number;
+   938→    /** کارت‌های تاییدشده در انتظار نتیجه (همه تاریخ‌ها) */
+   939→    pendingApproved: number;
+   940→    /** کارت‌های تاییدشده بازی‌های امروز تهران (در انتظار کیک‌آف/زنده) */
+   941→    approvedLiveToday: number;
+   942→    /** مجموع کارت‌های وتوشده سوپروایزر (دفتر سایه — زنده) */
+   943→    vetoedTotal: number;
+   944→  };
+   945→  /** ═══ v20.0 — خروجی رسمی computeMasterLedgerMetrics — تنها منبع آمار همه باکس‌ها ═══ */
+   946→  master: {
+   947→    total: number;
+   948→    settled: number;
+   949→    wins: number;
+   950→    losses: number;
+   951→    winRatePct: number | null;
+   952→    netProfit: number;
+   953→    totalStaked: number;
+   954→    yieldPct: number | null;
+   955→    bankGrowthPct: number;
+   956→    finalBank: number;
+   957→  };
+   958→}
+   959→
+   960→/** آیتم صدور کارت از سبد فلش‌کارت‌ها (بدنه POST /api/settlement/issue) */
+   961→export interface JournalEntryDTO {
+   962→  id: string;
+   963→  league: string;
+   964→  matchLabel: string;
+   965→  status: string;
+   966→  netProfit: number | null;
+   967→  archetypeCode: string | null;
+   968→  timingWindow: string | null;
+   969→  lesson: string;
+   970→  createdAt: string;
+   971→}
+   972→
+   973→/** یک دکترین ثبت‌شده در دفتر یادگیری */
+   974→export interface DoctrineSummaryDTO {
+   975→  id: string;
+   976→  kind: string; // LEAGUE_LAMBDA | ARCHETYPE | TIMING_WINDOW
+   977→  scope: string;
+   978→  summary: string;
+   979→  multiplier: number;
+   980→  sampleSize: number;
+   981→  netProfit: number;
+   982→  winRate: number;
+   983→  active: boolean;
+   984→  updatedAt: string;
+   985→}
+   986→
+   987→/** آیتم صدور کارت از سبد فلش‌کارت‌ها (بدنه POST /api/settlement/issue) */
+   988→export interface IssueSlipItemDTO {
+   989→  match: {
+   990→    id: string;
+   991→    externalId?: string | null;
+   992→    league: string;
+   993→    homeTeam: string;
+   994→    awayTeam: string;
+   995→    kickoff: string;
+   996→    espnUrl?: string | null;
+   997→  };
+   998→  labelA: string;
+   999→  labelB: string;
+  1000→  legsA: SettlementLegDTO[];
+  1001→  legsB: SettlementLegDTO[];
+  1002→  oddsA: number;
+  1003→  oddsB: number;
+  1004→  stakeA?: number; // اگر نیاید — داچینگ سود برابر روی مجموع ۱۰۰ واحد
+  1005→  stakeB?: number;
+  1006→  guaranteedProfit: number;
+  1007→  marginPct: number;
+  1008→  archetype?: string | null;
+  1009→  /** v9.0 — کد الگو (A1..A5) */
+  1010→  archetypeCode?: string | null;
+  1011→  /**
+  1012→   * v17.0 — خط تولید Bet-Type برای افراز مجزای کارنامه:
+  1013→   * SINGLE (زوج‌تیپ) | COMBO (کمبوی رسمی) | BANKER (تک‌ستون امن) | CS_CLUSTER (خوشه نتیجه دقیق) | SNIPER
+  1014→   */
+  1015→  productLine?: string | null;
+  1016→  lambdaHome?: number | null;
+  1017→  lambdaAway?: number | null;
+  1018→  /**
+  1019→   * v19.0 — احتمال مدل فراخلب (Override) برای کارت‌های میکس چندبازی:
+  1020→   * آکومولاتور چندبازی را نمی‌توان با ماتریس تک‌بازی ارزیابی کرد — احتمال واقعی
+  1021→   * = حاصل‌ضرب احتمال هر پای مستقل (از ماتریس دیکسون-کولز همان بازی).
+  1022→   */
+  1023→  modelProbAOverride?: number | null;
+  1024→  modelProbBOverride?: number | null;
+  1025→  /**
+  1026→   * v10.0 — خط شارپ مرجع (Pinnacle) برای هر انتخاب مستقیم:
+  1027→   * کلید = کلید بازار (HOME/DRAW/AWAY/DC_1X/DC_X2/O25/U25) — فقط وقتی ردیف قیمت
+  1028→   * واقعاً PINNACLE باشد پاس می‌شود؛ در غیر این صورت مرجع، خط منصفانه موتور است.
+  1029→   */
+  1030→  pinnaclePrices?: Partial<Record<string, number>>;
+  1031→  /** v9.0 — بازی وتوشده سوپروایزر هرگز صدور/ارسال نمی‌شود */
+  1032→  supervisorApproved?: boolean;
+  1033→  /**
+  1034→   * v13.2 — کارت بازخوانی: بازی هنگام صدور از قبل FT بوده است (خط لوله چندروزه).
+  1035→   * هرگز پیش از بازی صادر و منتشر نشده — فقط تسویه کاغذی تحلیلی برای یادگیری دکترین؛
+  1036→   * از وین‌ریت کانال، اعلام نتایج و دسته الف مستثناست.
+  1037→   */
+  1038→  retroIssued?: boolean;
+  1039→  /** v11.0 — دفتر سایه: سنجه‌های لحظه تصمیم سوپروایزر برای کارت‌های واقعی و سایه */
+  1040→  supervisorScore?: number | null;
+  1041→  vetoReason?: string | null;
+  1042→  jointLossRiskPct?: number | null;
+  1043→  doubleWinProbPct?: number | null;
+  1044→  /**
+  1045→   * v18.0 — سطح تاج کارت (Two-Tier Crown System):
+  1046→   * "GOLD" = تاج طلایی سطح ۱ (استیک کامل ۱۰۰u) | "SILVER_SHADOW" = تاج نقره‌ای سطح ۲
+  1047→   * (شکارچی آلفای سایه — استیک نصف ۵۰u به روش Half-Kelly) | null = بدون سطح‌بندی
+  1048→   */
+  1049→  crownTier?: string | null;
+  1050→}
+  1051→
+  1052→/** v11.0 — آمار عملکرد یک دسته فلش‌کارت (تایید/وتو/سود۱۵/ریسک۱۰/دوبل‌وین) */
+  1053→export interface CategoryPerformanceDTO {
+  1054→  // v13.4 — کلیدهای فیلتر دک فلش‌کارت (RISK10/BOOSTER/PROFIT15/FORTRESS) برای «پوشش کامل عملکرد هر فیلتر» اضافه شدند
+  1055→  // v13.2 — RETRO: دسته پنجم افراز مجزا — کارت‌های بازخوانی (بازی FT پیش از صدور؛ تسویه کاغذی تحلیلی)
+  1056→  // v17.0 — کلیدهای عملکرد ۵ روش Bet-Type (BANKER / CS_CLUSTER) به افراز مجزا اضافه شدند
+  1057→  key: "APPROVED" | "VETOED" | "COMBO" | "SNIPER" | "RETRO" | "RISK10" | "BOOSTER" | "PROFIT15" | "FORTRESS" | "BANKER" | "CS_CLUSTER" | "SHADOW_ALPHA" | "TOTAL";
+  1058→  label: string;
+  1059→  description: string;
+  1060→  total: number;
+  1061→  settled: number;
+  1062→  pending: number;
+  1063→  wins: number;
+  1064→  losses: number;
+  1065→  winRate: number | null;
+  1066→  netProfit: number;
+  1067→  paper: boolean;
+  1068→  doubleWinHits: number;
+  1069→  avgGuaranteedProfitPct: number | null;
+  1070→  avgJointLossRiskPct: number | null;
+  1071→  avgDoubleWinProbPct: number | null;
+  1072→  /** v20.0 — Category ROI واقعی روی حجم استیک (netProfit ÷ totalStaked × ۱۰۰) */
+  1073→  roiPct?: number | null;
+  1074→  /** v20.0 — تعلیق خودکار کالیبراسیون (ROI منفی) */
+  1075→  suspended?: boolean;
+  1076→  /** v20.0 — دلیل تعلیق (متن سند) */
+  1077→  suspensionReason?: string | null;
+  1078→}
+  1079→
+  1080→export interface CategoryPerformanceResponseDTO {
+  1081→  success: boolean;
+  1082→  categories: CategoryPerformanceDTO[];
+  1083→  /** ═══ v20.0 — حلقه کالیبراسیون خودکار دسته‌ها (تعلیق ROI منفی + بهترین دسته سودده) ═══ */
+  1084→  calibration?: {
+  1085→    evaluatedAt: string;
+  1086→    bestCategory: string | null;
+  1087→    suspendedCount: number;
+  1088→    states: {
+  1089→      category: string;
+  1090→      labelFa: string;
+  1091→      settled: number;
+  1092→      winRatePct: number | null;
+  1093→      netProfit: number;
+  1094→      roiPct: number | null;
+  1095→      suspended: boolean;
+  1096→      reason: string | null;
+  1097→    }[];
+  1098→  };
+  1099→  /**
+  1100→   * v13.4 — پوشش کامل عملکرد هر «فیلتر دک فلش‌کارت» (RISK10/BOOSTER/PROFIT15/FORTRESS/APPROVED/VETOED).
+  1101→   * برخلاف `categories` (افراز ۱۰۰٪ مجزا)، این دسته‌ها همپوشان‌اند: یک کارت می‌تواند هم‌زمان
+  1102→   * در RISK10 و PROFIT15 شمرده شود. کارت‌های بازخوانی (retroIssued) از عملکرد واقعی حذف می‌شوند.
+  1103→   */
+  1104→  filterPerformance?: CategoryPerformanceDTO[];
+  1105→  shadowLedger: {
+  1106→    approvedSlips: number;
+  1107→    shadowSlips: number;
+  1108→    note: string;
+  1109→  };
+  1110→  /** v18.0 — حصاد آلفای سایه: آمار کارت‌های تاج نقره‌ای سطح ۲ (استیک ۵۰u Half-Kelly) */
+  1111→  silverHarvest?: {
+  1112→    total: number;
+  1113→    settled: number;
+  1114→    wins: number;
+  1115→    losses: number;
+  1116→    winRate: number | null;
+  1117→    netProfit: number;
+  1118→  };
+  1119→  generatedAt: string;
+  1120→}
+  1121→

@@ -36,6 +36,8 @@
 
 import type { PortfolioPairDTO } from "./types";
 import type { ActiveLeagueRule } from "./engine/calibration";
+// v19.0-restore — فیلتر طلایی ضریب همپوشانی مثبت: منبع واحد حقیقت سنجه‌های همپوشانی
+import { overlapMetricsOf, OVERLAP_MARGIN_MIN_PCT, OVERLAP_DOUBLE_WIN_MIN, OVERLAP_JOINT_LOSS_MAX_PCT } from "./engine/betrouter";
 import type { BetTypeKey } from "./engine/betrouter";
 
 /** v8.0 — حالت اجرایی ثبت شرط (سوییچ انطباق با قوانین سایت‌های شرط‌بندی) */
@@ -68,6 +70,29 @@ export const VETO_JOINT_LOSS_PCT = 9.8;
 export const VETO_WEAK_PROFIT_PCT = 0.5;
 /** v11.0 — آستانه «دژ نفوذناپذیر»: ریسک زیر ۷٪ + تایید سوپروایزر */
 export const FORTRESS_RISK_PCT = 7;
+
+/**
+ * v19.0-restore — فیلتر طلایی «ضریب همپوشانی مثبت» (Strict Positive Overlap Return Filter):
+ * هر زوج‌تیپ دوبال (تیپ A + تیپ B واقعی) باید هر ۴ شرط ریاضی همپوشانی مثبت را پاس کند:
+ *   ۱) impliedSum = 1/oddsA + 1/oddsB ≤ ۰.۸۶ (ضریب موثر ≥ 1.163x)
+ *   ۲) حاشیه سود تضمینی همپوشانی ≥ ۱۵٪
+ *   ۳) احتمال ناحیه برد دوبل همزمان (1-0/2-0) ≥ ۱۲٪
+ *   ۴) ریسک تله میانی ≤ ۱۱.۵٪
+ * هر مسابقه‌ای که حاشیه همپوشانی زیر ۱۵٪ یا بدون ناحیه برد دوبل باشد توسط سوپروایزر
+ * وتو شده و به دفتر سایه می‌رود — فقط مسابقات با ضریب همپوشانی مثبت +۱۶٪ تا +۳۵٪
+ * در برد تک‌بال و +۱۲۰ تا +۱۸۰ واحد در برد دوبل صادر می‌شوند.
+ */
+export function hasStrictPositiveOverlap(p: PortfolioPairDTO): { ok: boolean; reason: string | null } {
+  // فقط زوج‌های دوبال واقعی — تیپ B باید مارکت واقعی باشد (کارت‌های تک‌ستون بنکر معاف‌اند)
+  const dualWings = p.totalOddsB > 1.05 && (p.equalProfit?.stakeB ?? 0) > 0 && (p.structure.legsB?.length ?? 0) > 0;
+  if (!dualWings) return { ok: true, reason: null };
+  const m = overlapMetricsOf(p.totalOddsA, p.totalOddsB, p.jointStates.bothWin, p.jointStates.bothLose);
+  if (m.hasPositiveOverlap) return { ok: true, reason: null };
+  return {
+    ok: false,
+    reason: `🛡️ فیلتر ضریب همپوشانی مثبت v19.0-restore: ${m.failReason ?? ""} — وتو سوپروایزر و انتقال به دفتر سایه (فقط بازی‌های با حاشیه همپوشانی ≥ ${OVERLAP_MARGIN_MIN_PCT.toFixed(0)}٪ و ناحیه برد دوبل ≥ ${(OVERLAP_DOUBLE_WIN_MIN * 100).toFixed(0)}٪ و ریسک تله ≤ ${OVERLAP_JOINT_LOSS_MAX_PCT.toFixed(1)}٪ تایید می‌شوند)`,
+  };
+}
 
 /** خروجی امتیازدهی یک کاندید */
 export interface SupervisorScore {
@@ -212,12 +237,19 @@ export function scorePair(
   } else if (jointLossRiskPct > VETO_JOINT_LOSS_PCT_HARD_RED) {
     veto = true;
     vetoReason = `🚫 وتوی قرمز مطلق v18.0 (سطح ۳): ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۵٪ — بازی واقعاً خطرناک؛ فقط تسویه کاغذی دفتر سایه`;
-  } else if (jointLossRiskPct > riskCapPct) {
-    veto = true;
-    vetoReason =
-      regime === "DUAL_HEDGE"
-        ? `🛡️ گیت رژیم‌محور v19.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای سقف رژیم DUAL_HEDGE — وتو و انتقال به دفتر سایه`
-        : `🛡️ گیت سخت v19.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه مجاز — وتو خودکار و انتقال به دفتر سایه`;
+  } else {
+    // ═══ v19.0-restore — فیلتر طلایی ضریب همپوشانی مثبت (مقدم بر گیت‌های ریسک رژیم) ═══
+    const overlapGate = hasStrictPositiveOverlap(p);
+    if (!overlapGate.ok) {
+      veto = true;
+      vetoReason = overlapGate.reason;
+    } else if (jointLossRiskPct > riskCapPct) {
+      veto = true;
+      vetoReason =
+        regime === "DUAL_HEDGE"
+          ? `🛡️ گیت رژیم‌محور v19.0: ریسک باخت همزمان ${jointLossRiskPct.toFixed(1)}٪ بالای سقف رژیم DUAL_HEDGE — وتو و انتقال به دفتر سایه`
+          : `🛡️ گیت سخت v19.0: ریسک باخت همزمان دقیق ${jointLossRiskPct.toFixed(1)}٪ بالای آستانه مجاز — وتو خودکار و انتقال به دفتر سایه`;
+    }
   }
   if (!veto && lambdaCtx) {
     const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);

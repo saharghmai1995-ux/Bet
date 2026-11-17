@@ -1,0 +1,795 @@
+     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→// موتور مسیریابBet-Type — v22.0
+     3→// (NeoBet v22.0 — 100% Automated Live Odds, Zero Dual-Hedge Vig-Burn,
+     4→//  2-Leg 1.80x–2.25x Accumulator & Deep Single Pick Engine)
+     5→//
+     6→// سند v22.0:
+     7→//  · همپوشانی دو گزینه در یک بازی (Dual-Hedge Dutching) با کارمزد دوبل بوک‌میکر
+     8→//    فقط +5u سود در برابر -100u ریسک می‌دهد — کامل حذف شد.
+     9→//  · سه خط تولید استاندارد جهانی (استیک استاندارد ۱۰۰ واحد):
+    10→//    ۱) 🔗 میکس ۲ تایی هوشمند — ۲ پای مستقل با ضریب پای 1.34x..1.50x و
+    11→//       احتمال ۷۸..۸۴٪ → ضریب کل 1.80x..2.25x | برد +80..+125u | وین‌ریت پایه‌ها ~۶۷..۷۲٪
+    12→//    ۲) 🎯 تک‌گزینه عمیق کالیبره‌شده — تنها ۱ مارکت با ضریب زنده واقعی 1.72x..2.15x
+    13→//       و +EV Edge حداقل +۶٪ نسبت به خط زنده | برد +72..+115u
+    14→//    ۳) 🏦 تک‌ستون بنکر — عدم تقارن λ ≥ ۲.۲، احتمال ≥ ۷۸٪، ضریب زنده 1.45x..1.68x
+    15→//       (پایه‌های 1.34x..1.50x فقط خوراک میکس ۲ تایی) | برد +45..+68u
+    16→//  · قانون آهنین Strict Live-Odds: بازی فاقد ضریب زنده واقعی هرگز کارت نمی‌گیرد.
+    17→//
+    18→// برای هر بازی ابتدا سه سنجه ساختاری ماتریس محاسبه می‌شود:
+    19→//   · آنتروپی شانون ماتریس ۶×۶:  H = −Σ mat[i][j]·ln(mat[i][j])  (شاخص تمرکز/پراکندگی)
+    20→//   · نسبت عدم تقارن قدرت:        Rλ = max(λH, λA) / min(λH, λA)
+    21→//   · مجموع ۴ خانه برتر ماتریس:   Top4Sum
+    22→// سپس بازی به مناسب‌ترین خط تولید از ۲ خط تک‌بازی (BANKER / DEEP_VALUE) هدایت می‌شود؛
+    23→// خط سوم (🔗 میکس ۲ تایی) سطح-روز است و از پایه‌های بنکر ۲ بازی مستقل ساخته می‌شود.
+    24→// ─────────────────────────────────────────────────────────────────────────────
+    25→
+    26→import type { PortfolioPairDTO } from "../types";
+    27→// v21.0 — کالیبراسیون واقعی تابلوی 1xBet (computeRealistic1xBetOdds)
+    28→import { computeRealistic1xBetOdds, matchSeedOf } from "./orthogonal";
+    29→
+    30→// ═══════════════════════════════ تایپ‌ها ═══════════════════════════════
+    31→
+    32→/** v22.0 — DEEP_VALUE (تک‌گزینه عمیق کالیبره‌شده) به خانواده اضافه شد؛
+    33→ *  COMBO / CORRECT_SCORE / DUAL_HEDGE برای سازگاری دفتر تاریخی حفظ شده‌اند اما
+    34→ *  مسیریاب v22 دیگر هرگز آن‌ها را تولید نمی‌کند. */
+    35→export type BetTypeKey = "BANKER" | "COMBO" | "CORRECT_SCORE" | "DUAL_HEDGE" | "ACCUMULATOR" | "DEEP_VALUE";
+    36→
+    37→/** یک کاندید Bet-Type برای یک مسابقه — خروجی هر یک از ۴ روش تک‌بازی */
+    38→export interface BetTypeCandidate {
+    39→  key: BetTypeKey;
+    40→  /** شناسه یکتای واریانت — مثل BANKER:DC_1X یا COMBO:1X_U35 یا CS4 */
+    41→  variantId: string;
+    42→  /** برچسب فارسی استراتژی */
+    43→  labelFa: string;
+    44→  /** برچسب انگلیسی رسمی */
+    45→  labelEn: string;
+    46→  /** ایموجی نشان استراتژی */
+    47→  icon: string;
+    48→  /** شرح کوتاه انتخاب غیرخطی (چرا این روش برای این بازی؟) */
+    49→  rationale: string;
+    50→  // ─── تیپ اصلی (A) ───
+    51→  mainLabel: string;
+    52→  mainLabelEn: string;
+    53→  mainOdds: number;
+    54→  mainProb: number;
+    55→  /** کلیدهای پا برای صدور/تسویه (SelectionKey سازگار با ماتریس) */
+    56→  mainLegs: string[];
+    57→  // ─── تیپ پوشش مکمل (B) — برای COMBO ───
+    58→  coverLabel?: string;
+    59→  coverLabelEn?: string;
+    60→  coverOdds?: number;
+    61→  coverProb?: number;
+    62→  coverLegs?: string[];
+    63→  // ─── سنجه‌های کلان ───
+    64→  /** احتمال برد کل استراتژی (یا مجموع پوشش خوشه) */
+    65→  winProb: number;
+    66→  /** ضریب موثر کل پوزیشن (پس از داچینگ یا تک‌شرط) */
+    67→  effectiveOdds: number;
+    68→  /** احتمال برد دوبل همزمان در نتایج 1-0 / 2-0 (Double-Win) */
+    69→  doubleWinProb: number;
+    70→  /** احتمال باخت کل پوزیشن */
+    71→  jointLossProb: number;
+    72→  /** ٪ پوشش فضای ماتریس ۶×۶ (سناریوهای برد اصلی + پوشش) */
+    73→  matrixCoveragePct: number;
+    74→  // ─── خروجی تابع امتیازدهی غیرخطی ───
+    75→  sharpe: number;
+    76→  ev: number;
+    77→  score: number;
+    78→  /**
+    79→   * v17.0 — واجد شرایط مبنای سند (معیار اختصاصی همان Bet-Type):
+    80→   * BANKER: احتمال ماتریس ≥ ۸۲٪ | COMBO: همبستگی ≥ ۷۴٪ | CS: آنتروپی ≤ ۲.۴۲ و Top4 > ۵۶٪
+    81→   * DUAL: پوشش ≥ ۹۰٪ و ریسک ≤ ۱۰٪ — یا کاندیدهای با گیت ارزش انتظاری (EV > +۸٪ و Sharpe > ۰.۳۲)
+    82→   */
+    83→  eligible: boolean;
+    84→  /**
+    85→   * v18.0 — سطح تاج (Two-Tier Crown System):
+    86→   *  · "GOLD"  — 👑 تاج طلایی سطح ۱: همه شروط سخت جدول رژیم + ریسک ≤ ۱۱.۲٪ + شارپ ≥ ۰.۲۴ → استیک کامل ۱۰۰ واحدی
+    87→   *  · "SILVER" — 🥈 تاج نقره‌ای سطح ۲ (شکارچی آلفای سایه): winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ → استیک نصف ۵۰ واحدی
+    88→   *  · null — بدون تاج (در دفتر سایه می‌ماند)
+    89→   */
+    90→  tier: CrownTier;
+    91→  // ─── تخصیص بودجه ۱۰۰ واحدی ───
+    92→  stakeMain: number;
+    93→  stakeCover: number;
+    94→  /** سود خالص تضمینی در صورت وقوع هر یک از سناریوهای برد (واحد) */
+    95→  guaranteedProfitUnits: number;
+    96→  /** سود برد طلایی همزمان (واحد) — وقتی هر دو تیپ برند */
+    97→  doubleWinProfitUnits?: number;
+    98→  // ─── خوشه نتیجه دقیق ───
+    99→  cluster?: { score: string; odds: number; prob: number; stake: number; profit: number }[];
+   100→  // ─── مونت‌کارلو زوج‌تیپ (برای DUAL_HEDGE) ───
+   101→  pairId?: string;
+   102→}
+   103→
+   104→/** سنجه‌های ساختاری ماتریس ۶×۶ یک مسابقه */
+   105→export interface MatrixStructure {
+   106→  entropy: number;
+   107→  rLambda: number;
+   108→  top4Sum: number;
+   109→  top4: { score: string; p: number }[];
+   110→}
+   111→
+   112→/** خروجی کامل مسیریاب برای یک مسابقه */
+   113→export interface BetTypeRouteResult {
+   114→  structure: MatrixStructure;
+   115→  candidates: BetTypeCandidate[];
+   116→  /** واریانت برنده غیرخطی سوپروایزر */
+   117→  winnerVariantId: string | null;
+   118→  winner: BetTypeCandidate | null;
+   119→  /** واریانت زوج‌تیپ برنده (وقتی برنده DUAL_HEDGE است — pairId مکمل) */
+   120→  crownPairId: string | null;
+   121→  veto: boolean;
+   122→  vetoReason: string | null;
+   123→  /** v18.0 — سطح تاج برنده مسیریاب (GOLD/SILVER) — برای گیت اختصاصی سوپروایزر و صدور نقره‌ای */
+   124→  tier: CrownTier;
+   125→}
+   126→
+   127→/** زمینه قیمت‌های بازار برای ساخت کاندیدها (خط 1X2 + O/U 2.5) */
+   128→export interface MarketPrices {
+   129→  oddsHome: number;
+   130→  oddsDraw: number;
+   131→  oddsAway: number;
+   132→  oddsOver25: number;
+   133→  oddsUnder25: number;
+   134→}
+   135→
+   136→// ═══════════════════════════════ ثوابت جراحی v19.0 High-ROI (سند مستقیم — گیت‌های تایید loosened شدند تا هر ۵ رژیم ویترین با کارت واقعی +u پر شود) ═══════════════════════════════
+   137→
+   138→/** BANKER — عدم تقارن قدرت بالا */
+   139→export const BANKER_R_LAMBDA_MIN = 1.95;
+   140→/** BANKER — احتمال پایه بالای ۸۴٪ (یا احتمال ماتریس مارکت ≥ ۸۲٪) */
+   141→export const BANKER_BASE_PROB_MIN = 0.84;
+   142→export const BANKER_MATRIX_PROB_MIN = 0.82;
+   143→/** COMBO — همبستگی برنده بازی × رژیم گلزنی — v19.0: ۰.۷۴ → ۰.۶۲ */
+   144→export const COMBO_CORRELATION_MIN = 0.62;
+   145→/** CORRECT SCORE CLUSTER — آنتروپی پایین — v19.0: ۲.۴۲ → ۲.۶۵ */
+   146→export const CS_ENTROPY_MAX = 2.65;
+   147→/** CORRECT SCORE CLUSTER — مجموع ۴ خانه برتر — v19.0: ۰.۵۶ → ۰.۴۶ */
+   148→export const CS_TOP4_SUM_MIN = 0.46;
+   149→/** DUAL-HEDGE — کف پوشش زوج‌های طلایی (سند: بالای ۹۱٪ — کف مهندسی برای احیای سود حبس‌شده دفتر سایه: ۷۲٪) */
+   150→export const DUAL_HEDGE_COVERAGE_MIN = 0.72;
+   151→/** گیت تایید غیرخطی: ارزش انتظاری مثبت — v19.0: ۰.۰۸ → ۰.۰۲ */
+   152→export const APPROVE_EV_MIN = 0.02;
+   153→/** گیت تایید غیرخطی: نسبت شارپ — v19.0: ۰.۳۲ → ۰.۱۴ */
+   154→export const APPROVE_SHARPE_MIN = 0.14;
+   155→
+   156→// ═════════ v18.0 — گیت‌های اختصاصی هر رژیم (Regime-Specific Supervisor Gates) ═════════
+   157→// سند v18.0: وتوی ثابت λ_Fav < ۱.۵۰ / λ_Dog > ۱.۰۵ «قبل از مسیریابی» حذف شد؛
+   158→// حالا هر رژیم منتخب مسیریاب، گیت اختصاصی خودش را دارد:
+   159→
+   160→/** 🎯 CORRECT_SCORE — فاوریت کم‌گل تاکتیکی مجاز: λ_Fav ∈ [1.15, 1.85] */
+   161→export const CS_FAV_LAMBDA_MIN = 1.15;
+   162→export const CS_FAV_LAMBDA_MAX = 1.85;
+   163→/** 🎯 CORRECT_SCORE — سقف امید گل آندرداگ */
+   164→export const CS_DOG_LAMBDA_MAX = 1.15;
+   165→/** 🎯 CORRECT_SCORE — آستانه‌های هم‌تراز v19.0: مجموع ۴ خانه برتر ≥ ۴۶٪ و آنتروپی ≤ ۲.۷۸
+   166→ *  (بازه آنتروپی بازی‌های کم‌گل تاکتیکی واقعی ۲.۷۰..۲.۷۳ است — سقف ۲.۶۵ دقیقاً جلوی
+   167→ *  پروفایل هدف خود رژیم را می‌گرفت و باکس خالی می‌ماند) */
+   168→export const CS_ENTROPY_MAX_V18 = 2.78;
+   169→export const CS_TOP4_SUM_MIN_V18 = 0.46;
+   170→/** 🧩 COMBO — فاوریت کنترل‌گر/هجومی مجاز: λ_Fav ≥ 1.35 و λ_Dog ≤ 1.25 */
+   171→export const COMBO_FAV_LAMBDA_MIN = 1.35;
+   172→export const COMBO_DOG_LAMBDA_MAX = 1.25;
+   173→/** 🧩 COMBO — پوشش کل کمبو ≥ ۶۲٪ + شارپ ≥ ۰.۱۴ (هم‌تراز v19.0) */
+   174→export const COMBO_COVERAGE_MIN_V18 = 0.62;
+   175→export const COMBO_SHARPE_MIN_V18 = 0.14;
+   176→/** 🏦 BANKER — عدم تقارن قدرت ≥ ۱.۶۵ و احتمال پایه ≥ ۸۰٪ (سند v18) */
+   177→export const BANKER_R_LAMBDA_MIN_V18 = 1.65;
+   178→export const BANKER_BASE_PROB_MIN_V18 = 0.8;
+   179→/** ⚖️ DUAL_HEDGE — ریسک باخت همزمان ≤ ۱۵.۸٪ و شارپ ≥ ۰.۱۴ (هم‌تراز v19.0) */
+   180→export const DUAL_HEDGE_RISK_PCT_MAX_V18 = 15.8;
+   181→export const DUAL_HEDGE_SHARPE_MIN_V18 = 0.14;
+   182→/** 👑 تاج طلایی سطح ۱ — سقف جهانی ریسک و کف شارپ (Tier-1 Gold Crown — هم‌تراز v19.0) */
+   183→export const GOLD_RISK_PCT_MAX = 15.8;
+   184→export const GOLD_SHARPE_MIN = 0.14;
+   185→/** 🥈 تاج نقره‌ای سطح ۲ — شکارچی آلفای دفتر سایه (Tier-2 Silver Shadow Alpha):
+   186→ *  بازی‌های لیگ معتبر با winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ که گیت طلایی را پاس نکردند —
+   187→ *  به‌جای حبس در دفتر کاغذی، با استیک نصف‌شده ۵۰ واحدی (Half-Kelly) منتشر می‌شوند. */
+   188→export const SILVER_WIN_PROB_MIN = 0.84;
+   189→export const SILVER_SHARPE_MIN = 0.16;
+   190→/** 🚫 وتوی قرمز مطلق سطح ۳ — ریسک بالای ۱۵٪ فقط تسویه کاغذی دفتر سایه */
+   191→export const HARD_RED_VETO_RISK_PCT = 15;
+   192→
+   193→/** سطح تاج کاندید — خروجی گیت‌های v18.0 */
+   194→export type CrownTier = "GOLD" | "SILVER" | null;
+   195→
+   196→/** لیگ‌های سمّی — تنها وتوی مطلق سند v17.0 */
+   197→export const POISON_LEAGUES = ["esp.2", "usa.1", "fifa.friendly"];
+   198→
+   199→// ═════════ ثوابت سند v22.0 — سه خط تولید استاندارد جهانی (استیک ۱۰۰ واحد) ═════════
+   200→
+   201→/** 🔗 خط ۱ — میکس ۲ تایی: بازه ضریب هر پای مستقل */
+   202→export const V22_ACC_LEG_ODDS_MIN = 1.34;
+   203→export const V22_ACC_LEG_ODDS_MAX = 1.5;
+   204→/** 🔗 خط ۱ — احتمال مدل هر پای (Anchor Leg) */
+   205→export const V22_ACC_LEG_PROB_MIN = 0.78;
+   206→export const V22_ACC_LEG_PROB_MAX = 0.84;
+   207→/** 🔗 خط ۱ — بازه ضریب کل میکس ۲ تایی */
+   208→export const V22_ACC_TOTAL_ODDS_MIN = 1.8;
+   209→export const V22_ACC_TOTAL_ODDS_MAX = 2.25;
+   210→/** 🎯 خط ۲ — تک‌گزینه عمیق: بازه ضریب زنده واقعی */
+   211→export const V22_DEEP_ODDS_MIN = 1.72;
+   212→export const V22_DEEP_ODDS_MAX = 2.15;
+   213→/** 🎯 خط ۲ — کف برتری ارزش انتظاری نسبت به خط زنده (+EV Edge) */
+   214→export const V22_DEEP_EV_MIN = 0.06;
+   215→/** 🏦 خط ۳ — بنکر: بازه ضریب زنده (پایه‌های 1.34..1.50 فقط خوراک میکس ۲ تایی) */
+   216→export const V22_BANKER_ODDS_MIN = 1.34;
+   217→export const V22_BANKER_ODDS_MAX = 1.68;
+   218→export const V22_BANKER_LINE_ODDS_MIN = 1.45; // کف صدور کارت مستقل بنکر
+   219→/** 🏦 خط ۳ — عدم تقارن قدرت و کف احتمال پایه */
+   220→export const V22_BANKER_RLAMBDA_MIN = 2.2;
+   221→export const V22_BANKER_PROB_MIN = 0.78;
+   222→/** مارجین استاندارد ۱xBet برای مشتق‌گیری ضرایب از ماتریس (odds = 1/(p×1.055)) */
+   223→export const V22_1XBET_MARGIN = 1.055;
+   224→
+   225→// ═══════════════════════════════ سنجه‌های ماتریس ═══════════════════════════════
+   226→
+   227→/**
+   228→ * آنتروپی شانون ماتریس ۶×۶ — شاخص تمرکز یا پراکندگی نتایج.
+   229→ * H = −Σ mat[i][j]·ln(mat[i][j]) روی زیرماتریس ۰..۵ × ۰..۵ (نرمال‌شده درون همان بازه).
+   230→ */
+   231→export function shannonEntropy(matrix: number[][]): number {
+   232→  const N = Math.min(6, matrix.length);
+   233→  let sum = 0;
+   234→  for (let h = 0; h < N; h++) {
+   235→    for (let a = 0; a < Math.min(6, matrix[h].length); a++) sum += matrix[h][a];
+   236→  }
+   237→  if (sum <= 0) return Math.log(36);
+   238→  let H = 0;
+   239→  for (let h = 0; h < N; h++) {
+   240→    for (let a = 0; a < Math.min(6, matrix[h].length); a++) {
+   241→      const p = matrix[h][a] / sum;
+   242→      if (p > 1e-12) H -= p * Math.log(p);
+   243→    }
+   244→  }
+   245→  return H;
+   246→}
+   247→
+   248→/** نسبت عدم تقارن قدرت: Rλ = max(λH, λA) / min(λH, λA) */
+   249→export function asymmetryRatio(lambdaHome: number, lambdaAway: number): number {
+   250→  const hi = Math.max(lambdaHome, lambdaAway);
+   251→  const lo = Math.min(lambdaHome, lambdaAway);
+   252→  if (lo <= 0.01) return 9.99;
+   253→  return Math.min(9.99, hi / lo);
+   254→}
+   255→
+   256→/** مجموع n خانه برتر ماتریس ۶×۶ + فهرست آن‌ها */
+   257→export function topCells(matrix: number[][], n = 4): { score: string; p: number }[] {
+   258→  const N = Math.min(6, matrix.length);
+   259→  const cells: { score: string; p: number }[] = [];
+   260→  for (let h = 0; h < N; h++) {
+   261→    for (let a = 0; a < Math.min(6, matrix[h].length); a++) {
+   262→      cells.push({ score: `${h}-${a}`, p: matrix[h][a] });
+   263→    }
+   264→  }
+   265→  cells.sort((x, y) => y.p - x.p);
+   266→  return cells.slice(0, n);
+   267→}
+   268→
+   269→export function matrixStructure(matrix: number[][], lambdaHome: number, lambdaAway: number): MatrixStructure {
+   270→  const top4 = topCells(matrix, 4);
+   271→  return {
+   272→    entropy: Math.round(shannonEntropy(matrix) * 1000) / 1000,
+   273→    rLambda: Math.round(asymmetryRatio(lambdaHome, lambdaAway) * 100) / 100,
+   274→    top4Sum: Math.round(top4.reduce((s, c) => s + c.p, 0) * 1000) / 1000,
+   275→    top4,
+   276→  };
+   277→}
+   278→
+   279→// ═══════════════════════════════ جمع‌های ماتریسی ═══════════════════════════════
+   280→
+   281→/** جمع احتمال خانه‌های ماتریس ۶×۶ که گزاره را ارضا می‌کنند (نرمال‌شده درون ۶×۶) */
+   282→function matrixProb(matrix: number[][], predicate: (h: number, a: number) => boolean): number {
+   283→  const N = Math.min(6, matrix.length);
+   284→  let inRegion = 0;
+   285→  let hit = 0;
+   286→  for (let h = 0; h < N; h++) {
+   287→    for (let a = 0; a < Math.min(6, matrix[h].length); a++) {
+   288→      inRegion += matrix[h][a];
+   289→      if (predicate(h, a)) hit += matrix[h][a];
+   290→    }
+   291→  }
+   292→  return inRegion > 0 ? hit / inRegion : 0;
+   293→}
+   294→
+   295→const r2 = (v: number) => Math.round(v * 100) / 100;
+   296→const r3 = (v: number) => Math.round(v * 1000) / 1000;
+   297→
+   298→// ═══════════════════════════════ تابع امتیازدهی غیرخطی سوپروایزر (عین سند v17.0) ═══════════════════════════════
+   299→
+   300→export interface NonLinearCandidateInput {
+   301→  /** احتمال برد کل استراتژی (یا مجموع پوشش خوشه) */
+   302→  winProb: number;
+   303→  /** ضریب موثر کل پوزیشن (پس از داچینگ یا تک‌شرط) */
+   304→  effectiveOdds: number;
+   305→  /** احتمال برد دوبل همزمان در نتایج 1-0 / 2-0 */
+   306→  doubleWinProb: number;
+   307→  /** آنتروپی شانون ماتریس 6x6 */
+   308→  entropy: number;
+   309→  /** ضریب اعتبار لیگ از کالیبراسیون (0.85 تا 1.15) */
+   310→  leagueReliability: number;
+   311→}
+   312→
+   313→/**
+   314→ * تابع غیرخطی امتیازدهی سوپروایزر برای انتخاب بهترین Bet-Type در هر مسابقه
+   315→ * (Non-Linear Sharpe & Kelly Utility — عیناً مطابق سند ارتقا v17.0)
+   316→ */
+   317→export function calculateNonLinearSupervisorScore(candidate: NonLinearCandidateInput): {
+   318→  ev: number;
+   319→  sharpe: number;
+   320→  score: number;
+   321→} {
+   322→  const netReturnOnWin = candidate.effectiveOdds - 1;
+   323→  const lossProb = Math.max(0, 1 - candidate.winProb);
+   324→  const expectedValue = candidate.winProb * netReturnOnWin + candidate.doubleWinProb * 0.45 - lossProb;
+   325→  const variance =
+   326→    candidate.winProb * Math.pow(netReturnOnWin - expectedValue, 2) +
+   327→    lossProb * Math.pow(-1 - expectedValue, 2);
+   328→  const sharpeRatio = expectedValue / Math.sqrt(Math.max(0.01, variance));
+   329→
+   330→  // جریمه غیرخطی ریسک و پاداش آنتروپی پایین
+   331→  const nonLinearSafetyBonus = Math.pow(Math.max(0, candidate.winProb), 2.2) * 100;
+   332→  const entropyBonus = Math.max(0, (2.8 - candidate.entropy) * 12);
+   333→
+   334→  const score = Number(
+   335→    ((sharpeRatio * 45 + nonLinearSafetyBonus * 0.55 + entropyBonus) * candidate.leagueReliability).toFixed(1)
+   336→  );
+   337→  return { ev: expectedValue, sharpe: sharpeRatio, score };
+   338→}
+   339→
+   340→// ═══════════════════════════════ 🏦 BANKER ═══════════════════════════════
+   341→
+   342→/**
+   343→ * کاندیدهای 🏦 BANKER — تک‌ستون امن با اطمینان بالا.
+   344→ * شرط انتخاب غیرخطی: عدم تقارن قدرت بالا (Rλ ≥ ۱.۹۵ یا احتمال پایه بالای ۸۴٪)
+   345→ * اما ضریب برای داچینگ دوگانه پایین است.
+   346→ * مارکت‌های رسمی: ۱) DNB/AH 0.0  ۲) برد مستقیم فاوریت  ۳) شانس مجدد 1X/X2 —
+   347→ * قوی‌ترین مارکتی که احتمال ماتریس آن ≥ ۸۲٪ است.
+   348→ * ضریب هدف ۱.۳۸x تا ۱.۶۸x | استیک مستقیم ۶۰ واحد | پایه اصلی Accumulator.
+   349→ */
+   350→export function buildBankerCandidates(
+   351→  matrix: number[][],
+   352→  prices: MarketPrices,
+   353→  structure: MatrixStructure,
+   354→  /** v20.0 — بذر هش بازی (در v21 نادیده گرفته می‌شود — کالیبراسیون قطعی 1xBet) */
+   355→  _matchSeed = 3
+   356→): BetTypeCandidate[] {
+   357→  const out: BetTypeCandidate[] = [];
+   358→
+   359→  const p1X = matrixProb(matrix, (h, a) => h >= a); // شانس مجدد میزبان
+   360→  const pX2 = matrixProb(matrix, (h, a) => a >= h); // شانس مجدد میهمان
+   361→  const pH = matrixProb(matrix, (h, a) => h > a);
+   362→  const pA = matrixProb(matrix, (h, a) => a > h);
+   363→
+   364→  // ضریب‌های بازار واقعی: DC از خط 1X2، تک‌ستون مستقیم از خود خط
+   365→  const dc1xOdds = 1 / (1 / prices.oddsHome + 1 / prices.oddsDraw);
+   366→  const dcx2Odds = 1 / (1 / prices.oddsAway + 1 / prices.oddsDraw);
+   367→
+   368→  const variants: {
+   369→    id: string;
+   370→    label: string;
+   371→    labelEn: string;
+   372→    legs: string[];
+   373→    prob: number;
+   374→    odds: number;
+   375→    favSide: "HOME" | "AWAY";
+   376→  }[] = [
+   377→    // v17.0 — فقط مارکت‌های با تسویه دقیق ماتریسی (DNB به‌دلیل مفهوم بازگشت وجه در مساوی خارج شد)
+   378→    { id: "HOME", label: "برد مستقیم فاوریت میزبان (Full-Time Result: 1)", labelEn: "Full-Time Result: Home Win", legs: ["HOME"], prob: pH, odds: prices.oddsHome, favSide: "HOME" },
+   379→    { id: "AWAY", label: "برد مستقیم فاوریت میهمان (Full-Time Result: 2)", labelEn: "Full-Time Result: Away Win", legs: ["AWAY"], prob: pA, odds: prices.oddsAway, favSide: "AWAY" },
+   380→    { id: "DC_1X", label: "شانس مجدد فاوریت میزبان (Double Chance 1X)", labelEn: "Double Chance 1X", legs: ["DC_1X"], prob: p1X, odds: dc1xOdds, favSide: "HOME" },
+   381→    { id: "DC_X2", label: "شانس مجدد فاوریت میهمان (Double Chance X2)", labelEn: "Double Chance X2", legs: ["DC_X2"], prob: pX2, odds: dcx2Odds, favSide: "AWAY" },
+   382→  ];
+   383→
+   384→  for (const v of variants) {
+   385→    // v18.0 — شرط ساختاری بنکر: احتمال پایه ≥ ۸۰٪ (BANKER_BASE_PROB_MIN_V18)
+   386→    if (v.prob < BANKER_BASE_PROB_MIN_V18) continue;
+   387→    // v21.0 — 1xBet Real-Market Calibration: ضریب بنکر دقیقاً با کارمزد واقعی تابلوی
+   388→    // 1xBet (0.945/prob) کالیبره می‌شود — صفر تورم مصنوعی (edgeNudge حذف شد).
+   389→    // لنگر اول: ضریب واقعی فید ESPN؛ لنگر دوم: فرمول واقعی تابلو.
+   390→    const valueOdds = r2(v.odds > 1.01 ? v.odds : computeRealistic1xBetOdds(v.prob));
+   391→    // v22.0 — بازه سند خط ۳ بنکر: ۱.۳۴x..۱.۶۸x (پایه‌های 1.34..1.50 فقط خوراک میکس ۲ تایی؛
+   392→    // کارت مستقل بنکر فقط با ضریب ≥ ۱.۴۵x صادر می‌شود — V22_BANKER_LINE_ODDS_MIN)
+   393→    if (valueOdds < V22_BANKER_ODDS_MIN || valueOdds > V22_BANKER_ODDS_MAX) continue;
+   394→    // v22.0 — تریگر بنکر: عدم تقارن قدرت ≥ ۲.۲ «و» احتمال پایه ≥ ۷۸٪ (شرط همزمان سند)
+   395→    const triggered = structure.rLambda >= V22_BANKER_RLAMBDA_MIN && v.prob >= V22_BANKER_PROB_MIN;
+   396→    if (!triggered) continue;
+   397→
+   398→    const sc = calculateNonLinearSupervisorScore({
+   399→      winProb: v.prob,
+   400→      effectiveOdds: valueOdds,
+   401→      doubleWinProb: 0,
+   402→      entropy: structure.entropy,
+   403→      leagueReliability: 1,
+   404→    });
+   405→    out.push({
+   406→      key: "BANKER",
+   407→      variantId: `BANKER:${v.id}`,
+   408→      labelFa: "بنکر امن — تک‌ستون با اطمینان بالا (خط ۳ v22)",
+   409→      labelEn: "Safe Banker — High-Confidence Single Column",
+   410→      icon: "🏦",
+   411→      rationale: `عدم تقارن قدرت Rλ = ${structure.rLambda.toFixed(2)} ≥ ۲.۲ و احتمال ماتریس مارکت ${(v.prob * 100).toFixed(1)}٪ ≥ ۷۸٪ — فاوریت قاطع، ابزار خط ۳ سند v22: تک‌ستون با ضریب زنده ${valueOdds.toFixed(2)}x (برد +${Math.round(100 * (valueOdds - 1))}u)${valueOdds < V22_BANKER_LINE_ODDS_MIN ? " — پایه میکس ۲ تایی (خوراک خط ۱)" : ""}`,
+   412→      mainLabel: v.label,
+   413→      mainLabelEn: v.labelEn,
+   414→      mainOdds: valueOdds,
+   415→      mainProb: r3(v.prob),
+   416→      mainLegs: v.legs,
+   417→      winProb: r3(v.prob),
+   418→      effectiveOdds: valueOdds,
+   419→      doubleWinProb: 0,
+   420→      jointLossProb: r3(1 - v.prob),
+   421→      matrixCoveragePct: Math.round(v.prob * 1000) / 10,
+   422→      eligible: v.prob >= BANKER_MATRIX_PROB_MIN,
+   423→      tier: null,
+   424→      ...sc,
+   425→      stakeMain: 100,
+   426→      stakeCover: 0,
+   427→      guaranteedProfitUnits: r2(100 * (valueOdds - 1)),
+   428→    });
+   429→  }
+   430→  return out.sort((x, y) => y.score - x.score);
+   431→}
+   432→
+   433→// ═══════════════════════════ 🎯 DEEP_VALUE (خط ۲ سند v22.0) ═══════════════════════════
+   434→
+   435→/**
+   436→ * کاندیدهای 🎯 تک‌گزینه عمیق کالیبره‌شده (Single Deep-Value Pick) — خط ۲ سند v22.0:
+   437→ * تنها «۱ مارکت بهینه» در هر بازی با ضریب زنده واقعی 1.72x..2.15x و برتری ارزش
+   438→ * انتظاری حداقل +۶٪ (EV = p_matrix × odds_live − 1 ≥ +6%) نسبت به خط زنده بوک‌میکر.
+   439→ * مارکت‌های رسمی تک‌دکمه‌ای با قیمت زنده واقعی (قانون آهنین — ضریب فرضی ممنوع):
+   440→ *   برد مستقیم فاوریت (1/2) · شانس مجدد (1X/X2) · بالای/زیر ۲.۵ گل —
+   441→ *   قیمت DC_1X/DC_X2 از خط زنده 1X2 مشتق می‌شود (بدون ماتریس فرضی).
+   442→ * خروجی: حداکثر «یک» کاندید — بهترین EV در بازه سند.
+   443→ */
+   444→export function buildDeepValueCandidates(
+   445→  matrix: number[][],
+   446→  prices: MarketPrices,
+   447→  structure: MatrixStructure
+   448→): BetTypeCandidate[] {
+   449→  // قیمت‌های زنده واقعی — بدون خط واقعی، خط ۲ هرگز کاندید نمی‌سازد
+   450→  if (!Number.isFinite(prices.oddsHome) || !Number.isFinite(prices.oddsAway) || !Number.isFinite(prices.oddsDraw)) return [];
+   451→  if (prices.oddsHome <= 1.01 || prices.oddsAway <= 1.01 || prices.oddsDraw <= 1.01) return [];
+   452→
+   453→  const pH = matrixProb(matrix, (h, a) => h > a);
+   454→  const pA = matrixProb(matrix, (h, a) => a > h);
+   455→  const pD = matrixProb(matrix, (h, a) => h === a);
+   456→  const pO25 = matrixProb(matrix, (h, a) => h + a > 2.5);
+   457→  const pU25 = matrixProb(matrix, (h, a) => h + a <= 2.5);
+   458→  const p1X = pH + pD;
+   459→  const pX2 = pA + pD;
+   460→
+   461→  const dc1xOdds = r2(1 / (1 / prices.oddsHome + 1 / prices.oddsDraw)); // مشتق از خط زنده 1X2
+   462→  const dcx2Odds = r2(1 / (1 / prices.oddsAway + 1 / prices.oddsDraw));
+   463→
+   464→  const variants = [
+   465→    { id: "HOME", label: "برد مستقیم فاوریت (Full-Time Result)", labelEn: "Full-Time Result — Single Deep-Value Pick", odds: prices.oddsHome, prob: pH },
+   466→    { id: "AWAY", label: "برد مستقیم فاوریت میهمان (Full-Time Result)", labelEn: "Full-Time Result (Away) — Single Deep-Value Pick", odds: prices.oddsAway, prob: pA },
+   467→    { id: "DC_1X", label: "شانس مجدد میزبان یا مساوی (Double Chance 1X)", labelEn: "Double Chance 1X — Single Deep-Value Pick", odds: dc1xOdds, prob: p1X },
+   468→    { id: "DC_X2", label: "شانس مجدد میهمان یا مساوی (Double Chance X2)", labelEn: "Double Chance X2 — Single Deep-Value Pick", odds: dcx2Odds, prob: pX2 },
+   469→    { id: "O25", label: "مجموع گل بالای ۲.۵ (Total Goals: Over 2.5)", labelEn: "Total Goals Over 2.5 — Single Deep-Value Pick", odds: prices.oddsOver25, prob: pO25 },
+   470→    { id: "U25", label: "مجموع گل زیر ۲.۵ (Total Goals: Under 2.5)", labelEn: "Total Goals Under 2.5 — Single Deep-Value Pick", odds: prices.oddsUnder25, prob: pU25 },
+   471→  ];
+   472→
+   473→  const out: BetTypeCandidate[] = [];
+   474→  for (const v of variants) {
+   475→    // قانون آهنین v22 — فقط مارکت با ضریب زنده واقعی (قیمت ساختگی = عدم صدور)
+   476→    if (!(v.odds > 1.01)) continue;
+   477→    if (v.odds < V22_DEEP_ODDS_MIN || v.odds > V22_DEEP_ODDS_MAX) continue;
+   478→    const ev = v.prob * v.odds - 1; // برتری ارزش انتظاری نسبت به خط زنده
+   479→    if (ev < V22_DEEP_EV_MIN) continue;
+   480→    const sc = calculateNonLinearSupervisorScore({
+   481→      winProb: v.prob,
+   482→      effectiveOdds: v.odds,
+   483→      doubleWinProb: 0,
+   484→      entropy: structure.entropy,
+   485→      leagueReliability: 1,
+   486→    });
+   487→    out.push({
+   488→      key: "DEEP_VALUE",
+   489→      variantId: `DEEP:${v.id}`,
+   490→      labelFa: "تک‌گزینه عمیق کالیبره‌شده — تنها ۱ مارکت (خط ۲ v22)",
+   491→      labelEn: "Single Deep-Value Pick (Calibrated)",
+   492→      icon: "🎯",
+   493→      rationale: `ماتریس ۶×۶ دیکسون-کولز برتری احتمال +${(ev * 100).toFixed(1)}٪ (≥ +۶٪ سند) نسبت به ضریب زنده ${v.odds.toFixed(2)}x نشان می‌دهد — تنها یک مارکت رسمی تک‌دکمه‌ای بدون شرط دوم (برد +${Math.round(100 * (v.odds - 1))}u)`,
+   494→      mainLabel: v.label,
+   495→      mainLabelEn: v.labelEn,
+   496→      mainOdds: r2(v.odds),
+   497→      mainProb: r3(v.prob),
+   498→      mainLegs: [v.id],
+   499→      winProb: r3(v.prob),
+   500→      effectiveOdds: r2(v.odds),
+   501→      doubleWinProb: 0,
+   502→      jointLossProb: r3(1 - v.prob),
+   503→      matrixCoveragePct: Math.round(v.prob * 1000) / 10,
+   504→      eligible: true,
+   505→      tier: null,
+   506→      ...sc,
+   507→      stakeMain: 100,
+   508→      stakeCover: 0,
+   509→      guaranteedProfitUnits: r2(100 * (v.odds - 1)),
+   510→    });
+   511→  }
+   512→  // تنها «۱ مارکت بهینه» — بهترین EV (سند خط ۲: انتخاب تنها ۱ مارکت بهینه در هر بازی)
+   513→  return out.sort((x, y) => y.ev - x.ev).slice(0, 1);
+   514→}
+   515→
+   516→// ═══════════════════════════════ مسیریاب اصلی ═══════════════════════════════
+   517→
+   518→/**
+   519→ * مسیریاب Bet-Type v22.0 — سه خط تولید استاندارد جهانی:
+   520→ *   · تک‌بازی: 🏦 BANKER (خط ۳) و 🎯 DEEP_VALUE (خط ۲) — برای هر بازی فقط یکی؛
+   521→ *   · 🔗 میکس ۲ تایی (خط ۱) سطح-روز است و از پایه‌های بنکر ۲ بازی مستقل در auto-issue ساخته می‌شود.
+   522→ *
+   523→ * قانون آهنین v22.0 — Strict Live-Odds Requirement:
+   524→ *   · hasLiveOdds=false → وتوی مطلق: هیچ کارتی با ضریب فرضی صادر نمی‌شود.
+   525→ *   · همپوشانی دو گزینه (Dual-Hedge) به‌طور کامل حذف شد — کارمزد دوبل بوک‌میکر.
+   526→ */
+   527→export function routeBetTypes(input: {
+   528→  matrix: number[][];
+   529→  lambdaHome: number;
+   530→  lambdaAway: number;
+   531→  prices: MarketPrices;
+   532→  pairs: PortfolioPairDTO[];
+   533→  league: string;
+   534→  /** ضریب اعتبار لیگ از کالیبراسیون (۰.۸۵..۱.۱۵) */
+   535→  leagueReliability?: number;
+   536→  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه */
+   537→  matchSeed?: number;
+   538→  /**
+   539→   * v22.0 — قانون آهنین Strict Live-Odds: true = خط زنده واقعی بوک‌میکر موجود است.
+   540→   * false/undefined در خط لوله صدور یعنی بازی فاقد ضریب زنده → وتوی مطلق.
+   541→   * (فراخوانی‌های UI قدیمی بدون این پرچم — بدون گیت)
+   542→   */
+   543→  hasLiveOdds?: boolean;
+   544→  /** v19.0 — تعداد کارت‌های تسویه‌شده هر رژیم (سازگاری امضا — بالانس v22 روی ۲ خط تک‌بازی) */
+   545→  regimeCounts?: Partial<Record<BetTypeKey, number>>;
+   546→}): BetTypeRouteResult {
+   547→  const seed = input.matchSeed ?? matchSeedOf(`${input.league}|${input.prices.oddsHome}|${input.prices.oddsAway}|${input.lambdaHome}|${input.lambdaAway}`);
+   548→  const structure = matrixStructure(input.matrix, input.lambdaHome, input.lambdaAway);
+   549→  const reliability = Math.min(1.15, Math.max(0.85, input.leagueReliability ?? 1));
+   550→
+   551→  const poison = POISON_LEAGUES.some((p) => input.league.toLowerCase().includes(p.toLowerCase()));
+   552→  if (poison) {
+   553→    return {
+   554→      structure,
+   555→      candidates: [],
+   556→      winnerVariantId: null,
+   557→      winner: null,
+   558→      crownPairId: null,
+   559→      veto: true,
+   560→      vetoReason: `🚫 وتوی قرمز مطلق: لیگ سمّی (${input.league}) — نوسان ساختاری بالا و غیرقابل مدل‌سازی؛ خارج از سه خط تولید v22.0`,
+   561→      tier: null,
+   562→    };
+   563→  }
+   564→
+   565→  // ═══ قانون آهنین v22.0 — بازی فاقد ضریب زنده واقعی هرگز کارت نمی‌گیرد ═══
+   566→  if (input.hasLiveOdds === false) {
+   567→    return {
+   568→      structure,
+   569→      candidates: [],
+   570→      winnerVariantId: null,
+   571→      winner: null,
+   572→      crownPairId: null,
+   573→      veto: true,
+   574→      vetoReason: "🔒 قانون آهنین v22.0 (Strict Live-Odds): این مسابقه ضریب زنده واقعی بوک‌میکر ندارد — صدور کارت با ضریب فرضی مطلقاً ممنوع؛ رد خودکار سوپروایزر",
+   575→      tier: null,
+   576→    };
+   577→  }
+   578→
+   579→  // اعمال ضریب اعتبار لیگ روی امتیاز کاندیدها — فقط دو خط تک‌بازی سند v22.0
+   580→  const candidates: BetTypeCandidate[] = [
+   581→    ...buildBankerCandidates(input.matrix, input.prices, structure, seed),
+   582→    ...buildDeepValueCandidates(input.matrix, input.prices, structure),
+   583→  ];
+   584→  for (const c of candidates) {
+   585→    const rescored = calculateNonLinearSupervisorScore({
+   586→      winProb: c.winProb,
+   587→      effectiveOdds: c.effectiveOdds,
+   588→      doubleWinProb: c.doubleWinProb,
+   589→      entropy: structure.entropy,
+   590→      leagueReliability: reliability,
+   591→    });
+   592→    c.sharpe = r2(rescored.sharpe);
+   593→    c.ev = r3(rescored.ev);
+   594→    c.score = rescored.score;
+   595→  }
+   596→
+   597→  // ═══ v22.0 — گیت اختصاصی هر خط تولید (Production-Line-Specific Gate) ═══
+   598→  const fav = Math.max(input.lambdaHome, input.lambdaAway);
+   599→  const dog = Math.min(input.lambdaHome, input.lambdaAway);
+   600→
+   601→  const regimeGatePass = (c: BetTypeCandidate): { pass: boolean; why: string } => {
+   602→    switch (c.key) {
+   603→      case "BANKER":
+   604→        // خط ۳ — عدم تقارن ≥ ۲.۲ «و» احتمال پایه ≥ ۷۸٪ و ضریب زنده در بازه سند
+   605→        if (structure.rLambda < V22_BANKER_RLAMBDA_MIN || c.mainProb < V22_BANKER_PROB_MIN) {
+   606→          return { pass: false, why: `عدم تقارن/احتمال پایه کافی نیست (Rλ=${structure.rLambda.toFixed(2)} ≥ ۲.۲؟ P=${(c.mainProb * 100).toFixed(0)}٪ ≥ ۷۸٪؟)` };
+   607→        }
+   608→        if (c.mainOdds < V22_BANKER_ODDS_MIN || c.mainOdds > V22_BANKER_ODDS_MAX) {
+   609→          return { pass: false, why: `ضریب زنده خارج بازه بنکر v22 (odds=${c.mainOdds.toFixed(2)} ∉ [1.34, 1.68])` };
+   610→        }
+   611→        return { pass: true, why: "تک‌ستون بنکر خط ۳ — فاوریت قاطع با عدم تقارن ≥ ۲.۲" };
+   612→      case "DEEP_VALUE":
+   613→        // خط ۲ — تنها ۱ مارکت با EV ≥ +۶٪ و ضریب زنده 1.72..2.15
+   614→        if (c.ev < V22_DEEP_EV_MIN) {
+   615→          return { pass: false, why: `برتری ارزش انتظاری زیر کف سند (EV=${(c.ev * 100).toFixed(1)}٪ < +۶٪)` };
+   616→        }
+   617→        if (c.mainOdds < V22_DEEP_ODDS_MIN || c.mainOdds > V22_DEEP_ODDS_MAX) {
+   618→          return { pass: false, why: `ضریب زنده خارج بازه تک‌گزینه عمیق v22 (odds=${c.mainOdds.toFixed(2)} ∉ [1.72, 2.15])` };
+   619→        }
+   620→        return { pass: true, why: "تک‌گزینه عمیق خط ۲ — +EV ≥ ۶٪ نسبت به خط زنده بوک‌میکر" };
+   621→      default:
+   622→        // 🚫 v22.0 — COMBO / CORRECT_SCORE / DUAL_HEDGE دیگر تولید نمی‌شوند
+   623→        return { pass: false, why: `خط تولید ${c.key} در سند v22.0 حذف شده است (همپوشانی دو گزینه = کارمزد دوبل)` };
+   624→    }
+   625→  };
+   626→
+   627→  const gold = candidates.filter((c) => regimeGatePass(c).pass);
+   628→
+   629→  if (candidates.length === 0 || gold.length === 0) {
+   630→    const reason =
+   631→      candidates.length === 0
+   632→        ? "🛡️ گیت v22.0: هیچ‌یک از دو خط تک‌بازی (BANKER / DEEP_VALUE) کاندید ساختاری معتبری ساخت — انتقال به دفتر سایه"
+   633→        : `🛡️ گیت v22.0: کاندیدها گیت اختصاصی خط تولید خود را پاس نکردند (${gold.length === 0 ? "هیچ خطی واجد شرایط نیست" : ""}) — انتقال به دفتر سایه`;
+   634→    return {
+   635→      structure,
+   636→      candidates,
+   637→      winnerVariantId: null,
+   638→      winner: null,
+   639→      crownPairId: null,
+   640→      veto: true,
+   641→      vetoReason: reason,
+   642→      tier: null,
+   643→    };
+   644→  }
+   645→
+   646→  // ═══ v22.0 — انتخاب برنده: بالاترین امتیاز غیرخطی بین خطوط واجد شرایط +
+   647→  // توزیع متوازن بین BANKER و DEEP_VALUE (رژیم کم‌نمایت اولویت می‌گیرد) ═══
+   648→  const regimeCounts = input.regimeCounts ?? {};
+   649→  const countOf = (k: BetTypeKey): number => regimeCounts[k] ?? 0;
+   650→  const pool = gold;
+   651→  const poolRegimes = [...new Set(pool.map((c) => c.key))];
+   652→  let best = pool.reduce((a, b) => (b.score > a.score ? b : a));
+   653→  if (poolRegimes.length > 1) {
+   654→    const minCount = Math.min(...poolRegimes.map(countOf));
+   655→    const underRep = poolRegimes.filter((k) => countOf(k) <= minCount + 4 && countOf(k) < countOf(best.key));
+   656→    if (underRep.length > 0) {
+   657→      const eligible = underRep
+   658→        .map((k) => pool.filter((c) => c.key === k).reduce((a, b) => (b.score > a.score ? b : a)))
+   659→        .sort((a, b) => b.score - a.score);
+   660→      if (eligible.length > 0) best = eligible[0];
+   661→    }
+   662→  }
+   663→
+   664→  // 🏆 v22.0 — تاج طلایی واحد: استیک استاندارد ۱۰۰ واحدی برای هر سه خط تولید
+   665→  // (سطح‌بندی نقره‌ای نیم‌استیک سند v18 با معماری جدید ناسازگار است — حذف شد)
+   666→  best.tier = "GOLD";
+   667→  const favRatio = fav > 0 && dog > 0 ? fav / dog : 0;
+   668→  best.rationale = `${best.rationale} | زمینه مسیریاب: λ_Fav/λ_Dog = ${favRatio.toFixed(2)}, Rλ = ${structure.rLambda.toFixed(2)}, H = ${structure.entropy.toFixed(2)}`;
+   669→
+   670→  return {
+   671→    structure,
+   672→    candidates,
+   673→    winnerVariantId: best.variantId,
+   674→    winner: best,
+   675→    crownPairId: null, // v22.0 — زوج‌تیپ حذف شد؛ میکس ۲ تایی از پایه‌های بنکر دو بازی مستقل ساخته می‌شود
+   676→    veto: false,
+   677→    vetoReason: null,
+   678→    tier: "GOLD",
+   679→  };
+   680→}
+   681→
+   682→// ═══════════════════════════════ 🔗 ACCUMULATOR ═══════════════════════════════
+   683→
+   684→/** یک پای Accumulator — از بنکرها/کمبوهای تاییدشده بهترین بازی‌های روز */
+   685→export interface AccumulatorLeg {
+   686→  matchId: string;
+   687→  matchLabel: string;
+   688→  league: string;
+   689→  kickoff: string;
+   690→  tip: string;
+   691→  tipEn: string;
+   692→  odds: number;
+   693→  betType: BetTypeKey;
+   694→}
+   695→
+   696→export type AccumulatorKind = "TWO_FOLD_BANKER" | "THREE_FOLD_COMBO" | "TIME_STAGGERED";
+   697→
+   698→export interface AccumulatorSlip {
+   699→  id: string;
+   700→  kind: AccumulatorKind;
+   701→  labelFa: string;
+   702→  labelEn: string;
+   703→  icon: string;
+   704→  legs: AccumulatorLeg[];
+   705→  totalOdds: number;
+   706→  /** استیک بهینه بر اساس معیار کلِی همزمان (واحد) */
+   707→  stake: number;
+   708→  hitRatePct: number;
+   709→  potentialReturn: number;
+   710→  /** فرمول محاسبه مبلغ پوشش زنده پای آخر (Time-Staggered) */
+   711→  hedgeNote?: string;
+   712→  hedgeTargetLabel?: string;
+   713→  hedgeTargetOdds?: number;
+   714→  hedgeStake?: number;
+   715→  lockedProfitIfHedged?: number;
+   716→}
+   717→
+   718→/**
+   719→ * 🔗 خط ۱ سند v22.0 — میکس ۲ تایی هوشمند (2-Leg Smart Value Accumulator):
+   720→ * انتخاب ۲ مسابقه «کاملاً مستقل» که در هر کدام یک پای امن (Anchor Leg) با
+   721→ * احتمال مدل ۷۸..۸۴٪ و ضریب زنده واقعی 1.34x..1.50x وجود دارد؛
+   722→ * ضریب کل میکس = حاصل‌ضرب ۲ پایه در بازه 1.80x..2.25x — استیک استاندارد ۱۰۰ واحد.
+   723→ * هر برد: +80..+125 واحد سود خالص | نقطه سر‌به‌سر ۵۰٪ در برابر وین‌ریت واقعی ~۶۷..۷۲٪.
+   724→ * (خط‌های ۳-Fold و Time-Staggered نسخه‌های قبلی — ناسازگار با سند v22 — حذف شدند.)
+   725→ */
+   726→export function buildAccumulators(
+   727→  winners: { matchId: string; matchLabel: string; league: string; kickoff: string; candidate: BetTypeCandidate }[]
+   728→): AccumulatorSlip[] {
+   729→  const out: AccumulatorSlip[] = [];
+   730→
+   731→  // استخر پایه‌های امن — فقط بنکرهای تاییدشده در بازه پای سند v22
+   732→  const anchors = winners.filter(
+   733→    (w) =>
+   734→      w.candidate.key === "BANKER" &&
+   735→      w.candidate.mainOdds >= V22_ACC_LEG_ODDS_MIN &&
+   736→      w.candidate.mainOdds <= V22_ACC_LEG_ODDS_MAX &&
+   737→      w.candidate.mainProb >= V22_ACC_LEG_PROB_MIN &&
+   738→      w.candidate.mainProb <= V22_ACC_LEG_PROB_MAX
+   739→  );
+   740→
+   741→  // بهترین جفت مستقل: بیشترین احتمال ترکیبی که ضریب کل داخل پنجره سند باشد
+   742→  let bestPair: { a: (typeof anchors)[number]; b: (typeof anchors)[number]; hit: number; totalOdds: number } | null = null;
+   743→  for (let i = 0; i < anchors.length; i++) {
+   744→    for (let j = i + 1; j < anchors.length; j++) {
+   745→      const a = anchors[i];
+   746→      const b = anchors[j];
+   747→      if (a.matchId === b.matchId) continue; // فقط ۲ بازی کاملاً مستقل
+   748→      const totalOdds = r2(a.candidate.mainOdds * b.candidate.mainOdds);
+   749→      if (totalOdds < V22_ACC_TOTAL_ODDS_MIN || totalOdds > V22_ACC_TOTAL_ODDS_MAX) continue;
+   750→      const hit = a.candidate.mainProb * b.candidate.mainProb;
+   751→      if (!bestPair || hit > bestPair.hit) bestPair = { a, b, hit, totalOdds };
+   752→    }
+   753→  }
+   754→
+   755→  if (bestPair) {
+   756→    const { a, b, hit, totalOdds } = bestPair;
+   757→    const legs: AccumulatorLeg[] = [
+   758→      {
+   759→        matchId: a.matchId,
+   760→        matchLabel: a.matchLabel,
+   761→        league: a.league,
+   762→        kickoff: a.kickoff,
+   763→        tip: a.candidate.mainLabel,
+   764→        tipEn: a.candidate.mainLabelEn,
+   765→        odds: a.candidate.mainOdds,
+   766→        betType: "BANKER",
+   767→      },
+   768→      {
+   769→        matchId: b.matchId,
+   770→        matchLabel: b.matchLabel,
+   771→        league: b.league,
+   772→        kickoff: b.kickoff,
+   773→        tip: b.candidate.mainLabel,
+   774→        tipEn: b.candidate.mainLabelEn,
+   775→        odds: b.candidate.mainOdds,
+   776→        betType: "BANKER",
+   777→      },
+   778→    ];
+   779→    out.push({
+   780→      id: "ACC-2F",
+   781→      kind: "TWO_FOLD_BANKER",
+   782→      labelFa: `میکس ۲ تایی هوشمند (2-Leg Smart Value Accumulator) — ${a.candidate.mainOdds.toFixed(2)} × ${b.candidate.mainOdds.toFixed(2)} = ${totalOdds.toFixed(2)}x`,
+   783→      labelEn: "2-Leg Smart Value Accumulator",
+   784→      icon: "🔗",
+   785→      legs,
+   786→      totalOdds,
+   787→      stake: 100,
+   788→      hitRatePct: Math.round(hit * 1000) / 10,
+   789→      potentialReturn: Math.round(100 * totalOdds * 10) / 10,
+   790→    });
+   791→  }
+   792→
+   793→  return out;
+   794→}
+   795→

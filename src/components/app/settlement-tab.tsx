@@ -33,6 +33,7 @@ import {
   MonitorSmartphone,
   RefreshCw,
   Rocket,
+  Scale,
   ScrollText,
   Send,
   SendHorizonal,
@@ -265,6 +266,74 @@ export function SettlementTab() {
       setRecalcing(false);
     }
   }, [loadLedger, loadCategories, loadFeed]);
+
+  // ─── v19.0-restore — بازگشت به معماری برنده همپوشانی دوقلو (فیلتر ضریب همپوشانی مثبت) ───
+  const recalcV19Restore = useCallback(async () => {
+    setRecalcing(true);
+    try {
+      const res = await fetch("/api/settlement/v19-restore?daysBack=21", { method: "POST" });
+      const data = (await res.json()) as {
+        success: boolean;
+        error?: string;
+        rescanned?: { scanned: number; recalculated: number; todayPending: number; vetoed: number; settled: number };
+        ledgerV19?: { settled: number; winRatePct: number; netProfitUnits: number; wonA: number; wonB: number; doubleWin: number; middleTrap: number; stopLossShieldCount: number; bank: { finalBank: number } };
+      };
+      if (!data.success) {
+        toast.error(data.error ?? "بازگشت v19.0 ناموفق بود");
+        return;
+      }
+      const lv = data.ledgerV19;
+      toast.success(
+        "⚖️ بازگشت به معماری برنده v19.0 انجام شد — همپوشانی دوقلو G1/G2/G3 + فیلتر ضریب همپوشانی مثبت + تخصیص ۶۵/۳۵ + سپر دقیقه ۶۵ (−۴۵u)",
+        {
+          description: lv
+            ? `${faNum(lv.settled, 0)} کارت تسویه‌شده ESPN · وین‌ریت ${faNum(lv.winRatePct, 1)}٪ · بانک ${faNum(lv.bank.finalBank, 0)} واحد (${lv.netProfitUnits >= 0 ? "+" : "−"}${faNum(Math.abs(lv.netProfitUnits), 1)}u) · ${faNum(lv.wonA, 0)}A/${faNum(lv.wonB, 0)}B/${faNum(lv.doubleWin, 0)}جکپات/${faNum(lv.middleTrap, 0)}تله · سپر استاپ‌لاس روی ${faNum(lv.stopLossShieldCount, 0)} کارت`
+            : undefined,
+        }
+      );
+      await loadLedger();
+      await loadCategories();
+      await loadFeed();
+    } catch {
+      toast.error("خطای شبکه در بازگشت v19.0");
+    } finally {
+      setRecalcing(false);
+    }
+  }, [loadLedger, loadCategories, loadFeed]);
+
+  // ─── v22.0 — بازمحاسبه ۱۰۰٪ صادقانه بانک (باخت −۱۰۰u · حذف کارت‌های ضریب فرضی) ───
+  const recalcV22 = useCallback(async () => {
+    setRecalcing(true);
+    try {
+      const res = await fetch("/api/settlement/v22-recalculate", { method: "POST" });
+      const data = (await res.json()) as {
+        success: boolean;
+        error?: string;
+        recomputed?: number;
+        voided?: number;
+        scanned?: number;
+        bank?: { finalBank: number; netProfit: number };
+      };
+      if (!data.success) {
+        toast.error(data.error ?? "بازمحاسبه v22.0 ناموفق بود");
+        return;
+      }
+      toast.success(
+        `⚖️ بازمحاسبه صادقانه v22.0 انجام شد — ${faNum(data.recomputed ?? 0, 0)} سطر بازمحاسبه (باخت دقیقاً −۱۰۰u) · ${faNum(data.voided ?? 0, 0)} کارت ضریب فرضی VOID`,
+        {
+          description: data.bank
+            ? `بانک ۱۰۰۰ واحدی → ${faNum(data.bank.finalBank, 1)} واحد (سود خالص ${data.bank.netProfit >= 0 ? "+" : "−"}${faNum(Math.abs(data.bank.netProfit), 1)}u) — منبع واحد حقیقت settledCards`
+            : undefined,
+        }
+      );
+      await loadLedger();
+      await loadCategories();
+    } catch {
+      toast.error("خطای شبکه در بازمحاسبه v22.0");
+    } finally {
+      setRecalcing(false);
+    }
+  }, [loadLedger, loadCategories]);
 
   // ─── ساخت بدنه صدور از آیتم‌های سبد (تطبیق میکس دو بازی با externalId ESPN) ───
   const buildIssueItem = useCallback(
@@ -1008,6 +1077,28 @@ export function SettlementTab() {
               {feedOpen ? "بستن شبیه‌ساز فید کانال" : "پیش‌نمایش زنده فید کانال (شبیه‌ساز)"}
             </Button>
             {/* ═══ v16.0 — بازمحاسبه Verified-Ledger با ۳ الگوی طلایی اتمیک ═══ */}
+            {/* ═══ v22.0 — بازمحاسبه ۱۰۰٪ صادقانه بانک (Strict Live-Odds) ═══ */}
+            {/* ═══ v19.0-restore — بازگشت به معماری برنده همپوشانی دوقلو ═══ */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+              onClick={recalcV19Restore}
+              disabled={recalcing}
+            >
+              {recalcing ? <Loader2 className="size-3 animate-spin" /> : <Scale className="size-3" />}
+              ⚖️ بازگشت به معماری برنده v19.0 (همپوشانی دوقلو + فیلتر همپوشانی مثبت)
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 gap-1.5 border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-300 hover:bg-amber-500/20"
+              onClick={recalcV22}
+              disabled={recalcing}
+            >
+              {recalcing ? <Loader2 className="size-3 animate-spin" /> : <Scale className="size-3" />}
+              ⚖️ بازمحاسبه صادقانه بانک v22.0 (−۱۰۰u · حذف ضریب فرضی)
+            </Button>
             <Button
               size="sm"
               variant="outline"

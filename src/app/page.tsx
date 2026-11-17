@@ -184,11 +184,11 @@ export default function Home() {
               <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v21.0 1xBet Real-Market Calibration & Zero-Blind-Stats @AINEOBET
+                  <Sparkles className="size-2.5" /> v19.0 Restore · Orthogonal Dual-Hedge G1/G2/G3 + Strict Positive Overlap Filter @AINEOBET
                 </Badge>
               </h1>
               <p className="text-[11px] text-muted-foreground sm:text-xs">
-                حسابداری صادقانه کارنامه (منبع واحد حقیقت) + تسویه درست میزبان/میهمان + حلقه کالیبراسیون خودکار دسته‌ها + مسیریاب غیرخطی ۵ رژیمی (🏦 بنکر · 🧩 کمبو · 🎯 خوشه نتیجه دقیق · ⚖️ زوج‌تیپ · 🔗 آکومولاتور) + بلک‌لیست لیگ‌های سمّی + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
+                معماری برنده همپوشانی دوقلو v19.0 (⚖️ G1 فاوریت بالای ۱.۵ تیمی ↔ زیر ۲.۵ · ⚖️ G2 برد میزبان ↔ زیر ۲.۵ · ⚖️ G3 BTTS بله ↔ برد کلین‌شیت) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله ≤ ۱۱.۵٪) + تخصیص نامتقارن ۶۵/۳۵ + سپر استاپ‌لاس دقیقه ۶۵ (−۴۵u) + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson + تسویه خودکار ESPN + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
@@ -405,7 +405,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v21.0 1xBet Real-Market Calibration & Zero-Blind-Stats Edition · حسابداری صادقانه کارنامه (منبع واحد حقیقت — بدون حذف رژیم زیان‌ده، باخت کامل −۱۰۰u/−۵۰u واقعی) + تسویه درست میزبان/میهمان (فیکس Tenerife) + حذف ردیف‌های ساختگی ACC و ضریب تکراری ۳.۹۵/۱.۸۲ + حلقه کالیبراسیون خودکار دسته‌ها (تعلیق خودکار ROI منفی) + بلک‌لیست قطعی دوستانه‌ها + مسیریاب غیرخطی ۵ رژیم + ضرایب ارزش‌محور یکتای هر بازی + سیستم دو‌سطحی تاج (👑 طلایی ۱۰۰u · 🥈 نقره‌ای ۵۰u Half-Kelly) + قیف کانال عمومی↔VIP (@aineobet) + پنجره T-60m Lineup Verified + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v19.0 Restore Edition (بازگشت به معماری برنده همپوشانی دوقلو) · ⚖️ سه الگوی طلایی G1/G2/G3 با ناحیه برد دوبل 1-0/2-0 (Double-Win +۱۲۰..+۱۸۰u) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه تضمینی ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله میانی ≤ ۱۱.۵٪ — مابقی وتو و دفتر سایه) + تخصیص نامتقارن ۶۵u/۳۵u + سپر استاپ‌لاس زنده دقیقه ۶۵ (−۴۵.۰u در تله میانی) + رژیم زیان‌ده خوشه نتیجه دقیق (−۱۶u) غیرفعال + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson بدون قفل توقف + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت settledCards + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

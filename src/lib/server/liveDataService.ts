@@ -262,8 +262,10 @@ function espnUrlOf(externalId: string | null): string | null {
  * امکان کش‌اوت ۵۵٪ در دقیقه ۶۵ وجود ندارد و کل استیک آن کارت از دست می‌رود.
  * تمام باخت‌های کامل صادقانه با -۱۰۰.0 واحد (کارت طلایی ۱۰۰ واحدی) و
  * -۵۰.0 واحد (کارت تاج نقره‌ای ۵۰ واحدی) ثبت می‌شوند — چون totalStaked همان استیک واقعی کارت است.
+ * v22.0 — خروجی از ماژول خارج شد تا مسیر بازمحاسبه رسمی (v22-recalculate) هم از
+ * «تنها فرمول سود مجاز سیستم» استفاده کند — صفر فرمول موازی.
  */
-function settlementProfit(
+export function settlementProfit(
   status: Exclude<SlipStatus, "PENDING" | "LIVE" | "MANUAL_REVIEW" | "VOID">,
   stakeA: number,
   stakeB: number,
@@ -289,11 +291,23 @@ function settlementProfit(
       return { netProfit: r1(profitA + profitB), profitA, profitB, stopLossShield: false };
     }
     case "MIDDLE_TRAP": {
-      // ═══ v20.0 — باخت صادقانه و کامل (حذف سپر استاپ‌لاس مصنوعی -۴۵) ═══
-      // سند v20.0 §۳: «در شرط‌بندی واقعی اگر بازی ۰-۳ یا ۲-۲ شود، امکان کش‌اوت ۵۵٪
-      // در دقیقه ۶۵ وجود ندارد و کل استیک آن کارت از دست می‌رود» — ثبت صادقانه و شفاف:
+      // ═══ v19.0-restore — سپر استاپ‌لاس زنده دقیقه ۶۵ (احیای سند v19.0) ═══
+      // کارت‌های «همپوشانی دوقلو» (دو بال واقعی: تیپ A + تیپ B) توسط هج بات زنده در
+      // دقیقه ۶۵ در سناریوی تله میانی کش‌اوت می‌شوند: زیان قفل‌شده = −۴۵.۰ واحد
+      // (به‌جای −۱۰۰) — دقیقاً مثل نسخه ۱۹.۰. کارت‌های تک‌ستون (بنکر/تک‌گزینه عمیق)
+      // پوشش زنده ندارند و باخت آن‌ها صادقانه و کامل (−totalStaked) ثبت می‌شود.
+      const isDualWingCard = stakeA > 0 && stakeB > 0;
+      if (isDualWingCard) {
+        return {
+          netProfit: -45.0, // سپر استاپ‌لاس دقیقه ۶۵ — کش‌اوت ۵۵٪ هر دو بال توسط هج بات
+          profitA: -30.0,
+          profitB: -15.0,
+          stopLossShield: true,
+        };
+      }
+      // باخت صادقانه و کامل کارت تک‌ستون (بدون بال پوششی — کش‌اوت ساختاری ندارد)
       return {
-        netProfit: r1(-totalStaked), // کارت طلایی: −۱۰۰ | کارت نقره‌ای: −۵۰ (استیک واقعی کارت)
+        netProfit: r1(-totalStaked),
         profitA: r1(-stakeA),
         profitB: r1(-stakeB),
         stopLossShield: false,

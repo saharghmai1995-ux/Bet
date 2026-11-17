@@ -3,9 +3,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v21.0 1xBet Real-Market Calibration — ۱۰۰٪ ESPN Verified",
+  title: "NEOBET QUANT PRO • @AINEOBET | v19.0 Restore — Orthogonal Dual-Hedge + Strict Positive Overlap Filter",
   description:
-    "حسابداری صادقانه بدون فیک (Zero-Fake Accounting) + تسویه درست میزبان/میهمان + حلقه کالیبراسیون خودکار دسته‌ها + مسیریاب غیرخطی ۵ رژیمی Bet-Type (بنکر، کمبوی رسمی، خوشه نتیجه دقیق، زوج‌تیپ، آکومولاتور) + دیتای زنده واقعی ESPN، تسویه خودکار FT، کانال تلگرام VIP، مناظره گاو/خرس، کلِی همزمان و پوشش زنده",
+    "بازگشت به معماری برنده همپوشانی دوقلو v19.0 (۳ الگوی طلایی G1/G2/G3 با ناحیه برد دوبل) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله ≤ ۱۱.۵٪) + تخصیص نامتقارن ۶۵/۳۵ + سپر استاپ‌لاس دقیقه ۶۵ + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson + تسویه خودکار ESPN + کانال تلگرام VIP",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },

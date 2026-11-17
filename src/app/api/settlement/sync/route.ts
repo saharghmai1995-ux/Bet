@@ -25,6 +25,8 @@ export async function POST() {
         today: auto.registeredToday,
         vetoed: auto.vetoed,
         skippedExisting: auto.skippedExisting,
+        /** v22.0 — بازی‌های رد‌شده به‌دلیل نداشتن ضریب زنده واقعی (قانون آهنین) */
+        noLiveOdds: auto.noLiveOdds,
       },
     });
   } catch (error) {

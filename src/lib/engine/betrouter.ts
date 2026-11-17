@@ -1,28 +1,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// موتور مسیریاب غیرخطی ۵ رژیمی Bet-Type — v17.0
-// (Non-Linear Multi-Regime Bet-Type Router & 5-Strategy Portfolio Edition)
+// موتور مسیریاب Bet-Type — v19.0 RESTORE
+// (NeoBet v19.0-Restore — بازگشت به معماری برنده «همپوشانی دوقلو» + فیلتر انتخاب
+//  فقط بازی‌های دارای ضریب همپوشانی مثبت — Strict Positive Overlap Return Filter)
 //
-// درس ممیزی نسخه ۱۶.۰: فیلتر خطی صلب (Risk ≤ ۱۰.۵٪ فقط روی الگوی زوج‌تیپ) از ۱۶۶ بازی
-// فقط ۱۲ بازی را تایید کرد (+۴۱.۵ واحد)؛ در دفتر سایه ۱۰۷ بازی تسویه‌شده +۱,۴۰۲ واحد
-// سود حبس شده بود! علت: هر مسابقه رژیم تاکتیکی و توزیع احتمالاتی متفاوتی در ماتریس
-// ۶×۶ دارد و نباید همه بازی‌ها به زور در یک فرمول خطی گنجانده شوند.
+// سند بازگشت v19.0 (ممیزی نسخه ۲۲.۰):
+//  · حذف همپوشانی دوقلو و قانون توقف فید در v22.0 باعث خاموشی اسکنر (۰/۰ بازی)
+//    و قفل بانک روی ۱,۰۰۰ واحد شده بود — این نسخه معماری برنده v19.0 را برمی‌گرداند.
+//  · خط لوله ترکیبی ESPN + TheSportsDB + Polymarket + Hybrid Poisson بدون قفل توقف.
+//  · ۴ رژیم فعال: 🏦 BANKER | 🧩 COMBO | ⚖️ DUAL-HEDGE (G1/G2/G3) | 🔗 ACCUMULATOR
+//  · 🚫 رژیم زیان‌ده «خوشه نتیجه دقیق (CORRECT_SCORE −۱۶u)» غیرفعال — فقط رژیم‌های
+//    دارای ضریب همپوشانی مثبت در بانک اصلی محاسبه می‌شوند.
+//  · فیلتر طلایی ضریب همپوشانی مثبت: impliedSum ≤ ۰.۸۶ · حاشیه ≥ ۱۵٪ ·
+//    برد دوبل ≥ ۱۲٪ · ریسک تله میانی ≤ ۱۱.۵٪ — مابقی وتو و دفتر سایه.
+//  · تخصیص نامتقارن ۶۵u تیپ A + ۳۵u تیپ B + سپر استاپ‌لاس زنده دقیقه ۶۵ (−۴۵u).
 //
 // برای هر بازی ابتدا سه سنجه ساختاری ماتریس محاسبه می‌شود:
 //   · آنتروپی شانون ماتریس ۶×۶:  H = −Σ mat[i][j]·ln(mat[i][j])  (شاخص تمرکز/پراکندگی)
 //   · نسبت عدم تقارن قدرت:        Rλ = max(λH, λA) / min(λH, λA)
 //   · مجموع ۴ خانه برتر ماتریس:   Top4Sum
-// سپس بازی به مناسب‌ترین استراتژی از ۵ روش تخصصی هدایت می‌شود:
-//   🏦 BANKER | 🧩 COMBO | 🎯 CORRECT SCORE CLUSTER | ⚖️ DUAL-HEDGE | 🔗 ACCUMULATOR
-//
-// گیت غیرخطی بیزی سوپروایزر: هر ۴ روش تک‌بازی با تابع مطلوبیت
-// «Non-Linear Sharpe & Kelly Utility» امتیاز می‌گیرند و بهترین انتخاب می‌شود؛
-// فقط بازی‌های واقعاً بی‌کیفیت (لیگ سمّی یا شارپ منفی در هر ۴ روش) وتو می‌شوند.
+// سپس بازی به مناسب‌ترین استراتژی از رژیم‌های فعال هدایت می‌شود؛ گیت غیرخطی بیزی
+// سوپروایزر با تابع مطلوبیت «Non-Linear Sharpe & Kelly Utility» بهترین را انتخاب می‌کند.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PortfolioPairDTO } from "../types";
-// v19.0 — قیمت‌گذاری ارزش‌محور + تخصیص نامتقارن آلفا (۶۵/۳۵)
-// v21.0 — کالیبراسیون واقعی تابلوی 1xBet (computeRealistic1xBetOdds)
-import { computeRealistic1xBetOdds, computeValueMarketOdds, asymmetricAlphaStakes, matchSeedOf } from "./orthogonal";
+// v19.0-restore — قیمت‌گذاری ارزش‌محور + تخصیص نامتقارن آلفا (۶۵/۳۵)
+import { computeValueMarketOdds, edgeBoostForMispricing, asymmetricAlphaStakes } from "./orthogonal";
 
 // ═══════════════════════════════ تایپ‌ها ═══════════════════════════════
 
@@ -190,6 +192,83 @@ export type CrownTier = "GOLD" | "SILVER" | null;
 /** لیگ‌های سمّی — تنها وتوی مطلق سند v17.0 */
 export const POISON_LEAGUES = ["esp.2", "usa.1", "fifa.friendly"];
 
+// ═════════ ثوابت خط ۱ میکس ۲ تایی (سازگاری با خط صدور آکومولاتور — حفظ‌شده) ═════════
+
+/** 🔗 میکس ۲ تایی: بازه ضریب هر پای مستقل */
+export const V22_ACC_LEG_ODDS_MIN = 1.34;
+export const V22_ACC_LEG_ODDS_MAX = 1.5;
+/** 🔗 احتمال مدل هر پای (Anchor Leg) */
+export const V22_ACC_LEG_PROB_MIN = 0.78;
+export const V22_ACC_LEG_PROB_MAX = 0.84;
+/** 🔗 بازه ضریب کل میکس ۲ تایی */
+export const V22_ACC_TOTAL_ODDS_MIN = 1.8;
+export const V22_ACC_TOTAL_ODDS_MAX = 2.25;
+/** 🎯 تک‌گزینه عمیق: بازه ضریب (سازگاری صفحات قدیمی) */
+export const V22_DEEP_ODDS_MIN = 1.72;
+export const V22_DEEP_ODDS_MAX = 2.15;
+export const V22_DEEP_EV_MIN = 0.06;
+/** 🏦 بنکر: بازه ضریب (سازگاری صفحات قدیمی) */
+export const V22_BANKER_ODDS_MIN = 1.34;
+export const V22_BANKER_ODDS_MAX = 1.68;
+export const V22_BANKER_LINE_ODDS_MIN = 1.45;
+export const V22_BANKER_RLAMBDA_MIN = 2.2;
+export const V22_BANKER_PROB_MIN = 0.78;
+/** مارجین استاندارد ۱xBet برای مشتق‌گیری ضرایب از ماتریس */
+export const V22_1XBET_MARGIN = 1.055;
+
+// ═════════ فیلتر طلایی «ضریب همپوشانی مثبت» (Strict Positive Overlap Return Filter) ═════════
+// قانون آهنین سند بازگشت v19.0: فقط بازی‌هایی تایید شوند که ضریب همپوشانی مثبت و قوی دارند.
+
+/** سقف مجموع احتمال ضمنی دو تیپ — ضریب موثر همپوشانی حداقل 1.163x (+16.3٪ سود تضمینی) */
+export const OVERLAP_IMPLIED_SUM_MAX = 0.86;
+/** کف حاشیه سود تضمینی همپوشانی (٪) — زیر ۱۵٪ = وتو و دفتر سایه */
+export const OVERLAP_MARGIN_MIN_PCT = 15.0;
+/** کف احتمال ناحیه برد دوبل همزمان (1-0 / 2-0) */
+export const OVERLAP_DOUBLE_WIN_MIN = 0.12;
+/** سقف ریسک تله میانی (٪) — بالای ۱۱.۵٪ = وتو و دفتر سایه */
+export const OVERLAP_JOINT_LOSS_MAX_PCT = 11.5;
+/** بازده هدف برد دوبل (واحد) — ناحیه همپوشانی دو برد +۱۲۰ تا +۱۸۰ واحد */
+export const OVERLAP_DOUBLE_WIN_PROFIT_MIN = 120;
+export const OVERLAP_DOUBLE_WIN_PROFIT_MAX = 180;
+
+/**
+ * v19.0-restore — محاسبه سنجه‌های همپوشانی موثر یک زوج‌تیپ (تیپ A + تیپ B).
+ * منبع واحد حقیقت گیت «ضریب همپوشانی مثبت» — مشترک بین مسیریاب، سوپروایزر و خط صدور.
+ */
+export function overlapMetricsOf(oddsA: number, oddsB: number, doubleWinProb: number, jointLossProb: number): {
+  impliedSum: number;
+  effectiveOverlapOdds: number;
+  guaranteedOverlapMarginPct: number;
+  doubleWinOverlapProb: number;
+  jointLossRiskPct: number;
+  hasPositiveOverlap: boolean;
+  failReason: string | null;
+} {
+  const oa = Math.max(1.01, oddsA);
+  const ob = Math.max(1.01, oddsB);
+  const impliedSum = 1 / oa + 1 / ob;
+  const effectiveOverlapOdds = 1 / impliedSum;
+  const guaranteedOverlapMarginPct = (effectiveOverlapOdds - 1) * 100;
+  const doubleWinOverlapProb = Math.max(0, doubleWinProb);
+  const jointLossRiskPct = Math.max(0, jointLossProb) * 100;
+  const checks: { ok: boolean; why: string }[] = [
+    { ok: impliedSum <= OVERLAP_IMPLIED_SUM_MAX, why: `مجموع احتمال ضمنی ${impliedSum.toFixed(3)} بالای سقف ۰.۸۶ — ضریب موثر همپوشانی کمتر از 1.163x` },
+    { ok: guaranteedOverlapMarginPct >= OVERLAP_MARGIN_MIN_PCT, why: `حاشیه سود تضمینی همپوشانی ${guaranteedOverlapMarginPct.toFixed(1)}٪ زیر کف ۱۵٪` },
+    { ok: doubleWinOverlapProb >= OVERLAP_DOUBLE_WIN_MIN, why: `احتمال ناحیه برد دوبل همزمان (1-0/2-0) ${(doubleWinOverlapProb * 100).toFixed(1)}٪ زیر کف ۱۲٪ — ناحیه Double-Win ندارد` },
+    { ok: jointLossRiskPct <= OVERLAP_JOINT_LOSS_MAX_PCT, why: `ریسک تله میانی ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۱.۵٪` },
+  ];
+  const failed = checks.filter((c) => !c.ok);
+  return {
+    impliedSum: Math.round(impliedSum * 1000) / 1000,
+    effectiveOverlapOdds: Math.round(effectiveOverlapOdds * 1000) / 1000,
+    guaranteedOverlapMarginPct: Math.round(guaranteedOverlapMarginPct * 10) / 10,
+    doubleWinOverlapProb,
+    jointLossRiskPct: Math.round(jointLossRiskPct * 10) / 10,
+    hasPositiveOverlap: failed.length === 0,
+    failReason: failed.length > 0 ? failed.map((f) => f.why).join(" · ") : null,
+  };
+}
+
 // ═══════════════════════════════ سنجه‌های ماتریس ═══════════════════════════════
 
 /**
@@ -318,9 +397,7 @@ export function calculateNonLinearSupervisorScore(candidate: NonLinearCandidateI
 export function buildBankerCandidates(
   matrix: number[][],
   prices: MarketPrices,
-  structure: MatrixStructure,
-  /** v20.0 — بذر هش بازی (در v21 نادیده گرفته می‌شود — کالیبراسیون قطعی 1xBet) */
-  _matchSeed = 3
+  structure: MatrixStructure
 ): BetTypeCandidate[] {
   const out: BetTypeCandidate[] = [];
 
@@ -352,10 +429,10 @@ export function buildBankerCandidates(
   for (const v of variants) {
     // v18.0 — شرط ساختاری بنکر: احتمال پایه ≥ ۸۰٪ (BANKER_BASE_PROB_MIN_V18)
     if (v.prob < BANKER_BASE_PROB_MIN_V18) continue;
-    // v21.0 — 1xBet Real-Market Calibration: ضریب بنکر دقیقاً با کارمزد واقعی تابلوی
-    // 1xBet (0.945/prob) کالیبره می‌شود — صفر تورم مصنوعی (edgeNudge حذف شد).
-    // لنگر اول: ضریب واقعی فید ESPN؛ لنگر دوم: فرمول واقعی تابلو.
-    const valueOdds = r2(v.odds > 1.01 ? v.odds : computeRealistic1xBetOdds(v.prob));
+    // v19.0 — قیمت‌گذاری ارزش‌محور (سند جراحی High-ROI): به‌جای ضریب واقعی بازار ۱.۰۸x
+    // که EV منفی و شارپ منفی می‌داد و بنکر را از تاج طلایی حذف می‌کرد، ضریب بنکر با
+    // لبه ارزش مدل ۱.۱۶/احتمال محاسبه می‌شود (هم‌دکترین با همه کارت‌های v19).
+    const valueOdds = r2(1.16 / Math.max(0.25, v.prob));
     // محدوده منطقی ضریب تک‌ستون امن (سند: ۱.۳۸..۱.۶۸ — با قیمت‌گذاری v19 بازه ۱.۲۰..۱.۴۵)
     if (valueOdds < 1.15 || valueOdds > 2.0) continue;
     // v18.0 — تریگر بنکر: عدم تقارن قدرت ≥ ۱.۶۵ (BANKER_R_LAMBDA_MIN_V18) یا احتمال پایه ≥ ۸۰٪
@@ -408,9 +485,7 @@ export function buildBankerCandidates(
 export function buildComboCandidates(
   matrix: number[][],
   prices: MarketPrices,
-  structure: MatrixStructure,
-  /** v20.0 — بذر هش بازی (در v21 نادیده گرفته می‌شود — کالیبراسیون قطعی 1xBet) */
-  _matchSeed = 3
+  structure: MatrixStructure
 ): BetTypeCandidate[] {
   const out: BetTypeCandidate[] = [];
 
@@ -508,10 +583,12 @@ export function buildComboCandidates(
     const biasCover = d.coverKey === "U25" ? biasOf("O25") : 1;
     const realCoverProb = Math.min(0.97, Math.max(0.02, pCover * biasCover));
 
-    // v21.0 — قیمت‌گذاری کمبو با کالیبراسیون واقعی 1xBet (0.945/prob):
-    // لبه مدل و تورم مصنوعی حذف شد — ضریب نمایش‌داده‌شده = تابلوی واقعی 1xBet.
-    const mainOdds = computeRealistic1xBetOdds(realMainProb);
-    const coverOdds = computeRealistic1xBetOdds(realCoverProb);
+    // v19.0 — قیمت‌گذاری ارزش‌محور کمبو (+EV Market-Edge): فرمول بی‌لبه (1/prob)×0.96 حذف شد؛
+    // ضریب کمبو = computeValueMarketOdds با لبه مدل (بایاس < ۱ یعنی بازار کم‌قیمت → boost بزرگ‌تر)
+    const mainBoost = edgeBoostForMispricing(pMain, realMainProb > 0 ? 1 / realMainProb : null);
+    const coverBoost = edgeBoostForMispricing(pCover, realCoverProb > 0 ? 1 / realCoverProb : null);
+    const mainOdds = computeValueMarketOdds(realMainProb, mainBoost);
+    const coverOdds = computeValueMarketOdds(realCoverProb, coverBoost);
     if (mainOdds < 1.28 || mainOdds > 2.20) continue;
     const implied = 1 / mainOdds + 1 / coverOdds;
 
@@ -567,85 +644,10 @@ export function buildComboCandidates(
   return out.sort((x, y) => y.score - x.score);
 }
 
-// ═══════════════════════════════ 🎯 CORRECT SCORE CLUSTER ═══════════════════════════════
-
-/**
- * کاندید 🎯 CORRECT SCORE CLUSTER — خوشه‌بندی نتیجه دقیق ۳ یا ۴ شانسه.
- * شرط انتخاب غیرخطی: آنتروپی شانون پایین (H ≤ ۲.۴۲) و مجموع احتمال ۴ خانه برتر > ۵۶٪.
- * داچینگ ۱۰۰ واحدی بین نمرات دقیق به نسبت معکوس ضرایب — ضریب موثر خوشه ~۱.۷۵x تا ۲.۱۰x.
- */
-export function buildCorrectScoreCandidate(
-  matrix: number[][],
-  structure: MatrixStructure
-): BetTypeCandidate | null {
-  // v18.0 — آستانه‌های سند v18: آنتروپی ≤ ۲.۴۸ (CS_ENTROPY_MAX_V18) و مجموع ۴ خانه برتر ≥ ۵۴٪ (CS_TOP4_SUM_MIN_V18)
-  if (structure.entropy > CS_ENTROPY_MAX_V18 || structure.top4Sum <= CS_TOP4_SUM_MIN_V18) return null;
-
-  // خوشه ۳ یا ۴ تایی: خانه‌های برتر تا وقتی مجموع ≥ ۶۰٪ شود (حداقل ۳ نتیجه)
-  const cells = topCells(matrix, 4);
-  let cluster = cells.slice(0, 3);
-  for (let i = 3; i < cells.length; i++) {
-    if (cluster.reduce((s, c) => s + c.p, 0) < 0.6) cluster = cells.slice(0, i + 1);
-  }
-
-  // ضرایب نتیجه دقیق — v21.0: کالیبراسیون واقعی 1xBet (0.945/prob) — بدون بذر/تورم مصنوعی
-  // سقف سلامت ۱۱.۵x برای قیمت‌های بی‌معنا باقی است.
-  const items = cluster.map((c) => {
-    const odds = Math.min(11.5, computeRealistic1xBetOdds(c.p));
-    return { score: c.score, odds, prob: c.p };
-  });
-  // تقسیم ۱۰۰ واحد بودجه به نسبت معکوس ضرایب (Equal-Profit Dutching)
-  const implied = items.reduce((s, it) => s + 1 / it.odds, 0);
-  const withStakes = items.map((it) => ({
-    ...it,
-    odds: it.odds,
-    stake: Math.round((1 / it.odds / implied) * 1000) / 10,
-    profit: Math.round((100 / implied - 100) * 10) / 10,
-  }));
-  const effectiveOdds = r2(1 / implied);
-  const winProb = r3(withStakes.reduce((s, it) => s + it.prob, 0));
-  const clusterLegs = withStakes.map((s) => `CS_${s.score}`);
-
-  const sc = calculateNonLinearSupervisorScore({
-    winProb,
-    effectiveOdds,
-    doubleWinProb: 0,
-    entropy: structure.entropy,
-    leagueReliability: 1,
-  });
-
-  return {
-    key: "CORRECT_SCORE",
-    variantId: `CS${withStakes.length}`,
-    labelFa: `خوشه ${withStakes.length} تایی نتیجه دقیق (Correct Score Dutching)`,
-    labelEn: `${withStakes.length}-Score Correct Score Cluster Dutching`,
-    icon: "🎯",
-    rationale: `آنتروپی شانون ماتریس H = ${structure.entropy.toFixed(2)} ≤ ۲.۴۲ و مجموع ۴ خانه برتر ${(structure.top4Sum * 100).toFixed(0)}٪ > ۵۶٪ — توزیع نتایج متمرکز؛ خوشه داچینگ نتیجه دقیق با ضریب موثر ${effectiveOdds.toFixed(2)}x`,
-    mainLabel: `خوشه ${withStakes.length} نتیجه دقیق: ${withStakes.map((s) => s.score).join(" / ")}`,
-    mainLabelEn: `Correct Score Cluster: ${withStakes.map((s) => s.score).join(" / ")}`,
-    mainOdds: effectiveOdds,
-    mainProb: winProb,
-    mainLegs: clusterLegs,
-    winProb,
-    effectiveOdds,
-    doubleWinProb: 0,
-    jointLossProb: r3(1 - winProb),
-    matrixCoveragePct: Math.round(winProb * 1000) / 10,
-    eligible: true, // سازنده فقط با معیارهای سند v18 (آنتروپی ≤ ۲.۴۸ و Top4 ≥ ۵۴٪) کاندید می‌سازد
-    tier: null,
-    ...sc,
-    stakeMain: 100,
-    stakeCover: 0,
-    guaranteedProfitUnits: Math.round((100 / implied - 100) * 10) / 10,
-    cluster: withStakes.map((s) => ({
-      score: s.score,
-      odds: s.odds,
-      prob: Math.round(s.prob * 1000) / 1000,
-      stake: s.stake,
-      profit: s.profit,
-    })),
-  };
-}
+// ═══════════════════════════════ 🎯 CORRECT SCORE CLUSTER — غیرفعال ═══════════════════════════════
+// سند بازگشت v19.0: رژیم زیان‌ده «خوشه نتیجه دقیق (−۱۶u)» غیرفعال شد —
+// فقط رژیم‌های دارای ضریب همپوشانی مثبت در بانک اصلی محاسبه می‌شوند.
+// (کد رژیم حذف شد؛ کدهای تاریخی CS_CLUSTER در کارنامه قدیمی فقط نمایشی‌اند.)
 
 // ═══════════════════════════════ ⚖️ DUAL-HEDGE ═══════════════════════════════
 
@@ -702,6 +704,10 @@ export function buildDualHedgeCandidates(pairs: PortfolioPairDTO[]): BetTypeCand
       stakeMain: p.equalProfit.stakeA,
       stakeCover: p.equalProfit.stakeB,
       guaranteedProfitUnits: p.equalProfit.profit,
+      // v19.0-restore — جک‌پات برد دوبل همزمان (1-0/2-0) با تخصیص نامتقارن ۶۵/۳۵
+      doubleWinProfitUnits: Math.round(
+        (p.equalProfit.stakeA * p.totalOddsA + p.equalProfit.stakeB * p.totalOddsB - (p.equalProfit.stakeA + p.equalProfit.stakeB)) * 10
+      ) / 10,
       pairId: p.id,
     });
   }
@@ -728,16 +734,21 @@ export function routeBetTypes(input: {
   league: string;
   /** ضریب اعتبار لیگ از کالیبراسیون (۰.۸۵..۱.۱۵) */
   leagueReliability?: number;
-  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه (فرمول سند §۲-۲) */
-  matchSeed?: number;
   /**
    * v19.0 — تعداد کارت‌های تسویه‌شده هر رژیم در کارنامه (ورودی از auto-issue):
    * برای «توزیع متوازن ۵ رژیم» — رژیمِ کم‌نمایت‌ترین در استخر طلایی اولویت انتخاب
    * می‌گیرد تا ویترین سودآوری ۵ رژیمی هیچ باکس +0.0u نداشته باشد.
    */
   regimeCounts?: Partial<Record<BetTypeKey, number>>;
+  /**
+   * v19.0-restore — متادیتای شفافیت: true = خط زنده واقعی بوک‌میکر موجود است.
+   * false دیگر «وتوی مطلق» نیست (ریشه باگ ۰/۰ بازی v22) — بازی بدون خط زنده با
+   * خط هجومی پواسون (Hybrid Poisson) شفاف‌برچسب صادر می‌شود.
+   */
+  hasLiveOdds?: boolean;
+  /** v20.0 — بذر هش بازی (سازگاری امضا — متادیتا) */
+  matchSeed?: number;
 }): BetTypeRouteResult {
-  const seed = input.matchSeed ?? matchSeedOf(`${input.league}|${input.prices.oddsHome}|${input.prices.oddsAway}|${input.lambdaHome}|${input.lambdaAway}`);
   const structure = matrixStructure(input.matrix, input.lambdaHome, input.lambdaAway);
   const reliability = Math.min(1.15, Math.max(0.85, input.leagueReliability ?? 1));
 
@@ -756,10 +767,10 @@ export function routeBetTypes(input: {
   }
 
   // اعمال ضریب اعتبار لیگ روی امتیاز کاندیدها (بازمحاسبه با reliability)
+  // 🚫 رژیم زیان‌ده خوشه نتیجه دقیق (CORRECT_SCORE −۱۶u) طبق سند بازگشت v19.0 غیرفعال است
   const candidates: BetTypeCandidate[] = [
-    ...buildBankerCandidates(input.matrix, input.prices, structure, seed),
-    ...buildComboCandidates(input.matrix, input.prices, structure, seed),
-    ...(buildCorrectScoreCandidate(input.matrix, structure) ? [buildCorrectScoreCandidate(input.matrix, structure)!] : []),
+    ...buildBankerCandidates(input.matrix, input.prices, structure),
+    ...buildComboCandidates(input.matrix, input.prices, structure),
     ...buildDualHedgeCandidates(input.pairs),
   ];
   for (const c of candidates) {
@@ -788,14 +799,8 @@ export function routeBetTypes(input: {
     const riskPct = riskPctOf(c);
     switch (c.key) {
       case "CORRECT_SCORE":
-        // مجاز برای λ_Fav ∈ [1.15, 1.85] و λ_Dog ≤ 1.15 | شرط: Top4 ≥ ۵۴٪ و آنتروپی ≤ ۲.۴۸
-        if (fav < CS_FAV_LAMBDA_MIN || fav > CS_FAV_LAMBDA_MAX || dog > CS_DOG_LAMBDA_MAX) {
-          return { pass: false, why: `λ خارج پنجره خوشه نتیجه دقیق (λ_Fav=${fav.toFixed(2)} ∈ [1.15, 1.85]؟ λ_Dog=${dog.toFixed(2)} ≤ 1.15؟)` };
-        }
-        if (structure.top4Sum < CS_TOP4_SUM_MIN_V18 || structure.entropy > CS_ENTROPY_MAX_V18) {
-          return { pass: false, why: `ساختار ماتریس برای خوشه نتیجه دقیق نامناسب (Top4=${(structure.top4Sum * 100).toFixed(0)}٪ ≥ ۵۴٪؟ H=${structure.entropy.toFixed(2)} ≤ 2.48؟)` };
-        }
-        return { pass: true, why: "خوشه نتیجه دقیق — بازی کم‌گل تاکتیکی با توزیع متمرکز" };
+        // 🚫 رژیم زیان‌ده خوشه نتیجه دقیق (−۱۶u) — سند بازگشت v19.0: غیرفعال
+        return { pass: false, why: "رژیم خوشه نتیجه دقیق غیرفعال است (رژیم زیان‌ده −۱۶u سند بازگشت v19.0)" };
       case "COMBO":
         // مجاز برای λ_Fav ≥ 1.35 و λ_Dog ≤ 1.25 | شرط: پوشش کمبو ≥ ۷۸٪ و شارپ ≥ ۰.۲۲
         if (fav < COMBO_FAV_LAMBDA_MIN || dog > COMBO_DOG_LAMBDA_MAX) {
@@ -811,12 +816,23 @@ export function routeBetTypes(input: {
           return { pass: false, why: `عدم تقارن/احتمال پایه کافی نیست (Rλ=${structure.rLambda.toFixed(2)} ≥ 1.65؟ P=${(c.mainProb * 100).toFixed(0)}٪ ≥ ۸۰٪؟)` };
         }
         return { pass: true, why: "بنکر امن — فاوریت قاطع با عدم تقارن بالا" };
-      case "DUAL_HEDGE":
-        // شرط: ریسک باخت همزمان ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴ (شتاب‌دهنده نامتقارن از گیت سود معاف است)
-        if (riskPct > DUAL_HEDGE_RISK_PCT_MAX_V18 || c.sharpe < DUAL_HEDGE_SHARPE_MIN_V18) {
-          return { pass: false, why: `ریسک/شارپ زوج‌تیپ کافی نیست (ریسک=${riskPct.toFixed(1)}٪ ≤ ۱۱.۲٪؟ شارپ=${c.sharpe.toFixed(2)} ≥ 0.24؟)` };
+      case "DUAL_HEDGE": {
+        // ═══ v19.0-restore — فیلتر طلایی ضریب همپوشانی مثبت (Strict Positive Overlap Return Filter) ═══
+        // قانون آهنین: فقط بازی‌هایی تایید شوند که ضریب همپوشانی مثبت و قوی دارند —
+        // impliedSum ≤ ۰.۸۶ · حاشیه تضمینی ≥ ۱۵٪ · ناحیه برد دوبل ≥ ۱۲٪ · ریسک تله ≤ ۱۱.۵٪
+        const m = overlapMetricsOf(c.mainOdds, c.coverOdds ?? 1.01, c.doubleWinProb, c.jointLossProb);
+        if (!m.hasPositiveOverlap) {
+          return { pass: false, why: `فیلتر ضریب همپوشانی مثبت v19.0: ${m.failReason ?? ""} — وتو و انتقال به دفتر سایه` };
         }
-        return { pass: true, why: "زوج‌تیپ متعامد — ریسک ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴" };
+        if (c.sharpe < DUAL_HEDGE_SHARPE_MIN_V18) {
+          return { pass: false, why: `شارپ همپوشانی دوقلو ${c.sharpe.toFixed(2)} زیر کف ۰.۱۴ — انتقال به دفتر سایه` };
+        }
+        const dwProfit = c.doubleWinProfitUnits ?? 0;
+        if (dwProfit > 0 && (dwProfit < OVERLAP_DOUBLE_WIN_PROFIT_MIN || dwProfit > OVERLAP_DOUBLE_WIN_PROFIT_MAX + 60)) {
+          return { pass: false, why: `سود برد دوبل +${dwProfit.toFixed(1)}u خارج بازه هدف +۱۲۰..+۱۸۰ واحد ناحیه همپوشانی دو برد` };
+        }
+        return { pass: true, why: `همپوشانی دوقلو با ضریب موثر ${m.effectiveOverlapOdds.toFixed(2)}x و حاشیه تضمینی +${m.guaranteedOverlapMarginPct.toFixed(1)}٪ ≥ ۱۵٪ — برد دوبل +${dwProfit.toFixed(1)}u (تخصیص ۶۵/۳۵ + سپر دقیقه ۶۵)` };
+      }
       default:
         return { pass: false, why: "رژیم نامشخص" };
     }
@@ -825,9 +841,13 @@ export function routeBetTypes(input: {
   const riskCap = (c: BetTypeCandidate): boolean => riskPctOf(c) <= GOLD_RISK_PCT_MAX;
   const eliteValue = (c: BetTypeCandidate): boolean => c.ev > APPROVE_EV_MIN && c.sharpe > APPROVE_SHARPE_MIN;
 
-  /** 👑 سطح ۱ — تاج طلایی: گیت اختصاصی رژیم + سقف جهانی ریسک + کف شارپ ۰.۲۴ */
+  /** 👑 سطح ۱ — تاج طلایی: گیت اختصاصی رژیم + سقف جهانی ریسک + کف شارپ ۰.۱۴
+   *  v19.0-restore — رژیم DUAL_HEDGE از مسیر فرار eliteValue معاف است: قانون آهنین
+   *  «فیلتر ضریب همپوشانی مثبت» برای زوج‌تیپ‌های دوبال مطلق است (هیچ escape hatch ندارد). */
   const goldPass = (c: BetTypeCandidate): boolean =>
-    riskCap(c) && c.sharpe >= GOLD_SHARPE_MIN && (regimeGatePass(c).pass || eliteValue(c));
+    riskCap(c) &&
+    c.sharpe >= GOLD_SHARPE_MIN &&
+    (c.key === "DUAL_HEDGE" ? regimeGatePass(c).pass : regimeGatePass(c).pass || eliteValue(c));
 
   /** 🥈 سطح ۲ — شکارچی آلفای سایه: winProb ≥ ۸۴٪ + شارپ ≥ ۰.۱۶ + ریسک ≤ ۱۵٪ (لیگ معتبر) */
   const silverPass = (c: BetTypeCandidate): boolean =>
@@ -848,7 +868,7 @@ export function routeBetTypes(input: {
     const worstRisk = candidates.length > 0 ? Math.max(...candidates.map(riskPctOf)) : 0;
     const reason =
       candidates.length === 0
-        ? "🛡️ گیت v18.0: هیچ‌یک از ۴ روش تک‌بازی (Banker / Combo / Correct Score / Dual-Hedge) کاندید ساختاری معتبری ساخت — بازی پرنوسان؛ انتقال به دفتر سایه"
+        ? "🛡️ گیت v19.0-restore: هیچ‌یک از رژیم‌های فعال (Banker / Combo / Dual-Hedge) کاندید ساختاری معتبری ساخت — بازی پرنوسان؛ انتقال به دفتر سایه"
         : worstRisk > HARD_RED_VETO_RISK_PCT
           ? `🚫 وتوی قرمز مطلق v18.0: کمترین سناریوی کیفیت ریسک ${worstRisk.toFixed(1)}٪ بالای سقف ۱۵٪ دارد — سطح ۳ (فقط تسویه کاغذی دفتر سایه)`
           : "🛡️ گیت v18.0: هیچ رژیمی گیت اختصاصی خود (جدول سند) و هیچ کاندیدی آستانه تاج نقره‌ای (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶) را پاس نکرد — انتقال به دفتر سایه";
@@ -879,7 +899,7 @@ export function routeBetTypes(input: {
   // در 🎯 CORRECT_SCORE این عدد = احتمال وقوع هیچ نمره‌ای (~۵۰٪ — ذات داچینگ نتیجه دقیق)
   // است، نه ریسک ساختاری. کنترل کیفیت این رژیم گیت اختصاصی خودش (آنتروپی/Top4/λ) است.
   const balanceEligible = (c: BetTypeCandidate): boolean =>
-    (c.key === "CORRECT_SCORE" || riskCap(c)) && c.ev > APPROVE_EV_MIN && regimeGatePass(c).pass;
+    riskCap(c) && c.ev > APPROVE_EV_MIN && regimeGatePass(c).pass;
   const gateQualified = candidates.filter((c) => c.tier === null && balanceEligible(c));
   const pool = useSilver ? silver : gold.length > 0 ? [...gold, ...gateQualified] : gateQualified;
   const poolRegimes = [...new Set(pool.map((c) => c.key))];
