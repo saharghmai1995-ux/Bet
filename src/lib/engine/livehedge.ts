@@ -215,3 +215,194 @@ function poisson(k: number, lambda: number): number {
   for (let i = 2; i <= k; i++) fact *= i;
   return (Math.exp(-lambda) * Math.pow(lambda, k)) / fact;
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// v19.0-restore — سپر استاپ‌لاس زنده دقیقه ۶۵ (Minute-65 Live Stop-Loss Shield)
+//
+// سند بازگشت v19.0: «سپر استاپ‌لاس زنده دقیقه ۶۵ (−۴۵.۰u در تله میانی) دقیقاً مثل
+// نسخه ۱۹.۰ فعال بماند». منطق سپر:
+//   · تله میانی (Middle Trap) = وضعیتی که هیچ‌یک از دو تیپ در حال بردن نیستند و
+//     اگر همین وضعیت تا پایان بماند هر دو تیپ می‌بازند (−۱۰۰u کامل).
+//   · از دقیقه ۶۵ به بعد، اگر مسابقه در تله میانی باشد، سپر فعال می‌شود:
+//     خروج زنده (کش‌اوت/شرط متقابل) با کف بازگشت ۵۵u → زیان سقف‌دار −۴۵.۰u
+//     به‌جای ریسک −۱۰۰u کامل.
+//   · اگر احتمال فرار از تله (وقوع حداقل یک سناریوی برد تا پایان) بالای ۳۵٪ باشد
+//     سپر به‌جای خروج فوری «نگه‌داری مسلح» اعلام می‌کند؛ از دقیقه ۷۵ خروج اجباری است.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** ثابت سند v19.0 — استیک تیپ A (بال اصلی) */
+export const SHIELD_STAKE_A_UNITS = 65;
+/** ثابت سند v19.0 — استیک تیپ B (بال پوششی) */
+export const SHIELD_STAKE_B_UNITS = 35;
+/** آستانه فعال‌سازی سپر (دقیقه) */
+export const SHIELD_TRIGGER_MINUTE = 65;
+/** خروج اجباری بی‌قید (دقیقه) */
+export const SHIELD_HARD_EXIT_MINUTE = 75;
+/** سقف زیان سپر — بازگشت تضمینی ۵۵u از ۱۰۰u استیک کل */
+export const SHIELD_LOSS_CAP_UNITS = 45.0;
+/** آستانه احتمال فرار از تله برای نگه‌داری مسلح (به‌جای خروج فوری) */
+export const SHIELD_ESCAPE_PROB_HOLD = 0.35;
+
+/** بازارهای تیپ (از الگوهای طلایی G1/G2/G3) — پیش‌بازِ تسویه روی نتیجه نهایی */
+export type TipMarketKind =
+  | { kind: "OVER_TEAM"; team: "HOME" | "AWAY"; line: number } // مجموع گل تیم X بالای N
+  | { kind: "TOTAL_OVER"; line: number } // کل گل مسابقه بالای N
+  | { kind: "TOTAL_UNDER"; line: number } // کل گل مسابقه زیر N
+  | { kind: "RESULT"; side: "HOME" | "AWAY" } // برد مستقیم
+  | { kind: "BTTS"; yes: boolean } // گلزنی هر دو تیم
+  | { kind: "WIN_NIL"; team: "HOME" | "AWAY" }; // برد بدون گل خورده
+
+/** آیا این تیپ روی نتیجه نهایی (finalH, finalA) برنده می‌شود؟ */
+export function tipSettles(tip: TipMarketKind, finalH: number, finalA: number): boolean {
+  const total = finalH + finalA;
+  switch (tip.kind) {
+    case "OVER_TEAM":
+      return (tip.team === "HOME" ? finalH : finalA) > tip.line;
+    case "TOTAL_OVER":
+      return total > tip.line;
+    case "TOTAL_UNDER":
+      return total < tip.line;
+    case "RESULT":
+      return tip.side === "HOME" ? finalH > finalA : finalA > finalH;
+    case "BTTS":
+      return tip.yes ? finalH > 0 && finalA > 0 : finalH === 0 || finalA === 0;
+    case "WIN_NIL":
+      return tip.team === "HOME" ? finalH > finalA && finalA === 0 : finalA > finalH && finalH === 0;
+  }
+}
+
+export type ShieldState = "INACTIVE" | "TRAP_ARMED" | "SHIELD_HOLD" | "EXIT_NOW" | "SAFE_ZONE";
+
+export interface Minute65ShieldInput {
+  minute: number;
+  scoreHome: number;
+  scoreAway: number;
+  lambdaHome: number;
+  lambdaAway: number;
+  tipA: TipMarketKind;
+  tipB: TipMarketKind;
+  oddsA: number;
+  oddsB: number;
+  stakeA?: number;
+  stakeB?: number;
+}
+
+export interface Minute65ShieldResult {
+  /** فعال بودن سپر در این لحظه (ورودی‌های تیپ معتبر + بازی در جریان) */
+  active: boolean;
+  /** وضعیت سپر */
+  state: ShieldState;
+  /** وضعیت زنده فعلی دو تیپ با نتیجه لحظه‌ای */
+  liveZone: "DOUBLE_WIN" | "A_ONLY" | "B_ONLY" | "MIDDLE_TRAP";
+  /** احتمال فرار از تله تا پایان بازی (حداقل یک سناریوی برد) — فقط در تله */
+  escapeProb: number | null;
+  /** زیان سقف‌دار سپر — همیشه −۴۵.۰u در تله میانی */
+  cappedLossUnits: number | null;
+  /** زیان کامل بدون سپر (−۱۰۰u) برای مقایسه */
+  uncappedLossUnits: number | null;
+  /** بازگشت تضمینی خروج زنده (۵۵u) */
+  recoveryUnits: number | null;
+  /** برنامه خروج: شرط متقابل زنده یا کش‌اوت */
+  exitPlan: string | null;
+  /** پیام فارسی ایجنت سپر */
+  message: string;
+}
+
+/** طبقه‌بندی زنده وضعیت دو تیپ با نتیجه فعلی (اگر همین وضعیت تا پایان بماند) */
+function liveZoneOf(tipA: TipMarketKind, tipB: TipMarketKind, h: number, a: number): Minute65ShieldResult["liveZone"] {
+  const wa = tipSettles(tipA, h, a);
+  const wb = tipSettles(tipB, h, a);
+  if (wa && wb) return "DOUBLE_WIN";
+  if (wa) return "A_ONLY";
+  if (wb) return "B_ONLY";
+  return "MIDDLE_TRAP";
+}
+
+/**
+ * سپر استاپ‌لاس زنده دقیقه ۶۵ — قلب مدیریت ریسک نسخه ۱۹.۰:
+ * در تله میانی از دقیقه ۶۵، زیان روی −۴۵.۰u سقف‌دار می‌شود (بازگشت تضمینی ۵۵u)
+ * به‌جای ریسک باخت کامل −۱۰۰u؛ خروج اجباری از دقیقه ۷۵.
+ */
+export function minute65Shield(input: Minute65ShieldInput): Minute65ShieldResult {
+  const stakeA = Math.max(1, input.stakeA ?? SHIELD_STAKE_A_UNITS);
+  const stakeB = Math.max(1, input.stakeB ?? SHIELD_STAKE_B_UNITS);
+  const totalStake = stakeA + stakeB;
+  const zone = liveZoneOf(input.tipA, input.tipB, input.scoreHome, input.scoreAway);
+  const base: Minute65ShieldResult = {
+    active: true,
+    state: "INACTIVE",
+    liveZone: zone,
+    escapeProb: null,
+    cappedLossUnits: null,
+    uncappedLossUnits: null,
+    recoveryUnits: null,
+    exitPlan: null,
+    message: "",
+  };
+
+  if (zone !== "MIDDLE_TRAP") {
+    return {
+      ...base,
+      state: "SAFE_ZONE",
+      message:
+        zone === "DOUBLE_WIN"
+          ? `ناحیه برد طلایی همزمان (${input.scoreHome}-${input.scoreAway}) — هر دو تیپ در حال بردن‌اند؛ سپر دقیقه ۶۵ غیرفعال (جک‌پات در راه).`
+          : `وضعیت امن (${input.scoreHome}-${input.scoreAway}) — یکی از دو تیپ برنده است؛ سپر دقیقه ۶۵ غیرفعال.`,
+    };
+  }
+
+  // ═══ تله میانی — ماتریس باقیمانده برای احتمال فرار ═══
+  const fracRaw = Math.max(0.03, Math.min(0.95, (90 - input.minute) / 90));
+  const frac = Math.pow(fracRaw, 0.85);
+  let lamH = Math.max(0.02, Math.min(4, input.lambdaHome * frac));
+  let lamA = Math.max(0.02, Math.min(4, input.lambdaAway * frac));
+  if (input.scoreHome > input.scoreAway) {
+    lamH *= 0.85;
+    lamA *= 1.18;
+  } else if (input.scoreAway > input.scoreHome) {
+    lamA *= 0.85;
+    lamH *= 1.18;
+  }
+
+  // احتمال فرار از تله = احتمال حداقل یک سناریوی پایان که تیپ A یا تیپ B (یا هر دو) ببرند
+  const MAX = 9;
+  let escapeProb = 0;
+  let pSum = 0;
+  for (let h = 0; h <= MAX; h++) {
+    for (let a = 0; a <= MAX; a++) {
+      const p = poisson(h, lamH) * poisson(a, lamA);
+      pSum += p;
+      const finalH = input.scoreHome + h;
+      const finalA = input.scoreAway + a;
+      const wa = tipSettles(input.tipA, finalH, finalA);
+      const wb = tipSettles(input.tipB, finalH, finalA);
+      if (wa || wb) escapeProb += p;
+    }
+  }
+  escapeProb = pSum > 0 ? escapeProb / pSum : 0;
+
+  const uncappedLoss = -totalStake;
+  const recovery = Math.round((totalStake - SHIELD_LOSS_CAP_UNITS) * 10) / 10;
+  const cappedLoss = -SHIELD_LOSS_CAP_UNITS;
+  const exitPlan = `خروج زنده (کش‌اوت/شرط متقابل) با بازگشت تضمینی ${recovery.toFixed(1)}u از ${totalStake}u استیک — زیان سقف‌دار ${cappedLoss.toFixed(1)}u`;
+
+  // دقیقه ۷۵+ یا فرار کم‌احتمال → خروج فوری؛ فرار پراحتمال → نگه‌داری مسلح
+  const hardExit = input.minute >= SHIELD_HARD_EXIT_MINUTE;
+  const shouldExit = hardExit || escapeProb < SHIELD_ESCAPE_PROB_HOLD;
+  const state: ShieldState = shouldExit ? "EXIT_NOW" : "SHIELD_HOLD";
+
+  const message = shouldExit
+    ? `🛡️ سپر استاپ‌لاس دقیقه ${SHIELD_TRIGGER_MINUTE}+ فعال شد — نتیجه ${input.scoreHome}-${input.scoreAway} در تله میانی است (هیچ تیپی نمی‌برد) و احتمال فرار تا پایان فقط ${(escapeProb * 100).toFixed(1)}٪ است. خروج ${hardExit ? "اجباری (دقیقه ۷۵+)" : "فوری"} با زیان سقف‌دار −۴۵.۰u به‌جای ریسک −۱۰۰u کامل — ${recovery.toFixed(1)}u اصل سرمایه نجات داده می‌شود.`
+    : `🛡️ سپر دقیقه ۶۵ مسلح شد — تله میانی (${input.scoreHome}-${input.scoreAway}) اما احتمال فرار ${(escapeProb * 100).toFixed(1)}٪ بالای آستانه ۳۵٪ است. برنامه خروج با زیان سقف‌دار −۴۵.۰u آماده است؛ اگر تا دقیقه ۷۵ وضعیت تله پایدار بماند، خروج اجباری اجرا می‌شود.`;
+
+  return {
+    ...base,
+    state,
+    escapeProb: Math.round(escapeProb * 1000) / 1000,
+    cappedLossUnits: cappedLoss,
+    uncappedLossUnits: uncappedLoss,
+    recoveryUnits: recovery,
+    exitPlan,
+    message,
+  };
+}

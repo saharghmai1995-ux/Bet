@@ -29,7 +29,9 @@ import { faNum, faPct, signed } from "@/lib/format";
 import { TacticalPitch, type PitchNode } from "@/components/app/fx/tactical-pitch";
 import { LiveEspnStrip } from "@/components/app/live-espn-strip";
 import { useQuantStore } from "@/lib/store";
+import { useFlashcards } from "@/lib/autopilot-derive";
 import type { LineupPlayerDTO, LineupShockDTO, LiveHedgeDTO } from "@/lib/types";
+import type { TipMarketKind } from "@/lib/engine/livehedge";
 
 const POSITIONS: Record<string, string> = {
   GK: "دروازه‌بان",
@@ -490,12 +492,52 @@ function LineupShockCard() {
 
 /* ─────────────── Card B: ایجنت پوشش زنده ─────────────── */
 
+/**
+ * v19.0-restore — استخراج تیپ A/تیپ B زوج‌تیپ از فلش‌کارت بازی انتخابی
+ * برای سپر استاپ‌لاس دقیقه ۶۵ (الگوهای طلایی G1/G2/G3 — فالبک G2).
+ */
+function tipsForShield(
+  card: ReturnType<typeof useFlashcards>[number] | undefined
+): { tipA: TipMarketKind; tipB: TipMarketKind; oddsA: number; oddsB: number } {
+  if (!card) return { tipA: { kind: "RESULT", side: "HOME" }, tipB: { kind: "TOTAL_UNDER", line: 2.5 }, oddsA: 2.1, oddsB: 3.1 };
+  const code = card.pair.archetype?.code ?? card.betType?.key ?? "G2";
+  const favHome = card.lambdaHome >= card.lambdaAway;
+  const fav: "HOME" | "AWAY" = favHome ? "HOME" : "AWAY";
+  const oddsA = Math.max(1.01, card.pair.totalOddsA);
+  const oddsB = Math.max(1.01, card.pair.totalOddsB);
+  switch (code) {
+    case "G1":
+      return { tipA: { kind: "OVER_TEAM", team: fav, line: 1.5 }, tipB: { kind: "TOTAL_UNDER", line: 2.5 }, oddsA, oddsB };
+    case "G3":
+      return { tipA: { kind: "BTTS", yes: true }, tipB: { kind: "WIN_NIL", team: fav }, oddsA, oddsB };
+    case "G2":
+    default:
+      return { tipA: { kind: "RESULT", side: favHome ? "HOME" : "AWAY" }, tipB: { kind: "TOTAL_UNDER", line: 2.5 }, oddsA, oddsB };
+  }
+}
+
+const SHIELD_ZONE_LABEL: Record<string, { label: string; className: string }> = {
+  DOUBLE_WIN: { label: "👑 ناحیه برد طلایی همزمان (Double-Win)", className: "border-amber-500/40 bg-amber-500/10 text-amber-200" },
+  A_ONLY: { label: "بال اصلی در حال بردن (تیپ A)", className: "border-emerald-500/30 bg-emerald-500/8 text-emerald-200" },
+  B_ONLY: { label: "بال پوششی در حال بردن (تیپ B)", className: "border-cyan-500/30 bg-cyan-500/8 text-cyan-200" },
+  MIDDLE_TRAP: { label: "⚠️ تله میانی — هیچ تیپی نمی‌برد", className: "border-rose-500/40 bg-rose-500/10 text-rose-200" },
+};
+
+const SHIELD_STATE_BADGE: Record<string, { label: string; className: string }> = {
+  SAFE_ZONE: { label: "وضعیت امن — سپر غیرفعال", className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" },
+  SHIELD_HOLD: { label: "🛡️ سپر مسلح — برنامه خروج آماده", className: "border-amber-500/40 bg-amber-500/10 text-amber-300" },
+  EXIT_NOW: { label: "🚨 خروج زنده فوری — زیان سقف‌دار", className: "border-rose-500/50 bg-rose-500/15 text-rose-200" },
+  INACTIVE: { label: "سپر غیرفعال", className: "border-white/15 bg-white/5 text-muted-foreground" },
+};
+
 function LiveHedgeCard() {
   const matches = useQuantStore((s) => s.matches);
   const activeMatchId = useQuantStore((s) => s.activeMatchId);
   const setActiveMatchId = useQuantStore((s) => s.setActiveMatchId);
   const debates = useQuantStore((s) => s.debates);
   const analyses = debates;
+  // v19.0-restore — فلش‌کارت‌های تاییدشده برای استخراج تیپ‌های سپر دقیقه ۶۵
+  const flashcards = useFlashcards();
 
   const [matchId, setMatchId] = useState("");
   const [selection, setSelection] = useState<"HOME" | "OVER25" | "AWAY">("HOME");
@@ -534,10 +576,25 @@ function LiveHedgeCard() {
       setRunning(true);
       setPendingEvent(event);
       try {
+        // v19.0-restore — تیپ‌های واقعی زوج‌تیپ بازی از فلش‌کارت (سپر دقیقه ۶۵)
+        const shieldTips = tipsForShield(flashcards.find((c) => c.match.id === matchId));
         const res = await fetch("/api/live", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ matchId, minute, event, selection, odds: oddsNum, stake: stakeNum }),
+          body: JSON.stringify({
+            matchId,
+            minute,
+            event,
+            selection,
+            odds: oddsNum,
+            stake: stakeNum,
+            tipA: shieldTips.tipA,
+            tipB: shieldTips.tipB,
+            oddsA: shieldTips.oddsA,
+            oddsB: shieldTips.oddsB,
+            stakeA: 65,
+            stakeB: 35,
+          }),
         });
         const data = (await res.json()) as LiveHedgeDTO & { error?: string };
         if (data.success) {
@@ -553,7 +610,7 @@ function LiveHedgeCard() {
         setPendingEvent(null);
       }
     },
-    [matchId, running, odds, stake, minute, selection]
+    [matchId, running, odds, stake, minute, selection, flashcards]
   );
 
   const probRows = result
@@ -832,6 +889,70 @@ function LiveHedgeCard() {
               </span>
             </div>
             <p className="text-[11px] leading-relaxed text-muted-foreground">{result.message}</p>
+
+            {/* ═══ v19.0-restore — سپر استاپ‌لاس زنده دقیقه ۶۵ ═══ */}
+            {result.minute65Shield && (
+              <div
+                className={`space-y-2 rounded-lg border p-3 ${
+                  result.minute65Shield.state === "EXIT_NOW"
+                    ? "border-rose-500/45 bg-rose-500/[0.07]"
+                    : result.minute65Shield.state === "SHIELD_HOLD"
+                      ? "border-amber-500/40 bg-amber-500/[0.06]"
+                      : "border-emerald-500/25 bg-emerald-500/[0.04]"
+                }`}
+                role="status"
+                aria-label="سپر استاپ‌لاس زنده دقیقه ۶۵"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-xs font-bold">
+                    <Shield className={`size-4 ${result.minute65Shield.state === "EXIT_NOW" ? "text-rose-400" : "text-emerald-400"}`} />
+                    سپر استاپ‌لاس دقیقه ۶۵
+                    <span className="hidden rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[9px] font-semibold text-muted-foreground sm:inline" dir="ltr">
+                      Minute-65 Stop-Loss Shield
+                    </span>
+                  </p>
+                  <Badge variant="outline" className={`text-[10px] ${SHIELD_STATE_BADGE[result.minute65Shield.state]?.className ?? ""}`}>
+                    {SHIELD_STATE_BADGE[result.minute65Shield.state]?.label ?? result.minute65Shield.state}
+                  </Badge>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline" className={`text-[10px] ${SHIELD_ZONE_LABEL[result.minute65Shield.liveZone]?.className ?? ""}`}>
+                    {SHIELD_ZONE_LABEL[result.minute65Shield.liveZone]?.label ?? result.minute65Shield.liveZone}
+                  </Badge>
+                  {result.minute65Shield.escapeProb != null && (
+                    <Badge variant="outline" className="border-white/15 bg-white/5 text-[10px]">
+                      احتمال فرار از تله: <b className="font-num" dir="ltr">{faNum(result.minute65Shield.escapeProb * 100, 1)}٪</b>
+                    </Badge>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-3">
+                  <div className="rounded-lg border border-white/8 bg-black/25 px-2.5 py-1.5">
+                    <p className="text-[9px] text-muted-foreground">زیان سقف‌دار سپر</p>
+                    <p className="font-num text-sm font-extrabold text-rose-300" dir="ltr">
+                      −{faNum(Math.abs(result.minute65Shield.cappedLossUnits ?? 0), 1)}u
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-white/8 bg-black/25 px-2.5 py-1.5">
+                    <p className="text-[9px] text-muted-foreground">زیان بدون سپر</p>
+                    <p className="font-num text-sm font-extrabold text-rose-400/80" dir="ltr">
+                      −{faNum(Math.abs(result.minute65Shield.uncappedLossUnits ?? 0), 1)}u
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] px-2.5 py-1.5">
+                    <p className="text-[9px] text-muted-foreground">بازگشت تضمینی خروج</p>
+                    <p className="font-num text-sm font-extrabold text-emerald-300" dir="ltr">
+                      +{faNum(result.minute65Shield.recoveryUnits ?? 0, 1)}u
+                    </p>
+                  </div>
+                </div>
+                {result.minute65Shield.exitPlan && (
+                  <p className="text-[10px] leading-4 text-muted-foreground" dir="ltr">
+                    {result.minute65Shield.exitPlan}
+                  </p>
+                )}
+                <p className="text-[11px] leading-relaxed text-foreground/85">{result.minute65Shield.message}</p>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

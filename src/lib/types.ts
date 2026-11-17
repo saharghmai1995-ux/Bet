@@ -611,6 +611,21 @@ export interface LiveHedgeDTO {
   holdEV: number;
   recommendation: "HEDGE" | "HOLD";
   message: string;
+  /**
+   * v19.0-restore — سپر استاپ‌لاس زنده دقیقه ۶۵ (وقتی زوج‌تیپ A/B ارسال شود).
+   * تله میانی از دقیقه ۶۵ → زیان سقف‌دار −۴۵.۰u به‌جای ریسک −۱۰۰u کامل.
+   */
+  minute65Shield: {
+    active: boolean;
+    state: "INACTIVE" | "TRAP_ARMED" | "SHIELD_HOLD" | "EXIT_NOW" | "SAFE_ZONE";
+    liveZone: "DOUBLE_WIN" | "A_ONLY" | "B_ONLY" | "MIDDLE_TRAP";
+    escapeProb: number | null;
+    cappedLossUnits: number | null;
+    uncappedLossUnits: number | null;
+    recoveryUnits: number | null;
+    exitPlan: string | null;
+    message: string;
+  } | null;
 }
 
 // ═══════════════════════════════════════════════════════
