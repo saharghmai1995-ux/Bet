@@ -1,0 +1,702 @@
+    30→    30→const START_BANK = 1000; // بانک مرجع ۱۰۰۰ واحدی — استیک فلت ۱۰۰ واحدی هر کارت
+    31→    31→
+    32→    32→/** گیج نیم‌دایره‌ای متحرک وین‌ریت (SVG با انیمیشن stroke-dashoffset) */
+    33→    33→function WinRateGauge({ winPct, breakdown }: { winPct: number; breakdown: { aWin: number; bWin: number; double: number; loss: number } | null }) {
+    34→    34→  const [drawn, setDrawn] = useState(0);
+    35→    35→  useEffect(() => {
+    36→    36→    const t = setTimeout(() => setDrawn(Math.max(0, Math.min(100, winPct))), 150);
+    37→    37→    return () => clearTimeout(t);
+    38→    38→  }, [winPct]);
+    39→    39→
+    40→    40→  const R = 70;
+    41→    41→  const CIRC = Math.PI * R; // نیم‌دایره
+    42→    42→  const offset = CIRC * (1 - drawn / 100);
+    43→    43→  const tone = winPct >= 60 ? "#34d399" : winPct >= 45 ? "#fbbf24" : winPct > 0 ? "#fb7185" : "#64748b";
+    44→    44→
+    45→    45→  return (
+    46→    46→    // v13.0-⑨ — flex-wrap + عرض ثابت راهنما: متن‌های «برد طلایی همزمان» و «باخت همزمان» هرگز قطع نمی‌شوند
+    47→    47→    <div className="flex flex-wrap items-center gap-3">
+    48→    48→      <div className="min-w-[150px] shrink-0">
+    49→    49→        <svg viewBox="0 0 180 100" className="h-[86px] w-[150px]" role="img" aria-label={`گیج وین‌ریت ترکیبی: ${faNum(winPct, 1)} درصد`}>
+    50→    50→        <defs>
+    51→    51→          <linearGradient id="gauge-grad" x1="0" y1="0" x2="1" y2="0">
+    52→    52→            <stop offset="0%" stopColor="#22d3ee" />
+    53→    53→            <stop offset="60%" stopColor="#34d399" />
+    54→    54→            <stop offset="100%" stopColor="#fbbf24" />
+    55→    55→          </linearGradient>
+    56→    56→        </defs>
+    57→    57→        {/* مسیر خاکستری پایه */}
+    58→    58→        <path d={`M 20 90 A ${R} ${R} 0 0 1 160 90`} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="13" strokeLinecap="round" />
+    59→    59→        {/* کمان وین‌ریت متحرک */}
+    60→    60→        <path
+    61→    61→          d={`M 20 90 A ${R} ${R} 0 0 1 160 90`}
+    62→    62→          fill="none"
+    63→    63→          stroke="url(#gauge-grad)"
+    64→    64→          strokeWidth="13"
+    65→    65→          strokeLinecap="round"
+    66→    66→          strokeDasharray={CIRC}
+    67→    67→          strokeDashoffset={offset}
+    68→    68→          style={{ transition: "stroke-dashoffset 1.6s cubic-bezier(0.22,1,0.36,1)" }}
+    69→    69→        />
+    70→    70→        <text x="90" y="72" textAnchor="middle" fontSize="26" fontWeight="800" fill={tone} className="font-num">
+    71→    71→          {faNum(winPct, 1)}٪
+    72→    72→        </text>
+    73→    73→        <text x="90" y="90" textAnchor="middle" fontSize="9.5" fill="#94a3b8">
+    74→    74→          Combined Win Rate
+    75→    75→        </text>
+    76→    76→      </svg>
+    77→    77→      </div>
+    78→    78→      <div className="min-w-[240px] shrink-0 flex-1 space-y-1 text-[10px] leading-4">
+    79→    79→        {breakdown ? (
+    80→    80→          <>
+    81→    81→            <LegendRow color="bg-sky-400" label="برد تیپ A" value={`${faNum(breakdown.aWin, 1)}٪`} />
+    82→    82→            <LegendRow color="bg-emerald-400" label="برد تیپ B" value={`${faNum(breakdown.bWin, 1)}٪`} />
+    83→    83→            <LegendRow color="bg-amber-400" label={<span>برد طلایی همزمان <b dir="ltr">(Double-Win)</b></span>} value={`${faNum(breakdown.double, 1)}٪`} />
+    84→    84→            <LegendRow color="bg-rose-400" label="باخت همزمان (تله میانی)" value={`${faNum(breakdown.loss, 1)}٪`} />
+    85→    85→          </>
+    86→    86→        ) : (
+    87→    87→          <p className="text-muted-foreground">
+    88→    88→            هنوز کارت تسویه‌شده‌ای وجود ندارد — پس از اولین FT، وین‌ریت «واقعی» از نتایج رسمی ESPN اینجا محاسبه می‌شود (صفر عدد جعلی).
+    89→    89→          </p>
+    90→    90→        )}
+    91→    91→      </div>
+    92→    92→    </div>
+    93→    93→  );
+    94→    94→}
+    95→    95→
+    96→    96→function LegendRow({ color, label, value }: { color: string; label: React.ReactNode; value: string }) {
+    97→    97→  return (
+    98→    98→    <p className="flex items-center justify-between gap-2">
+    99→    99→      <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
+   100→   100→        <span className={cn("inline-block size-2 shrink-0 rounded-sm", color)} />
+   101→   101→        <span className="whitespace-nowrap">{label}</span>
+   102→   102→      </span>
+   103→   103→      <b className="font-num shrink-0 text-foreground" dir="ltr">{value}</b>
+   104→   104→    </p>
+   105→   105→  );
+   106→   106→}
+   107→   107→
+   108→   108→// ═══ v19.0 — کارت ویترین اثبات سودآوری ۵ رژیم (5-Regime ROI Breakdown Banner) ═══
+   109→   109→// جدول/نوار افرازی بالای مرکز فرماندهی: سود خالص هر استراتژی به‌صورت شفاف —
+   110→   110→// افراز مجزا (هر کارت فقط در خط تولید خودش) · اعداد فقط از کارنامه واقعی ESPN.
+   111→   111→type RegimeItem = NonNullable<LedgerDTO["regimes"]>[number];
+   112→   112→
+   113→   113→const REGIME_TONES: Record<string, string> = {
+   114→   114→  DUAL_HEDGE: "border-cyan-500/25 bg-cyan-500/[0.05] text-cyan-300",
+   115→   115→  COMBO: "border-emerald-500/25 bg-emerald-500/[0.05] text-emerald-300",
+   116→   116→  CORRECT_SCORE: "border-amber-500/25 bg-amber-500/[0.05] text-amber-300",
+   117→   117→  BANKER: "border-sky-500/25 bg-sky-500/[0.05] text-sky-300",
+   118→   118→  ACCUMULATOR: "border-fuchsia-500/25 bg-fuchsia-500/[0.05] text-fuchsia-300",
+   119→   119→  SNIPER: "border-rose-500/25 bg-rose-500/[0.05] text-rose-300",
+   120→   120→};
+   121→   121→
+   122→   122→function RegimeRoiBanner({ regimes }: { regimes: RegimeItem[] | null }) {
+   123→   123→  if (!regimes || regimes.length === 0) return null;
+   124→   124→  const totalNet = regimes.reduce((a, r) => a + r.netProfit, 0);
+   125→   125→  return (
+   126→   126→    <div
+   127→   127→      className="border-b border-white/8 bg-white/[0.015] px-4 py-3"
+   128→   128→      role="table"
+   129→   129→      aria-label="افراز سودآوری ۵ رژیم تولید کارت"
+   130→   130→    >
+   131→   131→      <p className="mb-2 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-muted-foreground">
+   132→   132→        <Medal className="size-3.5 text-amber-400" aria-hidden />
+   133→   133→        ویترین سودآوری ۵ رژیم (افراز مجزا — فقط کارت‌های تاییدشده و تسویه ESPN)
+   134→   134→        <b className="font-num text-foreground" dir="ltr">
+   135→   135→          {totalNet >= 0 ? "+" : "−"}{faNum(Math.abs(totalNet), 1)}u
+   136→   136→        </b>
+   137→   137→      </p>
+   138→   138→      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+   139→   139→        {regimes.map((r) => {
+   140→   140→          const tone = REGIME_TONES[r.key] ?? "border-white/10 bg-white/[0.03]";
+   141→   141→          return (
+   142→   142→            <div key={r.key} className={cn("rounded-lg border px-2.5 py-2", tone)}>
+   143→   143→              <p className="flex items-center gap-1 text-[10px] font-bold">
+   144→   144→                <span aria-hidden>{r.icon}</span>
+   145→   145→                {r.labelFa}
+   146→   146→              </p>
+   147→   147→              <p className="mt-1 font-num text-sm font-extrabold" dir="ltr">
+   148→   148→                {r.netProfit >= 0 ? "+" : "−"}{faNum(Math.abs(r.netProfit), 1)}u
+   149→   149→              </p>
+   150→   150→              <p className="mt-0.5 text-[9px] leading-3 text-muted-foreground">
+   151→   151→                {r.settled > 0 ? (
+   152→   152→                  <>
+   153→   153→                    وین‌ریت <b className="font-num" dir="ltr">{faNum(r.winRatePct ?? 0, 0)}٪</b>
+   154→   154→                    {" · "}میانگین هر برد{" "}
+   155→   155→                    <b className="font-num" dir="ltr">
+   156→   156→                      {r.avgProfitPerWin != null ? (r.avgProfitPerWin >= 0 ? "+" : "−") + faNum(Math.abs(r.avgProfitPerWin), 1) : "—"}
+   157→   157→                    </b>
+   158→   158→                    {" · "}{faNum(r.settled, 0)} کارت
+   159→   159→                  </>
+   160→   160→                ) : (
+   161→   161→                  "هنوز کارت تسویه‌شده‌ای در این رژیم نیست"
+   162→   162→                )}
+   163→   163→              </p>
+   164→   164→            </div>
+   165→   165→          );
+   166→   166→        })}
+   167→   167→      </div>
+   168→   168→    </div>
+   169→   169→  );
+   170→   170→}
+   171→   171→
+   172→   172→/**
+   173→   173→ * نمونه‌برداری یکنواخت — همیشه نقطه اول و آخر حفظ می‌شود.
+   174→   174→ * v13.5.1 — رفع باگ نمایش: فیلتر «حذف تکراری‌های مجاور» حذف شد؛ آن فیلتر
+   175→   175→ * ۱) لبه‌های فلات را نگه می‌داشت و ۲) بعد از حذف نقاط میانی، فاصله‌گذاری افقی را به‌هم
+   176→   176→ * می‌ریخت (اعوجاج منحنی). اکنون فقط نمونه‌برداری مساوی با حفظ دو سر انجام می‌شود.
+   177→   177→ */
+   178→   178→function downsampleEvenly(arr: number[], maxPts: number): number[] {
+   179→   179→  if (arr.length <= maxPts) return arr;
+   180→   180→  const out: number[] = [];
+   181→   181→  for (let i = 0; i < maxPts - 1; i++) {
+   182→   182→    out.push(arr[Math.round((i * (arr.length - 1)) / (maxPts - 1))]);
+   183→   183→  }
+   184→   184→  out.push(arr[arr.length - 1]);
+   185→   185→  return out;
+   186→   186→}
+   187→   187→
+   188→   188→/** منحنی اسپارک‌لاین رشد سرمایه (SVG متحرک با draw-in) — v13.5.1 با خط مرجع ۱۰۰۰ + محور تاریخ */
+   189→   189→function EquitySparkline({
+   190→   190→  curve,
+   191→   191→  roi,
+   192→   192→  finalBank,
+   193→   193→  basis,
+   194→   194→  firstSettledAt,
+   195→   195→  lastSettledAt,
+   196→   196→}: {
+   197→   197→  curve: number[];
+   198→   198→  roi: number;
+   199→   199→  finalBank: number;
+   200→   200→  basis: number;
+   201→   201→  firstSettledAt: string | null;
+   202→   202→  lastSettledAt: string | null;
+   203→   203→}) {
+   204→   204→  const [drawn, setDrawn] = useState(false);
+   205→   205→  useEffect(() => {
+   206→   206→    const t = setTimeout(() => setDrawn(true), 200);
+   207→   207→    return () => clearTimeout(t);
+   208→   208→  }, []);
+   209→   209→
+   210→   210→  const W = 220;
+   211→   211→  const H = 84;
+   212→   212→  const pts = curve.length >= 2 ? curve : [START_BANK, START_BANK];
+   213→   213→  const min = Math.min(...pts, START_BANK);
+   214→   214→  const max = Math.max(...pts, START_BANK);
+   215→   215→  const span = Math.max(1, max - min);
+   216→   216→  const step = W / Math.max(1, pts.length - 1);
+   217→   217→  const yOf = (v: number) => H - 8 - ((v - min) / span) * (H - 20);
+   218→   218→  const coords = pts.map((v, i) => [i * step, yOf(v)] as const);
+   219→   219→  const line = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+   220→   220→  const area = `${line} L${W},${H} L0,${H} Z`;
+   221→   221→  const baseY = yOf(START_BANK);
+   222→   222→  const up = roi >= 0;
+   223→   223→  // v13.5.1 — برچسب محور زمان: اولین و آخرین تسویه واقعی منحنی (شمسی/میلادی کوتاه)
+   224→   224→  const dateLbl = (iso: string | null) =>
+   225→   225→    iso
+   226→   226→      ? new Intl.DateTimeFormat("fa-IR", { month: "short", day: "numeric" }).format(new Date(iso))
+   227→   227→      : null;
+   228→   228→  const fromLbl = dateLbl(firstSettledAt);
+   229→   229→  const toLbl = dateLbl(lastSettledAt);
+   230→   230→
+   231→   231→  return (
+   232→   232→    <div className="min-w-0 flex-1">
+   233→   233→      <div className="mb-1 flex items-baseline justify-between gap-2">
+   234→   234→        <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
+   235→   235→          <TrendingUp className={cn("size-3.5", up ? "text-emerald-400" : "text-rose-400")} />
+   236→   236→          منحنی رشد بانک ۱۰۰۰ واحدی
+   237→   237→        </p>
+   238→   238→        <p className="font-num text-xs font-bold" dir="ltr">
+   239→   239→          <span className={up ? "text-emerald-300" : "text-rose-300"}>
+   240→   240→            {faNum(Math.round(finalBank), 0)}
+   241→   241→          </span>{" "}
+   242→   242→          <span className={up ? "text-emerald-400" : "text-rose-400"}>
+   243→   243→            ({up ? "+" : ""}{faNum(roi, 1)}% ROI)
+   244→   244→          </span>
+   245→   245→        </p>
+   246→   246→      </div>
+   247→   247→      <p className="mb-0.5 text-[9px] leading-3 text-muted-foreground/80">
+   248→   248→        مبنای منحنی: فقط کارت‌های تایید سوپروایزر (پول واقعی) — وتوهای دفتر سایه در این منحنی لحاظ نمی‌شوند.
+   249→   249→      </p>
+   250→   250→      <svg viewBox={`0 0 ${W} ${H}`} className="h-[70px] w-full" role="img" aria-label="نمودار رشد سرمایه بر پایه سود واقعی کارت‌های تاییدشده">
+   251→   251→        <defs>
+   252→   252→          <linearGradient id="eq-fill" x1="0" y1="0" x2="0" y2="1">
+   253→   253→            <stop offset="0%" stopColor="#34d399" stopOpacity="0.45" />
+   254→   254→            <stop offset="100%" stopColor="#34d399" stopOpacity="0.02" />
+   255→   255→          </linearGradient>
+   256→   256→        </defs>
+   257→   257→        {/* خط مرجع بانک ۱۰۰۰ واحدی — مبنا همیشه دیده می‌شود حتی وقتی منحنی تخت است */}
+   258→   258→        <line x1="0" y1={baseY} x2={W} y2={baseY} stroke="rgba(255,255,255,0.22)" strokeWidth="1" strokeDasharray="4 4" />
+   259→   259→        <text x="2" y={baseY - 3} fontSize="7.5" fill="rgba(255,255,255,0.45)">1000</text>
+   260→   260→        <path d={area} fill="url(#eq-fill)" style={{ opacity: drawn ? 1 : 0, transition: "opacity 1.2s ease 0.5s" }} />
+   261→   261→        {/** v13.5 — رفع باگ نمایش: dasharray ثابت ۶۰۰ بعد از طول مسیر بیش از ۶۰۰، بخش‌هایی از خط را نامرئی می‌کرد؛ با pathLength=1 نرمال شد */}
+   262→   262→        <path
+   263→   263→          d={line}
+   264→   264→          fill="none"
+   265→   265→          stroke={up ? "#34d399" : "#fb7185"}
+   266→   266→          strokeWidth="2.4"
+   267→   267→          strokeLinecap="round"
+   268→   268→          pathLength={1}
+   269→   269→          style={{
+   270→   270→            strokeDasharray: 1,
+   271→   271→            strokeDashoffset: drawn ? 0 : 1,
+   272→   272→            transition: "stroke-dashoffset 1.8s cubic-bezier(0.22,1,0.36,1)",
+   273→   273→            filter: "drop-shadow(0 0 5px rgba(52,211,153,0.55))",
+   274→   274→          }}
+   275→   275→        />
+   276→   276→        <circle cx={coords[coords.length - 1][0]} cy={coords[coords.length - 1][1]} r="3.4" fill={up ? "#6ee7b7" : "#fda4af"}>
+   277→   277→          <animate attributeName="r" values="3;4.4;3" dur="1.6s" repeatCount="indefinite" />
+   278→   278→        </circle>
+   279→   279→      </svg>
+   280→   280→      <p className="mt-0.5 flex items-center justify-between gap-2 text-[9px] text-muted-foreground/70" dir="ltr">
+   281→   281→        <span>START 1,000u → END {faNum(Math.round(finalBank), 0)}u · {faNum(basis, 0)} real settled cards</span>
+   282→   282→        {fromLbl && toLbl && (
+   283→   283→          <span className="shrink-0 tabular-nums" dir="rtl">
+   284→   284→            {fromLbl} ← {toLbl}
+   285→   285→          </span>
+   286→   286→        )}
+   287→   287→      </p>
+   288→   288→    </div>
+   289→   289→  );
+   290→   290→}
+   291→   291→
+   292→   292→/** ویجت کارایی سوپروایزر */
+   293→   293→function VetoEfficiency({ approved, vetoed, scanned, savedByVeto }: { approved: number; vetoed: number; scanned: number; savedByVeto: number }) {
+   294→   294→  const total = approved + vetoed;
+   295→   295→  const pct = total > 0 ? Math.round((approved / total) * 100) : 0;
+   296→   296→  return (
+   297→   297→    <div className="space-y-2">
+   298→   298→      <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
+   299→   299→        <ScanLine className="size-3.5 text-cyan-400" />
+   300→   300→        شاخص کیفیت انتخاب سوپروایزر
+   301→   301→      </p>
+   302→   302→      <div className="flex items-end gap-3">
+   303→   303→        <p className="font-num text-2xl font-extrabold text-emerald-300" dir="ltr">{faNum(approved, 0)}</p>
+   304→   304→        <p className="pb-1 text-[10px] text-muted-foreground">تایید (Approved)</p>
+   305→   305→        <p className="font-num text-2xl font-extrabold text-rose-300" dir="ltr">{faNum(vetoed, 0)}</p>
+   306→   306→        <p className="pb-1 text-[10px] text-muted-foreground">وتو (Filtered Out)</p>
+   307→   307→      </div>
+   308→   308→      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-white/8" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="نسبت تایید به وتو">
+   309→   309→        <div className="h-1.5 bg-gradient-to-l from-emerald-500 to-emerald-400 transition-all duration-700" style={{ width: `${pct}%` }} />
+   310→   310→        <div className="h-1.5 flex-1 bg-rose-500/50" />
+   311→   311→      </div>
+   312→   312→      <p className="text-[10px] leading-4 text-muted-foreground">
+   313→   313→        از <b className="font-num text-foreground" dir="ltr">{faNum(scanned, 0)}</b> بازی اسکن‌شده — بازی‌های پرریسک با گیت سخت v19.0 (ریسک همزمان &gt; ۱۵٪) وتو شده‌اند.
+   314→   314→      </p>
+   315→   315→      {savedByVeto > 0 && (
+   316→   316→        <p
+   317→   317→          className="flex items-center gap-1 rounded-lg border border-amber-500/40 bg-gradient-to-l from-amber-500/[0.12] to-emerald-500/[0.06] px-2 py-1 text-[10px] font-bold text-amber-200"
+   318→   318→          role="status"
+   319→   319→          aria-label="سرمایه نجات‌یافته توسط وتوی سوپروایزر"
+   320→   320→        >
+   321→   321→          <ShieldCheck className="size-3.5 shrink-0 text-amber-300" />
+   322→   322→          🛡️ سرمایه نجات‌یافته توسط وتو:
+   323→   323→          <b className="font-num text-amber-300" dir="ltr">+{faNum(savedByVeto, 1)} واحد</b>
+   324→   324→        </p>
+   325→   325→      )}
+   326→   326→    </div>
+   327→   327→  );
+   328→   328→}
+   329→   329→
+   330→   330→/** سوییچ اشتراک + مودال USDT */
+   331→   331→function TierSwitch() {
+   332→   332→  const tier = useQuantStore((s) => s.config.tier);
+   333→   333→  const patchConfig = useQuantStore((s) => s.patchConfig);
+   334→   334→  const open = useQuantStore((s) => s.usdtModalOpen);
+   335→   335→  const setOpen = useQuantStore((s) => s.setUsdtModalOpen);
+   336→   336→  const [txid, setTxid] = useState("");
+   337→   337→  const [copied, setCopied] = useState(false);
+   338→   338→  const [activating, setActivating] = useState(false);
+   339→   339→
+   340→   340→  const WALLET = "TQ8fYr2vNk4mP9xLwD7cHs3EaB6uQzVgRt"; // آدرس شبیه‌ساز TRC-20 (دمو)
+   341→   341→  const isVip = tier !== "FREE";
+   342→   342→
+   343→   343→  const activate = () => {
+   344→   344→    if (txid.trim().length < 8) {
+   345→   345→      toast.warning("شناسه تراکنش (TXID) را وارد کنید — حداقل ۸ کاراکتر");
+   346→   346→      return;
+   347→   347→    }
+   348→   348→    setActivating(true);
+   349→   349→    setTimeout(() => {
+   350→   350→      patchConfig({ tier: "VIP" });
+   351→   351→      setActivating(false);
+   352→   352→      setOpen(false);
+   353→   353→      setTxid("");
+   354→   354→      toast.success("👑 اشتراک VIP فعال شد — همه فلش‌کارت‌های ویژه باز شدند", {
+   355→   355→        description: `TXID ثبت‌شده: ${txid.slice(0, 18)}… (شبیه‌ساز اشتراک — دمو)`,
+   356→   356→        duration: 6000,
+   357→   357→      });
+   358→   358→    }, 900);
+   359→   359→  };
+   360→   360→
+   361→   361→  return (
+   362→   362→    <div className="space-y-2">
+   363→   363→      <p className="flex items-center gap-1 text-[10px] text-muted-foreground">
+   364→   364→        <Crown className="size-3.5 text-amber-400" />
+   365→   365→        سطح اشتراک
+   366→   366→      </p>
+   367→   367→      <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist" aria-label="شبیه‌ساز سطح اشتراک">
+   368→   368→        {(["FREE", "PRO", "VIP"] as const).map((t) => (
+   369→   369→          <Button
+   370→   370→            key={t}
+   371→   371→            size="sm"
+   372→   372→            variant="ghost"
+   373→   373→            role="tab"
+   374→   374→            aria-selected={tier === t}
+   375→   375→            className={cn(
+   376→   376→              // v13.0-⑤ — تاج VIP از کادر بیرون نمی‌زند
+   377→   377→              "h-7 whitespace-nowrap px-3 py-1.5 text-[10px] font-bold sm:text-[11px]",
+   378→   378→              tier === t
+   379→   379→                ? t === "VIP"
+   380→   380→                  ? "bg-amber-500/20 text-amber-300"
+   381→   381→                  : t === "PRO"
+   382→   382→                    ? "bg-cyan-500/20 text-cyan-300"
+   383→   383→                    : "bg-emerald-500/20 text-emerald-300"
+   384→   384→                : "text-muted-foreground"
+   385→   385→            )}
+   386→   386→            onClick={() => {
+   387→   387→              patchConfig({ tier: t });
+   388→   388→              toast.info(t === "FREE" ? "حالت Free — کارت‌های ویژه تار می‌شوند (تیپ B قفل VIP)" : t === "PRO" ? "حالت Pro — کارت‌ها باز شدند" : "حالت VIP — دسترسی کامل", {
+   389→   389→                description: "شبیه‌ساز اشتراک برای نمایش تفاوت سطوح",
+   390→   390→              });
+   391→   391→            }}
+   392→   392→          >
+   393→   393→            {t === "VIP" && <Crown className="size-3" />}
+   394→   394→            {t === "FREE" ? "Free" : t === "PRO" ? "Pro" : "👑 VIP"}
+   395→   395→          </Button>
+   396→   396→        ))}
+   397→   397→      </div>
+   398→   398→      {!isVip && (
+   399→   399→        <Button
+   400→   400→          size="sm"
+   401→   401→          className="h-8 w-full gap-1 bg-gradient-to-l from-amber-500 to-amber-400 text-[11px] font-bold text-black hover:from-amber-400 hover:to-amber-300"
+   402→   402→          onClick={() => setOpen(true)}
+   403→   403→          aria-label="پرداخت رمزارزی USDT و ارتقا به VIP"
+   404→   404→        >
+   405→   405→          <Wallet className="size-3.5" /> ارتقا با USDT (TRC-20)
+   406→   406→        </Button>
+   407→   407→      )}
+   408→   408→
+   409→   409→      {/* ═══ مودال پرداخت USDT ═══ */}
+   410→   410→      <Dialog open={open} onOpenChange={setOpen}>
+   411→   411→        <DialogContent className="border-amber-500/30 bg-[rgba(10,14,24,0.97)] sm:max-w-md" dir="rtl">
+   412→   412→          <DialogHeader>
+   413→   413→            <DialogTitle className="flex items-center gap-2 text-amber-300">
+   414→   414→              <Crown className="size-5" /> اشتراک VIP کانال تلگرام — پرداخت USDT
+   415→   415→            </DialogTitle>
+   416→   416→            <DialogDescription className="text-[11px] leading-5 text-muted-foreground">
+   417→   417→              باز کردن تیپ B (پوشش ضریب ~۳) در همه فلش‌کارت‌ها + دریافت خودکار نتیجه تسویه‌شده در کانال VIP.
+   418→   418→              این بخش «شبیه‌ساز اشتراک» است — پس از ثبت TXID، فعال‌سازی به‌صورت دمو انجام می‌شود.
+   419→   419→            </DialogDescription>
+   420→   420→          </DialogHeader>
+   421→   421→          <div className="space-y-3 text-xs">
+   422→   422→            <div className="grid grid-cols-3 gap-2 text-center">
+   423→   423→              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-2">
+   424→   424→                <p className="text-[9px] text-muted-foreground">یک‌ماهه</p>
+   425→   425→                <p className="font-num text-sm font-bold text-emerald-300" dir="ltr">25 USDT</p>
+   426→   426→              </div>
+   427→   427→              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 ring-1 ring-amber-500/40">
+   428→   428→                <p className="text-[9px] text-amber-200/80">مادام‌العمر ⭐</p>
+   429→   429→                <p className="font-num text-sm font-bold text-amber-300" dir="ltr">50 USDT</p>
+   430→   430→              </div>
+   431→   431→              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2">
+   432→   432→                <p className="text-[9px] text-muted-foreground">سه‌ماهه</p>
+   433→   433→                <p className="font-num text-sm font-bold text-foreground" dir="ltr">60 USDT</p>
+   434→   434→              </div>
+   435→   435→            </div>
+   436→   436→            <div className="space-y-1.5">
+   437→   437→              <p className="text-[10px] font-semibold text-muted-foreground">آدرس کیف پول (شبکه TRC-20):</p>
+   438→   438→              <div className="flex items-center gap-1.5">
+   439→   439→                <code className="min-w-0 flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-2 py-2 text-[10px] text-amber-200" dir="ltr">
+   440→   440→                  {WALLET}
+   441→   441→                </code>
+   442→   442→                <Button
+   443→   443→                  size="sm"
+   444→   444→                  variant="outline"
+   445→   445→                  className="h-9 w-9 shrink-0 border-white/15 p-0"
+   446→   446→                  onClick={() => {
+   447→   447→                    void navigator.clipboard?.writeText(WALLET);
+   448→   448→                    setCopied(true);
+   449→   449→                    setTimeout(() => setCopied(false), 1500);
+   450→   450→                  }}
+   451→   451→                  aria-label="کپی آدرس کیف پول"
+   452→   452→                >
+   453→   453→                  {copied ? <BadgeCheck className="size-4 text-emerald-400" /> : <Copy className="size-4" />}
+   454→   454→                </Button>
+   455→   455→              </div>
+   456→   456→            </div>
+   457→   457→            <div className="space-y-1.5">
+   458→   458→              <p className="text-[10px] font-semibold text-muted-foreground">شناسه تراکنش (TXID) پس از واریز:</p>
+   459→   459→              <Input
+   460→   460→                dir="ltr"
+   461→   461→                placeholder="tx hash از کیف پول شما..."
+   462→   462→                value={txid}
+   463→   463→                onChange={(e) => setTxid(e.target.value)}
+   464→   464→                className="h-9 border-white/10 bg-black/30 text-[11px]"
+   465→   465→              />
+   466→   466→            </div>
+   467→   467→            <Button
+   468→   468→              className="h-9 w-full gap-1 bg-gradient-to-l from-amber-500 to-amber-400 text-xs font-bold text-black hover:from-amber-400 hover:to-amber-300"
+   469→   469→              onClick={activate}
+   470→   470→              disabled={activating}
+   471→   471→            >
+   472→   472→              {activating ? <Loader2 className="size-4 animate-spin" /> : <Crown className="size-4" />}
+   473→   473→              فعال‌سازی اشتراک VIP
+   474→   474→            </Button>
+   475→   475→          </div>
+   476→   476→        </DialogContent>
+   477→   477→      </Dialog>
+   478→   478→    </div>
+   479→   479→  );
+   480→   480→}
+   481→   481→
+   482→   482→/**
+   483→   483→ * v18.0 — 🥈 سوییچ تاج نقره‌ای (شکارچی آلفای دفتر سایه — Tier-2 Shadow Alpha Harvester):
+   484→   484→ * روشن = کارت‌های سطح ۲ (winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ لیگ معتبر) با استیک نصف ۵۰ واحدی
+   485→   485→ * Half-Kelly در دک فلش‌کارت ظاهر می‌شوند و سود واقعی تسویه‌شده‌شان («تزریق از دفتر سایه»)
+   486→   486→ * روی منحنی/تیتر بانک اضافه می‌شود. خاموش = فقط تاج‌های طلایی سطح ۱ (استیک کامل ۱۰۰u).
+   487→   487→ */
+   488→   488→function SilverCrownSwitch() {
+   489→   489→  const shadowHarvestOn = useQuantStore((s) => s.config.shadowHarvestOn);
+   490→   490→  const patchConfig = useQuantStore((s) => s.patchConfig);
+   491→   491→
+   492→   492→  return (
+   493→   493→    <div className="space-y-2 rounded-xl border border-zinc-500/25 bg-zinc-500/[0.06] p-3" dir="rtl">
+   494→   494→      <div className="flex items-center justify-between gap-2">
+   495→   495→        <p className="flex items-center gap-1 text-[10px] text-zinc-300">
+   496→   496→          <Medal className="size-3.5 text-zinc-400" />
+   497→   497→          تاج نقره‌ای سطح ۲ (استیک نصف)
+   498→   498→        </p>
+   499→   499→        <Switch
+   500→   500→          checked={shadowHarvestOn}
+   501→   501→          onCheckedChange={(v) => {
+   502→   502→            patchConfig({ shadowHarvestOn: v });
+   503→   503→            toast.info(
+   504→   504→              v
+   505→   505→                ? "🥈 تاج نقره‌ای فعال شد — کارت‌های شکارچی آلفای سایه (استیک ۵۰ واحدی) به دک و منحنی بانک اضافه شدند"
+   506→   506→                : "فقط تاج‌های طلایی سطح ۱ نمایش داده می‌شود — کتاب نقره‌ای مخفی شد",
+   507→   507→              { description: "سیستم دو‌سطحی تاج v18.0 — استیک نقره‌ای = نصف کلِی (Half-Kelly)" }
+   508→   508→            );
+   509→   509→          }}
+   510→   510→          aria-label="سوییچ فعال‌سازی تاج نقره‌ای سطح ۲"
+   511→   511→        />
+   512→   512→      </div>
+   513→   513→      <p className="text-[9px] leading-4 text-muted-foreground">
+   514→   514→        کارت‌های نزدیک-به-وتو با winProb ≥ ۸۴٪ و شارپ ≥ ۰.۱۶ به‌جای حبس در دفتر کاغذی، با نشان 🥈 و استیک نصف‌شده ۵۰ واحدی منتشر می‌شوند.
+   515→   515→      </p>
+   516→   516→    </div>
+   517→   517→  );
+   518→   518→}
+   519→   519→
+   520→   520→/**
+   521→   521→ * v18.0 — نبض کارنامه (Ledger Pulse):
+   522→   522→ * پاسخ صادقانه و مهندسی‌شده به «چرا عملکرد/وین‌ریت/منحنی تغییری نکرده؟»:
+   523→   523→ *   ۱) آمار رسمی فقط از کارت‌های تاییدشده سوپروایزر ساخته می‌شود (پول واقعی).
+   524→   524→ *   ۲) اگر گیت v16 همه کارت‌های تازه را وتو کند، منحنی تخت می‌ماند — اینجا عددی
+   525→   525→ *      شفاف می‌شود (وتوها، کارت در انتظار FT، آخرین تسویه رسمی).
+   526→   526→ *   ۳) دفتر سایه (تسویه کاغذی وتوها) کنارش نمایش داده می‌شود تا همیشه عدد زنده باشد.
+   527→   527→ *   ۴) خود ماژول هر ۹۰ ثانیه رفرش می‌شود تا تسویه‌های تازه فوری ظاهر شوند.
+   528→   528→ */
+   529→   529→function LedgerPulse({ ledger, savedByVeto }: { ledger: LedgerDTO | null; savedByVeto: number }) {
+   530→   530→  const pulse = ledger?.pulse;
+   531→   531→  const shadow = ledger?.shadow;
+   532→   532→  const silver = ledger?.silverHarvest;
+   533→   533→  if (!pulse) return null;
+   534→   534→
+   535→   535→  const rel = (iso: string | null) => {
+   536→   536→    if (!iso) return null;
+   537→   537→    const diffMs = Date.now() - new Date(iso).getTime();
+   538→   538→    const mins = Math.round(diffMs / 60_000);
+   539→   539→    if (mins < 1) return "همین حالا";
+   540→   540→    if (mins < 60) return `${faNum(mins, 0)} دقیقه پیش`;
+   541→   541→    const hours = Math.round(mins / 60);
+   542→   542→    if (hours < 24) return `${faNum(hours, 0)} ساعت پیش`;
+   543→   543→    const days = Math.round(hours / 24);
+   544→   544→    return `${faNum(days, 0)} روز پیش`;
+   545→   545→  };
+   546→   546→  const lastSettled = rel(pulse.lastSettledAt);
+   547→   547→  const frozen = pulse.settled7d === 0;
+   548→   548→
+   549→   549→  const chip = (label: string, value: string, tone: string) => (
+   550→   550→    <span className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/25 px-2 py-1 text-[10px]" title={label}>
+   551→   551→      <span className="text-muted-foreground">{label}</span>
+   552→   552→      <b className={cn("font-num", tone)} dir="ltr">{value}</b>
+   553→   553→    </span>
+   554→   554→  );
+   555→   555→
+   556→   556→  return (
+   557→   557→    <div className="space-y-2 border-b border-white/8 bg-gradient-to-l from-cyan-500/[0.05] to-transparent px-4 py-2.5" role="status" aria-label="نبض کارنامه">
+   558→   558→      <div className="flex flex-wrap items-center gap-1.5">
+   559→   559→        <span className="flex items-center gap-1 text-[10px] font-bold text-cyan-300">
+   560→   560→          <Activity className="size-3.5" aria-hidden /> نبض کارنامه:
+   561→   561→        </span>
+   562→   562→        {chip("آخرین تسویه رسمی", lastSettled ?? "—", "text-foreground/90")}
+   563→   563→        {chip("تسویه ۷ روز اخیر", faNum(pulse.settled7d, 0), pulse.settled7d > 0 ? "text-emerald-300" : "text-amber-300")}
+   564→   564→        {chip("در انتظار FT", faNum(pulse.pendingApproved, 0), "text-cyan-300")}
+   565→   565→        {chip("وتوی سوپروایزر", faNum(pulse.vetoedTotal, 0), "text-rose-300")}
+   566→   566→        {chip("دفتر سایه (کاغذی)", `${shadow ? faNum(shadow.settled, 0) : faNum(0, 0)} کارت · ${shadow?.winRate != null ? faNum(shadow.winRate, 1) + "٪" : "—"} · ${faNum(shadow?.netProfit ?? 0, 1)}u`, "text-muted-foreground")}
+   567→   567→        {silver && silver.settled > 0 && chip("🥈 حصاد نقره‌ای", `${faNum(silver.settled, 0)} کارت · ${silver.winRate != null ? faNum(silver.winRate, 1) + "٪" : "—"} · +${faNum(silver.netProfit, 1)}u`, "text-zinc-200")}
+   568→   568→        {savedByVeto > 0 && chip("سرمایه نجات‌یافته", `+${faNum(savedByVeto, 1)}u`, "text-amber-300")}
+   569→   569→      </div>
+   570→   570→      {frozen ? (
+   571→   571→        <p className="rounded-lg border border-amber-500/35 bg-amber-500/[0.08] px-2 py-1.5 text-[10px] leading-4 text-amber-200">
+   572→   572→          <b>وضعیت فعلی: کتاب رسمی در انتظار کارت تازه است.</b> آمار و منحنی فقط از کارت‌های «تایید سوپروایزر با پول واقعی» ساخته می‌شوند؛ {faNum(pulse.vetoedTotal, 0)} کاندیدای پرریسک توسط گیت سخت v19.0 (ریسک همزمان &gt; ۱۵٪ / لیگ‌های سمّی / سود تضمینی زیر ۰.۵٪) به دفتر سایه رفت‌اند — به‌محض تایید اولین کارت امروز، منحنی و وین‌ریت همین‌جا به‌روز می‌شود (رفرش خودکار هر ۹۰ ثانیه).
+   573→   573→        </p>
+   574→   574→      ) : (
+   575→   575→        <p className="text-[10px] leading-4 text-muted-foreground">
+   576→   576→          تسویه‌های رسمی در جریان‌اند — آمار این ماژول هر ۹۰ ثانیه خودکار رفرش می‌شود؛ منحنی انتهایش دقیقاً برابر «سود خالص مجموع» است.
+   577→   577→        </p>
+   578→   578→      )}
+   579→   579→    </div>
+   580→   580→  );
+   581→   581→}
+   582→   582→
+   583→   583→// ═══ v21.0 — تحلیل حرفه‌ای منحنی رشد بانک (Bank Growth Analytics Pro) ═══
+   584→   584→// نمودار تغییرات روزانه/هفتگی/ماهانه + تعداد بازی‌های روزانه + برد/باخت +
+   585→   585→// بهترین/بدترین روز + رگبار برد/باخت + بیشترین افت سرمایه + اوج بانک.
+   586→   586→// همه اعداد از تسویه واقعی ESPN (هم‌مبنای stats تیتر) — صفر عدد جعلی.
+   587→   587→
+   588→   588→type Granularity = "daily" | "weekly" | "monthly";
+   589→   589→
+   590→   590→function PeriodBarChart({ data }: { data: BankPeriodStat[] }) {
+   591→   591→  const W = 560;
+   592→   592→  const H = 150;
+   593→   593→  const padB = 26;
+   594→   594→  const padT = 16;
+   595→   595→  const maxAbs = Math.max(1, ...data.map((d) => Math.abs(d.netProfit)));
+   596→   596→  const barW = W / Math.max(1, data.length);
+   597→   597→  const zeroY = H - padB; // خط صفر پایین نمودار وقتی همه مثبت‌اند
+   598→   598→  // خط صفر وسط اگر منفی و مثبت داریم
+   599→   599→  const hasNeg = data.some((d) => d.netProfit < 0);
+   600→   600→  const hasPos = data.some((d) => d.netProfit > 0);
+   601→   601→  const midZero = hasNeg && hasPos;
+   602→   602→  const zeroLine = midZero ? (H - padB + padT) / 2 : zeroY;
+   603→   603→  const upScale = midZero ? (zeroLine - padT) / maxAbs : (H - padB - padT) / maxAbs;
+   604→   604→  const downScale = midZero ? (H - padB - zeroLine) / maxAbs : upScale;
+   605→   605→
+   606→   606→  return (
+   607→   607→    <svg viewBox={`0 0 ${W} ${H}`} className="h-[150px] w-full" role="img" aria-label="نمودار تغییرات بانک در بازه‌های انتخابی">
+   608→   608→      <line x1="0" y1={zeroLine} x2={W} y2={zeroLine} stroke="rgba(255,255,255,0.25)" strokeWidth="1" strokeDasharray="3 3" />
+   609→   609→      {data.map((d, i) => {
+   610→   610→        const v = d.netProfit;
+   611→   611→        const h = v >= 0 ? v * upScale : Math.abs(v) * downScale;
+   612→   612→        const x = i * barW + barW * 0.18;
+   613→   613→        const bw = barW * 0.64;
+   614→   614→        const y = v >= 0 ? zeroLine - h : zeroLine;
+   615→   615→        const tone = v > 0 ? "#34d399" : v < 0 ? "#fb7185" : "rgba(255,255,255,0.14)";
+   616→   616→        const label = d.label.length > 9 ? d.label.slice(0, 9) : d.label;
+   617→   617→        return (
+   618→   618→          <g key={d.key}>
+   619→   619→            <title>{`${d.label}: ${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}u · ${d.settled} بازی (${d.wins} برد / ${d.losses} باخت) · بانک پایان: ${d.bankAtEnd.toFixed(0)}u`}</title>
+   620→   620→            <rect x={x} y={v >= 0 ? zeroLine - h : zeroLine} width={bw} height={Math.max(v === 0 ? 1.5 : 0, h)} rx="2" fill={tone} opacity={0.88} />
+   621→   621→            {Math.abs(v) > 0 && (
+   622→   622→              <text
+   623→   623→                x={x + bw / 2}
+   624→   624→                y={v >= 0 ? zeroLine - h - 3 : zeroLine + h + 8}
+   625→   625→                textAnchor="middle"
+   626→   626→                fontSize="7.5"
+   627→   627→                fontWeight="700"
+   628→   628→                fill={v > 0 ? "#6ee7b7" : "#fda4af"}
+   629→   629→              >
+   630→   630→                {v > 0 ? "+" : "−"}{Math.abs(v).toFixed(0)}
+   631→   631→              </text>
+   632→   632→            )}
+   633→   633→            <text x={x + bw / 2} y={H - 8} textAnchor="middle" fontSize="7" fill="rgba(255,255,255,0.55)">
+   634→   634→              {label}
+   635→   635→            </text>
+   636→   636→          </g>
+   637→   637→        );
+   638→   638→      })}
+   639→   639→    </svg>
+   640→   640→  );
+   641→   641→}
+   642→   642→
+   643→   643→function BankGrowthAnalytics({ equity }: { equity: LedgerDTO["equity"] | null }) {
+   644→   644→  const [gran, setGran] = useState<Granularity>("daily");
+   645→   645→  if (!equity || !Array.isArray(equity.daily) || equity.daily.length === 0) {
+   646→   646→    return (
+   647→   647→      <div className="border-t border-white/8 px-4 py-4">
+   648→   648→        <p className="flex items-center gap-1 text-xs font-bold">
+   649→   649→          <TrendingUp className="size-4 text-emerald-400" />
+   650→   650→          تحلیل حرفه‌ای منحنی رشد بانک
+   651→   651→        </p>
+   652→   652→        <p className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-muted-foreground">
+   653→   653→          تفکیک روزانه/هفتگی/ماهانه به‌محض ثبت اولین تسویه رسمی ESPN فعال می‌شود — اعداد فقط از کارنامه واقعی ساخته می‌شوند (صفر عدد جعلی).
+   654→   654→        </p>
+   655→   655→      </div>
+   656→   656→    );
+   657→   657→  }
+   658→   658→
+   659→   659→  const data = gran === "daily" ? equity.daily : gran === "weekly" ? equity.weekly : equity.monthly;
+   660→   660→  const today = equity.daily[equity.daily.length - 1];
+   661→   661→  const thisWeek = equity.weekly[equity.weekly.length - 1] ?? null;
+   662→   662→  const thisMonth = equity.monthly[equity.monthly.length - 1] ?? null;
+   663→   663→  const best = [...equity.daily].sort((a, b) => b.netProfit - a.netProfit)[0] ?? null;
+   664→   664→  const worst = [...equity.daily].sort((a, b) => a.netProfit - b.netProfit)[0] ?? null;
+   665→   665→  const streakLabel =
+   666→   666→    equity.streak.type === "W"
+   667→   667→      ? `${equity.streak.count} برد متوالی`
+   668→   668→      : equity.streak.type === "L"
+   669→   669→        ? `${equity.streak.count} باخت متوالی`
+   670→   670→        : "—";
+   671→   671→
+   672→   672→  const statChip = (label: string, value: React.ReactNode, tone = "text-foreground") => (
+   673→   673→    <div className="rounded-lg border border-white/8 bg-white/[0.03] px-2.5 py-1.5">
+   674→   674→      <p className="text-[9px] leading-3 text-muted-foreground">{label}</p>
+   675→   675→      <p className={cn("font-num mt-0.5 text-[11px] font-bold leading-4", tone)}>{value}</p>
+   676→   676→    </div>
+   677→   677→  );
+   678→   678→  const unit = (v: number, digits = 1) =>
+   679→   679→    `${v >= 0 ? "+" : "−"}${faNum(Math.abs(v), digits)}u`;
+   680→   680→
+   681→   681→  const granBtn = (g: Granularity, label: string) => (
+   682→   682→    <Button
+   683→   683→      key={g}
+   684→   684→      size="sm"
+   685→   685→      variant="ghost"
+   686→   686→      role="tab"
+   687→   687→      aria-selected={gran === g}
+   688→   688→      className={cn(
+   689→   689→        "h-7 whitespace-nowrap px-3 py-1 text-[10px] font-bold",
+   690→   690→        gran === g ? "bg-emerald-500/20 text-emerald-300" : "text-muted-foreground"
+   691→   691→      )}
+   692→   692→      onClick={() => setGran(g)}
+   693→   693→    >
+   694→   694→      {label}
+   695→   695→    </Button>
+   696→   696→  );
+   697→   697→
+   698→   698→  return (
+   699→   699→    <div className="border-t border-white/8 px-4 py-3" aria-label="تحلیل حرفه‌ای منحنی رشد بانک">
+   700→   700→      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+   701→   701→        <p className="flex items-center gap-1 text-xs font-bold">
+   702→   702→          <TrendingUp className="size-4 text-emerald-400" />
+   703→   703→          تحلیل حرفه‌ای منحنی رشد بانک
+   704→   704→          <span className="hidden rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[9px] font-semibold text-emerald-300 sm:inline" dir="ltr">
+   705→   705→            Bank Growth Analytics Pro
+   706→   706→          </span>
+   707→   707→        </p>
+   708→   708→        <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-white/[0.03] p-0.5" role="tablist" aria-label="بازه نمودار">
+   709→   709→          {granBtn("daily", "روزانه")}
+   710→   710→          {granBtn("weekly", "هفتگی")}
+   711→   711→          {granBtn("monthly", "ماهانه")}
+   712→   712→        </div>
+   713→   713→      </div>
+   714→   714→
+   715→   715→      <div className="grid gap-3 lg:grid-cols-5">
+   716→   716→        {/* نمودار میله‌ای تغییرات */}
+   717→   717→        <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3 lg:col-span-3">
+   718→   718→          <p className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
+   719→   719→            <span>
+   720→   720→              {gran === "daily" ? "تغییرات روزانه — ۱۴ روز اخیر" : gran === "weekly" ? "تغییرات هفتگی — ۸ هفته اخیر" : "تغییرات ماهانه — ۶ ماه اخیر"}
+   721→   721→            </span>
+   722→   722→            <span dir="ltr" className="font-num">
+   723→   723→              {faNum(equity.finalBank, 0)}u · {equity.roiPct >= 0 ? "+" : ""}{faNum(equity.roiPct, 1)}% ROI
+   724→   724→            </span>
+   725→   725→          </p>
+   726→   726→          <PeriodBarChart data={data} />
+   727→   727→          <p className="mt-1 text-[9px] text-muted-foreground/70">
+   728→   728→            هر میله = تغییر خالص بانک در آن بازه (سبز = سود، قرمز = زیان) — عدد روی میله به واحد. نشانگر روی میله: بازی‌ها، برد/باخت و بانک پایان دوره.
+   729→   729→          </p>
+
+[showing lines 30-729 of 994; use offset=730 with limit to continue reading]

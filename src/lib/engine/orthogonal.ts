@@ -63,6 +63,10 @@ export const MARKET_LABELS: Record<string, string> = {
   AWAY_O15: "مجموع گل تیم میهمان: بالای ۱.۵ گل (Team Total: Over 1.5)",
   WIN_NIL_HOME: "برد میزبان بدون گل خورده (To Nil)",
   WIN_NIL_AWAY: "برد میهمان بدون گل خورده (To Nil)",
+  C1XU35: "کمبوی رسمی: برد میزبان یا مساوی و زیر ۳.۵ گل (1X & Under 3.5)",
+  CX2U35: "کمبوی رسمی: برد میهمان یا مساوی و زیر ۳.۵ گل (X2 & Under 3.5)",
+  CHOME15: "کمبوی رسمی: برد میزبان و بالای ۱.۵ گل (Home Win & Over 1.5)",
+  CBTTS25: "کمبوی رسمی: هر دو تیم گل می‌زنند و بالای ۲.۵ گل (BTTS Yes & Over 2.5)",
   EXACT2: "دقیقاً ۲ گل کل مسابقه (Exact Total Goals: 2)",
   HOME_BY_1: "برد میزبان دقیقاً با اختلاف ۱ گل (Home by 1)",
   HT_O05: "حداقل یک گل در نیمه اول (HT بالای ۰.۵)",
@@ -104,6 +108,10 @@ export const MARKET_LABELS_EN: Record<string, string> = {
   AWAY_O15: "Away Team Total Goals: Over 1.5",
   WIN_NIL_HOME: "Home Team to Win to Nil: Yes",
   WIN_NIL_AWAY: "Away Team to Win to Nil: Yes",
+  C1XU35: "1X & Under 3.5 Goals",
+  CX2U35: "X2 & Under 3.5 Goals",
+  CHOME15: "Home Win & Over 1.5 Goals",
+  CBTTS25: "BTTS Yes & Over 2.5 Goals",
   EXACT2: "Exact Total Goals: 2 Goals",
   HOME_BY_1: "Winning Margin: Home by 1 Goal",
 };
@@ -173,6 +181,11 @@ export function orthoLegCoversCell(key: string, h: number, a: number): boolean {
     // ═══ v16.0 — بازارهای طلایی تیمی (Golden Team-Total Markets) ═══
     case "HOME_O15": return h >= 2; // مجموع گل تیم میزبان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای i≥2
     case "AWAY_O15": return a >= 2; // مجموع گل تیم میهمان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای j≥2
+    // ═══ v23.0 — کمبوهای رسمی استخر کوانتومی ۱۲ آپشن (Quantum M11/M12) ═══
+    case "C1XU35": return h >= a && tot <= 3; // برد میزبان یا مساوی و زیر ۳.۵ گل — سند v23: M11
+    case "CX2U35": return a >= h && tot <= 3; // برد میهمان یا مساوی و زیر ۳.۵ گل — سند v23: M12
+    case "CHOME15": return h > a && tot >= 2; // برد میزبان و بالای ۱.۵ گل
+    case "CBTTS25": return h > 0 && a > 0 && tot >= 3; // BTTS بله و بالای ۲.۵ گل
     default: return false; // پایه‌های خارج ماتریس
   }
 }

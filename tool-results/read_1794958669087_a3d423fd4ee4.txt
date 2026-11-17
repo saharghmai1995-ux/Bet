@@ -1,0 +1,621 @@
+     1→import { NextRequest, NextResponse } from "next/server";
+     2→// v20.1 — کش کوتاه‌مدت داشبورد: هر poll چندثانیه‌ای دیگر ESPN/موتور کامل اجرا نمی‌کند
+     3→import { pollCacheGet, pollCacheSet, pollCacheKey } from "@/lib/server/poll-cache";
+     4→import { db } from "@/lib/db";
+     5→import { ensureSeeded } from "@/lib/seed";
+     6→import { computeMatchEngine } from "@/lib/engine/matchEngine";
+     7→import { runMonteCarlo, jointStates, MC_SELECTIONS, type SelectionKey, type MonteCarloResult } from "@/lib/engine/montecarlo";
+     8→import { simultaneousKelly } from "@/lib/engine/kelly";
+     9→import { checkMiddleTrap, type SelectionKind, type TrapLeg } from "@/lib/engine/dutching";
+    10→import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair, asymmetricAlphaStakes } from "@/lib/engine/orthogonal";
+    11→import { routeBetTypes, type MarketPrices } from "@/lib/engine/betrouter";
+    12→import { buildScoreMatrix } from "@/lib/engine/poisson";
+    13→import { getActiveRuleFor } from "@/lib/server/calibration-rules";
+    14→import type { LambdaBreakdown } from "@/lib/engine/matchEngine";
+    15→import type { PortfolioPairDTO, PortfolioResultDTO, PortfolioSelectionDTO } from "@/lib/types";
+    16→
+    17→export const dynamic = "force-dynamic";
+    18→export const maxDuration = 120;
+    19→
+    20→type OddsRec = { bookmaker: string; oddsHome: number; oddsDraw: number; oddsAway: number; oddsOver25: number; oddsUnder25: number; oddsCornersOver95: number; oddsCornersUnder95: number };
+    21→
+    22→const TRAP_MAP: Record<SelectionKey, SelectionKind> = {
+    23→  HOME: "HOME_WIN", DRAW: "DRAW", AWAY: "AWAY_WIN",
+    24→  DC_1X: "HOME_OR_DRAW", DC_X2: "AWAY_OR_DRAW",
+    25→  O25: "OVER_2_5", U25: "UNDER_2_5",
+    26→  O15: "OVER_1_5", U35: "UNDER_3_5",
+    27→  BTTS_Y: "BTTS_YES", BTTS_N: "BTTS_NO",
+    28→  C_O95: "OVER_2_5", C_U95: "UNDER_2_5", // کرنر به عنوان متغیر دوگانه رفتار می‌کند
+    29→};
+    30→
+    31→/** بهترین قیمت یک انتخاب بین بوک‌میکرها */
+    32→function bestPrice(key: SelectionKey, odds: OddsRec[]): { odds: number; book: string } {
+    33→  const pick = (fn: (o: OddsRec) => number) => {
+    34→    let best = { odds: 0, book: "-" };
+    35→    for (const o of odds) {
+    36→      const v = fn(o);
+    37→      if (v > best.odds) best = { odds: v, book: o.bookmaker === "PINNACLE" ? "پیناکل" : o.bookmaker === "SOFT_A" ? "بت‌مستر" : "پرسیان‌بت" };
+    38→    }
+    39→    return best;
+    40→  };
+    41→  switch (key) {
+    42→    case "HOME": return pick((o) => o.oddsHome);
+    43→    case "DRAW": return pick((o) => o.oddsDraw);
+    44→    case "AWAY": return pick((o) => o.oddsAway);
+    45→    case "DC_1X":
+    46→    case "DC_X2": {
+    47→      // شانس مجدد: معکوس مجموع احتمالات ضمنی دو نتیجه
+    48→      let best = { odds: 0, book: "-" };
+    49→      for (const o of odds) {
+    50→        const v = key === "DC_1X" ? 1 / (1 / o.oddsHome + 1 / o.oddsDraw) : 1 / (1 / o.oddsAway + 1 / o.oddsDraw);
+    51→        if (v > best.odds) best = { odds: v, book: o.bookmaker === "PINNACLE" ? "پیناکل" : o.bookmaker === "SOFT_A" ? "بت‌مستر" : "پرسیان‌بت" };
+    52→      }
+    53→      return best;
+    54→    }
+    55→    case "O25": return pick((o) => o.oddsOver25);
+    56→    case "U25": return pick((o) => o.oddsUnder25);
+    57→    case "C_O95": return pick((o) => o.oddsCornersOver95);
+    58→    case "C_U95": return pick((o) => o.oddsCornersUnder95);
+    59→    default: return { odds: 0, book: "-" };
+    60→  }
+    61→}
+    62→
+    63→function seedFromId(id: string): number {
+    64→  let h = 2166136261;
+    65→  for (let i = 0; i < id.length; i++) {
+    66→    h ^= id.charCodeAt(i);
+    67→    h = Math.imul(h, 16777619);
+    68→  }
+    69→  return (h >>> 0) % 2 ** 31;
+    70→}
+    71→
+    72→/** مونت‌کارلو + جدول انتخاب‌های یک بازی (کش per-request — بدون رقابت بین درخواست‌های موازی) */
+    73→function analyzeMatch(mcInput: { matchId: string; homeTeam: string; awayTeam: string; matchLabel: string }, odds: OddsRec[], cache: Map<string, unknown>): { mc: MonteCarloResult; selections: PortfolioSelectionDTO[]; lambdas: { home: number; away: number }; breakdown: LambdaBreakdown } {
+    74→  const match = cache.get(mcInput.matchId);
+    75→  if (!match) throw new Error("match not cached");
+    76→  const engine = computeMatchEngine(match as never);
+    77→  const mc = runMonteCarlo({
+    78→    matrix: engine.dc.matrix,
+    79→    lambdaCorners: engine.lambdaCorners,
+    80→    lambdaCards: engine.lambdaCards,
+    81→    sims: 10000,
+    82→    seed: seedFromId(mcInput.matchId),
+    83→  });
+    84→
+    85→  const selections: PortfolioSelectionDTO[] = MC_SELECTIONS.map((key) => {
+    86→    const price = bestPrice(key, odds);
+    87→    const prob = mc.flags[key] ? mc.flags[key].reduce((s: number, v: number) => s + v, 0) / mc.flags[key].length : 0;
+    88→    const sharpPin = odds.find((o) => o.bookmaker === "PINNACLE");
+    89→    const sharpOdds = sharpPin
+    90→      ? key === "HOME" ? sharpPin.oddsHome : key === "DRAW" ? sharpPin.oddsDraw : key === "AWAY" ? sharpPin.oddsAway
+    91→      : key === "O25" ? sharpPin.oddsOver25 : key === "U25" ? sharpPin.oddsUnder25
+    92→      : key === "C_O95" ? sharpPin.oddsCornersOver95 : key === "C_U95" ? sharpPin.oddsCornersUnder95 : null
+    93→      : null;
+    94→    return {
+    95→      key,
+    96→      label: selectionLabel(key),
+    97→      matchId: mcInput.matchId,
+    98→      matchLabel: mcInput.matchLabel,
+    99→      modelProb: prob,
+   100→      bestOdds: price.odds,
+   101→      bestBook: price.book,
+   102→      sharpOdds,
+   103→      evPct: prob * price.odds - 1,
+   104→    };
+   105→  });
+   106→
+   107→  return { mc, selections, lambdas: { home: engine.dc.lambdaHome, away: engine.dc.lambdaAway }, breakdown: engine.lambdaBreakdown };
+   108→}
+   109→
+   110→const selectionLabels: Record<SelectionKey, string> = {
+   111→  HOME: "برد میزبان",
+   112→  DRAW: "مساوی",
+   113→  AWAY: "برد میهمان",
+   114→  DC_1X: "شانس مجدد میزبان (1X)",
+   115→  DC_X2: "شانس مجدد میهمان (X2)",
+   116→  O25: "بالای ۲.۵ گل",
+   117→  U25: "زیر ۲.۵ گل",
+   118→  O15: "بالای ۱.۵ گل",
+   119→  U35: "زیر ۳.۵ گل",
+   120→  BTTS_Y: "هر دو تیم گل می‌زنند",
+   121→  BTTS_N: "گل نزدن حداقل یک تیم",
+   122→  C_O95: "بالای ۹.۵ کرنر",
+   123→  C_U95: "زیر ۹.۵ کرنر",
+   124→};
+   125→function selectionLabel(k: SelectionKey): string {
+   126→  return selectionLabels[k];
+   127→}
+   128→
+   129→// v4.0: کش per-request (به‌جای ماژول-سطح) — اسکن موازی خلبان خودکار دیگر رقابت ندارد
+   130→
+   131→/**
+   132→ * POST /api/agent/portfolio { matchId, bankroll?, secondMatchId? }
+   133→ * موتور پرتفوی: مونت‌کارلو کاپولا (۱۰هزار شبیه‌سازی) → کشف زوج‌های کم‌ریسک → کلِی همزمان
+   134→ */
+   135→export async function POST(req: NextRequest) {
+   136→  try {
+   137→    await ensureSeeded();
+   138→    const body = await req.json();
+   139→    const matchId: string = body.matchId;
+   140→    const bankroll = Math.max(1, Number(body.bankroll) || 100);
+   141→    if (!matchId) {
+   142→      return NextResponse.json({ success: false, error: "matchId الزامی است" }, { status: 400 });
+   143→    }
+   144→
+   145→    // v20.1 — کش ۳۰ثانیه‌ای per-(matchId,secondMatchId,bankroll) — پاسخ تکراری از حافظه
+   146→    const portfolioCacheKey = pollCacheKey("portfolio", {
+   147→      matchId,
+   148→      secondMatchId: body.secondMatchId ?? "",
+   149→      bankroll,
+   150→    });
+   151→    const portfolioCached = pollCacheGet<unknown>(portfolioCacheKey, 30_000);
+   152→    if (portfolioCached) return NextResponse.json(portfolioCached as never);
+   153→
+   154→    const mcInputCache = new Map<string, unknown>();
+   155→    const primary = await db.match.findUnique({ where: { id: matchId } });
+   156→    if (!primary) {
+   157→      return NextResponse.json({ success: false, error: "بازی یافت نشد" }, { status: 404 });
+   158→    }
+   159→    mcInputCache.set(primary.id, primary);
+   160→    const primaryOdds = await db.oddsRecord.findMany({ where: { matchId: primary.id } });
+   161→
+   162→    const second =
+   163→      body.secondMatchId && body.secondMatchId !== primary.id
+   164→        ? await db.match.findUnique({ where: { id: body.secondMatchId } })
+   165→        : await db.match.findFirst({
+   166→            where: { id: { not: primary.id }, kickoff: { gte: new Date() } },
+   167→            orderBy: { kickoff: "asc" },
+   168→          });
+   169→    if (second) {
+   170→      mcInputCache.set(second.id, second);
+   171→    }
+   172→    const secondOdds = second ? await db.oddsRecord.findMany({ where: { matchId: second.id } }) : [];
+   173→
+   174→    const label = (m: { homeTeam: string; awayTeam: string }) => `${m.homeTeam} - ${m.awayTeam}`;
+   175→
+   176→    // ─── v9.0 — بردار قانون فعال کالیبراسیون لیگ این بازی (درس سیستمی → عدد) ───
+   177→    const activeRule = await getActiveRuleFor(primary.league);
+   178→
+   179→    const prim = analyzeMatch({ matchId: primary.id, homeTeam: primary.homeTeam, awayTeam: primary.awayTeam, matchLabel: label(primary) }, primaryOdds, mcInputCache);
+   180→    const sec = second
+   181→      ? analyzeMatch({ matchId: second.id, homeTeam: second.homeTeam, awayTeam: second.awayTeam, matchLabel: label(second) }, secondOdds, mcInputCache)
+   182→      : null;
+   183→
+   184→    const allSelections = [...prim.selections, ...(sec?.selections ?? [])];
+   185→
+   186→    // ─── ساخت زوج‌های کاندید (v3.0 — فرم صریح: پایه × متغیرA ↔ پایه × متغیرB) ───
+   187→    type Candidate = {
+   188→      base: PortfolioSelectionDTO;
+   189→      varA: PortfolioSelectionDTO;
+   190→      varB: PortfolioSelectionDTO;
+   191→      kind: "SINGLE_MATCH_BUILDER" | "TWO_MATCH_MIX";
+   192→      band: "O15_U25" | "O25_U35" | null;
+   193→      synthetic: boolean;
+   194→      doubleWin: boolean;
+   195→    };
+   196→    const candidates: Candidate[] = [];
+   197→
+   198→    const primaries = prim.selections.filter((s) => ["DC_1X", "DC_X2"].includes(s.key) && s.modelProb >= 0.62);
+   199→    const classicVars = prim.selections.filter((s) => ["O25", "U25", "C_O95", "C_U95", "BTTS_Y", "BTTS_N"].includes(s.key));
+   200→    const selOf = (list: PortfolioSelectionDTO[], k: string) => list.find((s) => s.key === k);
+   201→    const oppositeOf = (k: string) =>
+   202→      (({ O25: "U25", U25: "O25", C_O95: "C_U95", C_U95: "C_O95", BTTS_Y: "BTTS_N", BTTS_N: "BTTS_Y" }) as Record<string, string>)[k] ?? k;
+   203→
+   204→    // خط سینتتیک باندی O15/U35 از احتمال مدل (بدون قیمت واقعی بوک‌میکر — حاشیه ۴.۵٪)
+   205→    const synthVar = (k: "O15" | "U35"): PortfolioSelectionDTO | null => {
+   206→      const flags = prim.mc.flags[k];
+   207→      const p = flags ? flags.reduce((s: number, v: number) => s + v, 0) / flags.length : 0;
+   208→      if (p < 0.15 || p > 0.93) return null;
+   209→      const odds = Math.max(1.02, Math.round((1 / p) * 0.955 * 100) / 100);
+   210→      return {
+   211→        key: k,
+   212→        label: selectionLabel(k),
+   213→        matchId: primary.id,
+   214→        matchLabel: label(primary),
+   215→        modelProb: p,
+   216→        bestOdds: odds,
+   217→        bestBook: "خط سینتتیک",
+   218→        sharpOdds: null,
+   219→        evPct: p * odds - 1,
+   220→      };
+   221→    };
+   222→
+   223→    for (const base of primaries) {
+   224→      // الف) بت‌بیلدر کلاسیک: پایه × متغیر ↔ پایه × مقابل متغیر (هر دو با هم پوشش کامل متغیر)
+   225→      for (const v of classicVars) {
+   226→        const opp = selOf(prim.selections, oppositeOf(v.key));
+   227→        if (!opp) continue;
+   228→        candidates.push({ base, varA: v, varB: opp, kind: "SINGLE_MATCH_BUILDER", band: null, synthetic: false, doubleWin: false });
+   229→      }
+   230→
+   231→      // ب) زوج باندی با ناحیه طلایی Double-Win:
+   232→      //    1X+بالای ۱.۵ ↔ 1X+زیر ۲.۵ (تلاقی = دقیقاً ۲ گل: ۱-۱ یا ۲-۰)
+   233→      const o15 = synthVar("O15");
+   234→      const u25 = selOf(prim.selections, "U25");
+   235→      if (o15 && u25 && u25.bestOdds > 1.01) {
+   236→        candidates.push({ base, varA: o15, varB: u25, kind: "SINGLE_MATCH_BUILDER", band: "O15_U25", synthetic: true, doubleWin: true });
+   237→      }
+   238→      //    بالای ۲.۵ ↔ زیر ۳.۵ (تلاقی = دقیقاً ۳ گل: ۲-۱ یا ۳-۰)
+   239→      const u35 = synthVar("U35");
+   240→      const o25 = selOf(prim.selections, "O25");
+   241→      if (u35 && o25 && o25.bestOdds > 1.01) {
+   242→        candidates.push({ base, varA: o25, varB: u35, kind: "SINGLE_MATCH_BUILDER", band: "O25_U35", synthetic: true, doubleWin: true });
+   243→      }
+   244→
+   245→      // ج) زوج دو-برد بین‌بازاری: 1X+زیر ۲.۵ ↔ 1X+هر دو گل می‌زنند (تلاقی = دقیقاً ۱-۱)
+   246→      const bttsY = selOf(prim.selections, "BTTS_Y");
+   247→      if (u25 && bttsY && u25.bestOdds > 1.01 && bttsY.bestOdds > 1.01) {
+   248→        candidates.push({ base, varA: u25, varB: bttsY, kind: "SINGLE_MATCH_BUILDER", band: null, synthetic: false, doubleWin: true });
+   249→      }
+   250→
+   251→      // د) میکس دو بازی: پایه امن بازی اول × زوج متغیر بازی دوم
+   252→      if (sec) {
+   253→        const secVars = sec.selections.filter((s) => ["O25", "U25"].includes(s.key));
+   254→        for (const v of secVars) {
+   255→          const opp = selOf(sec.selections, oppositeOf(v.key));
+   256→          if (!opp) continue;
+   257→          candidates.push({ base, varA: v, varB: opp, kind: "TWO_MATCH_MIX", band: null, synthetic: false, doubleWin: false });
+   258→        }
+   259→      }
+   260→    }
+   261→
+   262→    const pairs: PortfolioPairDTO[] = [];
+   263→    const batchId = `pf-${Date.now()}`;
+   264→
+   265→    for (const c of candidates) {
+   266→      if (c.base.bestOdds <= 1.01 || c.varA.bestOdds <= 1.01 || c.varB.bestOdds <= 1.01) continue;
+   267→
+   268→      const isBuilder = c.kind === "SINGLE_MATCH_BUILDER";
+   269→      const baseKey = c.base.key as SelectionKey;
+   270→      const varAKey = c.varA.key as SelectionKey;
+   271→      const varBKey = c.varB.key as SelectionKey;
+   272→
+   273→      // ضریب کل هر تیپ = پایه × متغیر (هر دو حالت: بت‌بیلدر و میکس دو بازی)
+   274→      const oddsA = Math.round(c.base.bestOdds * c.varA.bestOdds * 100) / 100;
+   275→      const oddsB = Math.round(c.base.bestOdds * c.varB.bestOdds * 100) / 100;
+   276→      if (oddsA <= 1.05 || oddsB <= 1.05 || Math.abs(oddsA - oddsB) < 0.01) continue;
+   277→
+   278→      // فلگ ترکیبی per-sim: برد همزمان پایه و متغیر
+   279→      // میکس دو بازی: پایه از مونت‌کارلو بازی اول، متغیر از بازی دوم (اندیسی = استقلال)
+   280→      const varMc = isBuilder ? prim.mc : sec!.mc;
+   281→      const flagsA = combineFlags(prim.mc.flags[baseKey], varMc.flags[varAKey]);
+   282→      const flagsB = combineFlags(prim.mc.flags[baseKey], varMc.flags[varBKey]);
+   283→
+   284→      const joint = jointStates(flagsA, flagsB);
+   285→      // v4.0: آستانه بازتنظیم‌شده برای ضرایب واقعی بوک‌میکرها — در بازارهای متوازن
+   286→      // باخت همزمان ≈ ۱ − P(پایه) است (پایه ۶۴٪ → ریسک ۳۶٪). آستانه ۰.۵ یعنی
+   287→      // «پایه» باید حداقل احتمال ۵۰٪ داشته باشد؛ گرید بندی صادقانه در verdict انجام می‌شود
+   288→      if (joint.bothLose > 0.5) continue;
+   289→
+   290→      // بررسی ساختاری تله با منطق Mutually Covering (هر دو تیپ پایه مشترک دارند)
+   291→      const baseTrap: TrapLeg = { match: label(primary), selection: TRAP_MAP[baseKey] };
+   292→      const varATrap: TrapLeg = {
+   293→        match: isBuilder ? label(primary) : label(second!),
+   294→        selection: TRAP_MAP[varAKey],
+   295→      };
+   296→      const varBTrap: TrapLeg = {
+   297→        match: isBuilder ? label(primary) : label(second!),
+   298→        selection: TRAP_MAP[varBKey],
+   299→      };
+   300→      const trap = checkMiddleTrap([baseTrap, varATrap], [baseTrap, varBTrap]);
+   301→      if (trap.verdict === "CRITICAL") continue;
+   302→
+   303→      // v19.0 — تخصیص نامتقارن آلفا (پیش‌فرض فعال ۶۵/۳۵) — جایگزین داچینگ سود برابر
+   304→      const impliedSum = 1 / oddsA + 1 / oddsB;
+   305→      const alphaStakes = asymmetricAlphaStakes(oddsA, oddsB);
+   306→      const stakeA = alphaStakes.stakeA;
+   307→      const stakeB = alphaStakes.stakeB;
+   308→      const profit = alphaStakes.guaranteed;
+   309→
+   310→      // کلِی همزمان روی توزیع همزمان واقعی
+   311→      const kelly = simultaneousKelly(
+   312→        [
+   313→          { p: joint.bothWin, aWins: true, bWins: true },
+   314→          { p: joint.aOnly, aWins: true, bWins: false },
+   315→          { p: joint.bOnly, aWins: false, bWins: true },
+   316→          { p: joint.bothLose, aWins: false, bWins: false },
+   317→        ],
+   318→        oddsA,
+   319→        oddsB
+   320→      );
+   321→
+   322→      // v19.0 — مارجین کارت با استیک نامتقارن = کمینه سود دو بال (واحد = درصد روی ۱۰۰u)
+   323→      const guaranteedMarginPct = alphaStakes.guaranteed;
+   324→      const pA = joint.bothWin + joint.aOnly;
+   325→      const pB = joint.bothWin + joint.bOnly;
+   326→
+   327→      // لبه CLV تقریبی نسبت به خط شارپ پیناکل (فقط وقتی همه پاها خط واقعی دارند)
+   328→      let sharpEdgePct: number | null = null;
+   329→      if (!c.synthetic) {
+   330→        const pinPrim = primaryOdds.find((o) => o.bookmaker === "PINNACLE");
+   331→        const pinVar = isBuilder ? pinPrim : secondOdds.find((o) => o.bookmaker === "PINNACLE");
+   332→        if (pinPrim && pinVar) {
+   333→          const sharpBase =
+   334→            baseKey === "DC_1X"
+   335→              ? 1 / (1 / pinPrim.oddsHome + 1 / pinPrim.oddsDraw)
+   336→              : 1 / (1 / pinPrim.oddsAway + 1 / pinPrim.oddsDraw);
+   337→          const pinVarOdds = (k: SelectionKey): number | null => {
+   338→            switch (k) {
+   339→              case "O25": return pinVar.oddsOver25;
+   340→              case "U25": return pinVar.oddsUnder25;
+   341→              case "C_O95": return pinVar.oddsCornersOver95;
+   342→              case "C_U95": return pinVar.oddsCornersUnder95;
+   343→              default: return null; // BTTS بدون قیمت پیناکل در دیتاست
+   344→            }
+   345→          };
+   346→          const sva = pinVarOdds(varAKey);
+   347→          const svb = pinVarOdds(varBKey);
+   348→          if (sva && svb) {
+   349→            const eA = pA * Math.round(sharpBase * sva * 100) / 100 - 1;
+   350→            const eB = pB * Math.round(sharpBase * svb * 100) / 100 - 1;
+   351→            sharpEdgePct = Math.round(((eA + eB) / 2) * 1000) / 10;
+   352→          }
+   353→        }
+   354→      }
+   355→
+   356→      pairs.push({
+   357→        id: `${baseKey}-${varAKey}-${varBKey}-${c.kind}`,
+   358→        kind: c.kind,
+   359→        labelA: isBuilder ? `${c.base.label} × ${c.varA.label}` : `${c.base.label} + ${c.varA.label} (${c.varA.matchLabel})`,
+   360→        labelB: isBuilder ? `${c.base.label} × ${c.varB.label}` : `${c.base.label} + ${c.varB.label} (${c.varB.matchLabel})`,
+   361→        structure: {
+   362→          baseKey,
+   363→          varAKey,
+   364→          varBKey,
+   365→          varAMatchId: c.varA.matchId,
+   366→          varBMatchId: c.varB.matchId,
+   367→          band: c.band,
+   368→          synthetic: c.synthetic,
+   369→          doubleWin: c.doubleWin && joint.bothWin > 0.02,
+   370→        },
+   371→        selectionA: {
+   372→          ...c.base,
+   373→          label: `${c.base.label} × ${c.varA.label}`,
+   374→          modelProb: pA,
+   375→          bestOdds: oddsA,
+   376→          bestBook: "ترکیبی",
+   377→          evPct: pA * oddsA - 1,
+   378→        },
+   379→        selectionB: {
+   380→          ...c.varB,
+   381→          matchId: c.varB.matchId,
+   382→          matchLabel: c.varB.matchLabel,
+   383→          label: `${c.base.label} × ${c.varB.label}`,
+   384→          modelProb: pB,
+   385→          bestOdds: oddsB,
+   386→          bestBook: "ترکیبی",
+   387→          evPct: pB * oddsB - 1,
+   388→        },
+   389→        totalOddsA: oddsA,
+   390→        totalOddsB: oddsB,
+   391→        jointStates: joint,
+   392→        impliedSum,
+   393→        guaranteedMarginPct,
+   394→        equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
+   395→        // v19.0 — accelerator همیشه فعال با ۶۵/۳۵
+   396→        accelerator: {
+   397→          active: true,
+   398→          stakeA: alphaStakes.stakeA,
+   399→          stakeB: alphaStakes.stakeB,
+   400→          profitOnA: alphaStakes.profitOnA,
+   401→          profitOnB: alphaStakes.profitOnB,
+   402→          guaranteed: alphaStakes.guaranteed,
+   403→          profitOnDoubleWin: alphaStakes.profitOnDoubleWin,
+   404→          note: alphaStakes.note,
+   405→        },
+   406→        kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
+   407→        sharpEdgePct,
+   408→        trap,
+   409→        verdict:
+   410→          guaranteedMarginPct > 4 && joint.bothLose < 0.05
+   411→            ? "پوشش ممتاز — سود تضمینی بالا با ریسک باخت همزمان ناچیز"
+   412→            : joint.bothLose < 0.2
+   413→              ? "پوشش معتبر — پایه امن، سود تضمینی در سناریوی پایه"
+   414→              : joint.bothLose < 0.38
+   415→                ? "پوشش نسبی — مشروط به برد پایه؛ ریسک باخت همزمان متوسط"
+   416→                : "پوشش پرریسک — پایه ضعیف؛ صرفاً برای کاهش واریانس",
+   417→      });
+   418→    }
+   419→
+   420→    // رتبه‌بندی: امتیاز = حاشیه تضمینی − جریمه باخت همزمان + پاداش رشد کلی + پاداش دو-برد
+   421→    const score = (p: PortfolioPairDTO) =>
+   422→      p.guaranteedMarginPct - p.jointStates.bothLose * 80 + p.kelly.growth * 100 + (p.structure.doubleWin ? 1.5 : 0);
+   423→    pairs.sort((x, y) => score(y) - score(x));
+   424→
+   425→    // حذف تکرار آینه‌ای (O25→U25 همان زوج U25→O25 است)
+   426→    const sigOf = (p: PortfolioPairDTO) => {
+   427→      const [x, y] = [p.structure.varAKey, p.structure.varBKey].sort();
+   428→      return `${p.structure.baseKey}|${x}|${y}|${p.kind}`;
+   429→    };
+   430→    const seen = new Set<string>();
+   431→    const deduped = pairs.filter((p) => {
+   432→      const sig = sigOf(p);
+   433→      if (seen.has(sig)) return false;
+   434→      seen.add(sig);
+   435→      return true;
+   436→    });
+   437→
+   438→    // تضمین تنوع: بهترین زوج هر خانواده (باندی / دو-برد / بیلدر / میکس) حتماً حضور دارد
+   439→    const bucketOf = (p: PortfolioPairDTO) => (p.structure.band ? "BAND" : p.structure.doubleWin ? "DW" : p.kind);
+   440→    const bestOf = new Map<string, PortfolioPairDTO>();
+   441→    for (const p of deduped) {
+   442→      const b = bucketOf(p);
+   443→      const cur = bestOf.get(b);
+   444→      if (!cur || score(p) > score(cur)) bestOf.set(b, p);
+   445→    }
+   446→    const picked = [...bestOf.values()];
+   447→    const rest = deduped.filter((p) => !picked.includes(p));
+   448→    const topPairs = [...picked, ...rest].slice(0, 6);
+   449→
+   450→    // ─── v5.0: ادغام زوج متعامد پیشنهادی (۱۵ بازار، بدون شرط تکراری) ───
+   451→    // موتور ارتوگونال برای همین بازی اجرا و بهترین الگو به صدر فهرست تیپ‌ها می‌رود
+   452→    try {
+   453→      const primCached = mcInputCache.get(primary.id) as Parameters<typeof computeMatchEngine>[0] | undefined;
+   454→      if (primCached) {
+   455→        const eng = computeMatchEngine(primCached);
+   456→        const pinOdds = primaryOdds.find((o) => o.bookmaker === "PINNACLE") ?? primaryOdds[0];
+   457→        const orthoCtx = {
+   458→          lambdaHome: eng.dc.lambdaHome,
+   459→          lambdaAway: eng.dc.lambdaAway,
+   460→          matrix: eng.dc.matrix,
+   461→          lambdaCorners: eng.lambdaCorners,
+   462→          lambdaCards: eng.lambdaCards,
+   463→          prices: pinOdds
+   464→            ? {
+   465→                HOME: pinOdds.oddsHome,
+   466→                DRAW: pinOdds.oddsDraw,
+   467→                AWAY: pinOdds.oddsAway,
+   468→                DC_1X: 1 / (1 / pinOdds.oddsHome + 1 / pinOdds.oddsDraw),
+   469→                DC_X2: 1 / (1 / pinOdds.oddsAway + 1 / pinOdds.oddsDraw),
+   470→                O25: pinOdds.oddsOver25,
+   471→                U25: pinOdds.oddsUnder25,
+   472→                C_O95: pinOdds.oddsCornersOver95,
+   473→                C_U95: pinOdds.oddsCornersUnder95,
+   474→              }
+   475→            : undefined,
+   476→        };
+   477→        const ortho = generateOrthogonalComplementarySlips(orthoCtx);
+   478→        const rec = ortho.archetypes.find((a) => a.code === ortho.recommended) ?? ortho.archetypes[0];
+   479→        if (rec) {
+   480→          const orthoPair = buildOrthoPortfolioPair(rec, primary, bankroll);
+   481→          if (!topPairs.some((p) => p.id === orthoPair.id)) {
+   482→            topPairs.unshift(orthoPair);
+   483→            if (topPairs.length > 7) topPairs.length = 7;
+   484→          }
+   485→        }
+   486→      }
+   487→    } catch (orthoErr) {
+   488→      console.error("orthogonal merge failed:", orthoErr);
+   489→    }
+   490→
+   491→    // ─── v17.0 — مسیریاب غیرخطی ۵ رژیمی Bet-Type (Non-Linear Multi-Regime Router) ───
+   492→    // برای هر مسابقه آنتروپی شانون ماتریس ۶×۶، نسبت عدم تقارن قدرت Rλ و مجموع
+   493→    // ۴ خانه برتر محاسبه و بازی به مناسب‌ترین استراتژی از ۵ روش تخصصی هدایت می‌شود:
+   494→    // BANKER / COMBO / CORRECT SCORE CLUSTER / DUAL-HEDGE (+ ACCUMULATOR سطح پرتفوی روز)
+   495→    let betTypeRouter: import("@/lib/engine/betrouter").BetTypeRouteResult | null = null;
+   496→    try {
+   497→      const priceOf = (key: "HOME" | "DRAW" | "AWAY" | "O25" | "U25"): number => {
+   498→        let best = 0;
+   499→        for (const o of primaryOdds) {
+   500→          const v = key === "HOME" ? o.oddsHome : key === "DRAW" ? o.oddsDraw : key === "AWAY" ? o.oddsAway : key === "O25" ? o.oddsOver25 : o.oddsUnder25;
+   501→          if (v > best) best = v;
+   502→        }
+   503→        if (best > 1.01) return best;
+   504→        // fallback: خط اجماعی خود بازی
+   505→        return key === "HOME" ? primary.oddsHome : key === "DRAW" ? primary.oddsDraw : key === "AWAY" ? primary.oddsAway : key === "O25" ? primary.oddsOver25 : primary.oddsUnder25;
+   506→      };
+   507→      const prices: MarketPrices = {
+   508→        oddsHome: priceOf("HOME"),
+   509→        oddsDraw: priceOf("DRAW"),
+   510→        oddsAway: priceOf("AWAY"),
+   511→        oddsOver25: priceOf("O25"),
+   512→        oddsUnder25: priceOf("U25"),
+   513→      };
+   514→      // ضریب اعتبار لیگ از بردار قانون کالیبراسیون (انحراف λ → اعتماد معکوس)
+   515→      const leagueReliability = activeRule?.lambdaMultiplier
+   516→        ? Math.min(1.15, Math.max(0.85, activeRule.lambdaMultiplier))
+   517→        : 1;
+   518→      betTypeRouter = routeBetTypes({
+   519→        matrix: buildScoreMatrix(prim.lambdas.home, prim.lambdas.away),
+   520→        lambdaHome: prim.lambdas.home,
+   521→        lambdaAway: prim.lambdas.away,
+   522→        prices,
+   523→        pairs: topPairs,
+   524→        league: primary.league,
+   525→        leagueReliability,
+   526→      });
+   527→    } catch (routerErr) {
+   528→      console.error("bet-type router failed:", routerErr);
+   529→    }
+   530→
+   531→    // ─── ذخیره TipSet برای زوج برتر ───
+   532→    const recommendedId = topPairs[0]?.id ?? null;
+   533→    if (topPairs.length > 0) {
+   534→      for (const [i, p] of topPairs.entries()) {
+   535→        await db.tipSet.create({
+   536→          data: {
+   537→            label: `${p.kind === "TWO_MATCH_MIX" ? "میکس دو بازی" : "بت‌بیلدر تک‌بازی"}: ${p.labelA} ↔ ${p.labelB}`,
+   538→            strategy: "EQUAL_PROFIT",
+   539→            mode: p.kind === "TWO_MATCH_MIX" ? "TWO_MATCH" : "SINGLE_MATCH",
+   540→            legs: JSON.stringify([p.selectionA, p.selectionB]),
+   541→            totalOdds: p.totalOddsA,
+   542→            stake: p.equalProfit.stakeA,
+   543→            potentialReturn: p.equalProfit.stakeA * p.totalOddsA,
+   544→            guaranteedProfit: p.equalProfit.profit,
+   545→            coverageProb: 1 - p.jointStates.bothLose,
+   546→            coverageOk: p.impliedSum < 1 && p.jointStates.bothLose < 0.1,
+   547→            trapRisk: p.trap.verdict,
+   548→            jointLossProb: p.jointStates.bothLose,
+   549→            meta: JSON.stringify({
+   550→              kelly: p.kelly,
+   551→              oddsB: p.totalOddsB,
+   552→              stakeB: p.equalProfit.stakeB,
+   553→              jointStates: p.jointStates,
+   554→              mc: { sims: prim.mc.sims, corr: prim.mc.corrGoalsCorners },
+   555→              structure: p.structure,
+   556→              sharpEdgePct: p.sharpEdgePct,
+   557→              rank: i,
+   558→            }),
+   559→            batchId,
+   560→            notes: p.verdict,
+   561→          },
+   562→        });
+   563→      }
+   564→    }
+   565→
+   566→    const result: PortfolioResultDTO = {
+   567→      success: true,
+   568→      primary: {
+   569→        matchId: primary.id,
+   570→        matchLabel: label(primary),
+   571→        lambdaHome: prim.lambdas.home,
+   572→        lambdaAway: prim.lambdas.away,
+   573→        // ─── v9.0 — شفافیت کامل λ (بازار / آمار فصل / ترکیبی نهایی) ───
+   574→        lambdaMarketHome: prim.breakdown.marketHome,
+   575→        lambdaMarketAway: prim.breakdown.marketAway,
+   576→        lambdaStatsHome: prim.breakdown.statsHome,
+   577→        lambdaStatsAway: prim.breakdown.statsAway,
+   578→        lambdaFitError: prim.breakdown.fitError,
+   579→        lambdaCalibrationHome: prim.breakdown.calibrationHome,
+   580→        lambdaCalibrationAway: prim.breakdown.calibrationAway,
+   581→      },
+   582→      calibrationRule: activeRule?.rules ?? [],
+   583→      monteCarlo: {
+   584→        sims: prim.mc.sims,
+   585→        pHome: prim.mc.pHome,
+   586→        pDraw: prim.mc.pDraw,
+   587→        pAway: prim.mc.pAway,
+   588→        pOver25: prim.mc.pOver25,
+   589→        pBtts: prim.mc.pBtts,
+   590→        cornersOver95: prim.mc.cornersOver95,
+   591→        cardsOver35: prim.mc.cardsOver35,
+   592→        avgCorners: prim.mc.avgCorners,
+   593→        avgCards: prim.mc.avgCards,
+   594→        corrGoalsCorners: prim.mc.corrGoalsCorners,
+   595→      },
+   596→      selections: allSelections.filter((s) => s.bestOdds > 1.01),
+   597→      pairs: topPairs,
+   598→      recommendedId,
+   599→      batchId,
+   600→      bankroll,
+   601→      betTypeRouter,
+   602→    };
+   603→
+   604→    pollCacheSet(portfolioCacheKey, result);
+   605→    return NextResponse.json(result);
+   606→  } catch (error) {
+   607→    console.error("POST /api/agent/portfolio error:", error);
+   608→    return NextResponse.json({ success: false, error: "خطا در اجرای موتور پرتفوی" }, { status: 500 });
+   609→  }
+   610→}
+   611→
+   612→/** فلگ per-sim برای ترکیب پایه × متغیر */
+   613→function combineFlags(flagsBase: Uint8Array, flagsVar: Uint8Array): Uint8Array {
+   614→  const n = Math.min(flagsBase.length, flagsVar.length);
+   615→  const out = new Uint8Array(n);
+   616→  for (let i = 0; i < n; i++) {
+   617→    out[i] = flagsBase[i] && flagsVar[i] ? 1 : 0;
+   618→  }
+   619→  return out;
+   620→}
+   621→
