@@ -185,7 +185,7 @@ export default function Home() {
               <h1 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
                 <Badge className="max-w-full gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5 shrink-0" /> v24.0 Quantum · 12-Market Solver + QQL/RCA Edition @AINEOBET
+                  <Sparkles className="size-2.5 shrink-0" /> v24.5 Shadow Ledger Alpha · QQL/RCA Edition @AINEOBET
                 </Badge>
               </h1>
               <p className="min-w-0 text-[11px] text-muted-foreground sm:text-xs">
@@ -408,7 +408,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v24.0 Quantum Annealing & QQL/RCA Edition (حل‌کننده کوانتومی ۱۲×۱۲ + موتور پرس‌وجوی تحلیلی درون‌حافظه‌ای + تحلیل ریشه‌ای هوش مصنوعی) · ⚛️ استخر باز M1..M12 با ۶۶ ترکیب و تابع انرژی U = P_union×100 + P_overlap×65 + (O_eff−1)×120 − (1−P_union)²×400 + قید همپوشانی مثبت ۱/O_a + ۱/O_b ≤ ۰.۸۶۵ · 🔬 QQL ۴ مرحله‌ای (K-NN twins Δλ_Fav ≤ ۰.۲۸ · فیلتر قید · وتوی RCA_01/02/03 · LIMIT 1) + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵u/۳۵u + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت computeMasterLedgerMetrics + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه + برد/باخت) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v24.5 Shadow Ledger Alpha (بازیابی فوری فید زنده · حذف اندپوینت مسدودکننده ESPN Core · ممیزی دفتر سایه: 💎 ارتقایافته به بانک اصلی + 🚫 وتوی واقعی · گیت ریسک ۱۴.۵٪ / λ_Fav ۱.۱۲ / همپوشانی ≤ ۰.۸۶۵) · ⚛️ استخر باز M1..M12 با ۶۶ ترکیب · 🔬 QQL ۴ مرحله‌ای + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵u/۳۵u + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت computeMasterLedgerMetrics + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه + برد/باخت) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

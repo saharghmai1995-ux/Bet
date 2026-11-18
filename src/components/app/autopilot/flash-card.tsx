@@ -517,6 +517,18 @@ export function FlashCard({
                 <TrustIcon className="size-3" />
                 {view.trust.label}
               </span>
+              {/* ═══ v24.5 — بج رسمی «💎 ارتقایافته توسط کوئری QQL از دفتر سایه» ═══
+                  بازی‌های کم‌گل تاکتیکی که قبلاً فقط به‌خاطر گیت قدیمی v16 (λ_Fav < ۱.۵۰ یا
+                  ریسک مرزی > ۱۰.۵٪) در دفتر سایه بودند — با وین‌ریت عملی ۹۰.۷٪ به بانک اصلی
+                  ارتقا یافتند. */}
+              {sup?.shadowPromoted && !vetoed && (
+                <span
+                  className="flex items-center gap-1 rounded-full border border-cyan-400/50 bg-cyan-500/15 px-2 py-0.5 text-[9px] font-bold text-cyan-200"
+                  title="این بازی با ممیزی دفتر سایه v24.5 از «وتو - تسویه کاغذی» به کارت تاییدشده بانک اصلی ارتقا یافت (وین‌ریت عملی گروه اول: ۹۰.۷٪)"
+                >
+                  💎 ارتقایافته از دفتر سایه
+                </span>
+              )}
               {match.weatherAdjusted && (
                 <span
                   className="flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[9px] font-semibold text-sky-300"

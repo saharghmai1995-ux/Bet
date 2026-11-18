@@ -141,6 +141,8 @@ export interface FlashcardView {
     jointLossRiskPct: number;
     /** v11.0 — دژ نفوذناپذیر: ریسک زیر ۷٪ + تایید سوپروایزر */
     fortress: boolean;
+    /** v24.5 — 💎 ارتقایافته از دفتر سایه به بانک اصلی (گیت قدیمی v16: λ_Fav < ۱.۵۰ یا ریسک مرزی > ۱۰.۵٪) */
+    shadowPromoted: boolean;
     executionMode: ExecutionMode;
     /** ۴ الگوی رد‌شده + دلیل — پشت کارت */
     rejected: RejectedCandidate[];

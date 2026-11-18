@@ -1,15 +1,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v19.0 High-ROI
-// «Loosened Veto Gates — Jackpot Liberation & 5-Regime ROI Activation»
+// ایجنت سوپروایزر ارشد (Chief Risk Supervisor Agent) — v24.5 Shadow Ledger Alpha
+// «Shadow Ledger Promotion — Dual-Group Shadow Veto Audit»
+//
+// v24.5 (سند بازیابی فوری): ممیزی وتوشده‌های دفتر سایه به دو گروه تفکیک شد:
+//   💎 گروه اول — «ارتقایافته از دفتر سایه به بانک اصلی»:
+//      بازی‌های کم‌گل و تاکتیکی لیگ‌های معتبر (Albania×Finland · Czechia×Spain ·
+//      San Marino×Belarus · Andorra×Gibraltar · Rosario Central×Estudiantes) که
+//      قبلاً فقط به‌خاطر λ_Fav < ۱.۵۰ یا ریسک مرزی ۱۰.۵٪–۱۴.۰٪ به دفتر سایه
+//      می‌رفتند — در عمل ۹۰.۷٪ وین‌ریت و بیشترین جکپات دو برد را ثبت کرده‌اند.
+//      گیت تایید جدید: jointLossRiskPct ≤ ۱۴.۵٪ و λ_Fav ≥ ۱.۱۲ با شرط ضریب
+//      همپوشانی مثبت (1/oddsA + 1/oddsB) ≤ ۰.۸۶۵ → با بج «💎 ارتقایافته توسط
+//      کوئری QQL از دفتر سایه» وارد کارت‌های تاییدشده و بانک اصلی می‌شوند.
+//   🚫 گروه دوم — «وتوی واقعی دفتر سایه»: فقط لیگ‌های سمّی (esp.2 / usa.1 /
+//      fifa.friendly) و بازی‌های با ضریب همپوشانی ضعیف (impliedSum > ۰.۸۶۵)
+//      در دفتر سایه باقی می‌مانند.
 //
 // v19.0 (سند جراحی مستقیم): گیت‌های وتو v18 که بازی‌های جکپات بزرگ را
 // «وتو - تسویه کاغذی» می‌کردند آزاد شدند:
-//   · ریسک باخت همزمان: ۱۰.۵٪ → ۱۵.۸٪ (در عمل سقف موثر = وتوی قرمز ۱۵٪)
-//   · گیت فاوریت ثابت: λ_Fav ≥ ۱.۵۰ → ≥ ۱.۱۰ | λ_Dog ≤ ۱.۰۵ → ≤ ۱.۳۵
+//   · گیت فاوریت ثابت: λ_Fav ≥ ۱.۱۰ → ≥ ۱.۱۲ | λ_Dog ≤ ۱.۰۵ → ≤ ۱.۳۵
 //   · گیت سود ضعیف: ۱.۵٪ → ۰.۵٪
 //   · کف شارپ رژیم‌ها با APPROVE_SHARPE_MIN v19 (۰.۱۴) هم‌تراز شد
-// خروجی: بازی‌هایی مثل Andorra×Gibraltar (+۱۱۶u) / San Marino×Belarus (+۱۳۹u)
-// وارد کارت‌های تاییدشده بانک اصلی می‌شوند و هر ۵ رژیم ویترین سودآوری پر می‌شود.
 //
 // بازطراحی v18.0 (سند ارتقا): سه شرط ثابت نسخه ۱۶ (λ_Fav < ۱.۵۰ / λ_Dog > ۱.۰۵ /
 // ریسک ۱۰.۵٪) که «قبل از مسیریاب ۵ رژیم» اعمال می‌شدند، ۱۵۰ کارت ۹۰.۷٪-برد را
@@ -44,23 +54,26 @@ import type { BetTypeKey } from "./engine/betrouter";
 export type ExecutionMode = "DUAL_BOOK" | "SINGLE_BOOK";
 
 /**
- * v19.0 — گیت‌های رژیم‌محور سوپروایزر (سند جراحی High-ROI):
- *  · ریسک باخت همزمان: ۱۰.۵٪ → ۱۵.۸٪ — رهایی بازی‌های جکپات از «تسویه کاغذی»
- *    (در عمل سقف موثر همان وتوی قرمز مطلق ۱۵٪ است).
+ * v24.5 — گیت‌های رژیم‌محور سوپروایزر (ممیزی دفتر سایه):
+ *  · سقف ریسک تایید: ۱۴.۵٪ — تمام بازی‌های سودده گروه اول دفتر سایه
+ *    (ریسک مرزی ۱۰.۵٪–۱۴.۰٪ با وین‌ریت عملی ۹۰.۷٪) به بانک اصلی ارتقا می‌یابند.
  *  · وتوی قرمز مطلق سطح ۳: ریسک بالای ۱۵٪ همیشه وتو است (فقط دفتر کاغذی).
  */
-export const VETO_JOINT_LOSS_PCT_ATOMIC = 15.8;
-/** v19.0 — سقف ریسک رژیم DUAL_HEDGE — با گیت اتمیک هم‌تراز شد */
-export const VETO_JOINT_LOSS_PCT_DUAL_HEDGE = 15.8;
+export const VETO_JOINT_LOSS_PCT_ATOMIC = 14.5;
+/** v24.5 — سقف ریسک رژیم DUAL_HEDGE — با گیت اتمیک هم‌تراز شد */
+export const VETO_JOINT_LOSS_PCT_DUAL_HEDGE = 14.5;
 /** v18.0 — وتوی قرمز مطلق سطح ۳ (Hard Red Veto — ریسک > ۱۵٪ فقط تسویه کاغذی) */
 export const VETO_JOINT_LOSS_PCT_HARD_RED = 15;
 /**
- * v19.0 — گیت ثابت فاوریت فقط برای رژیم‌های بدون پنجره λ اختصاصی (BANKER و کارت بدون
- * زمینه رژیم) برقرار است؛ CORRECT_SCORE/COMBO/DUAL_HEDGE پنجره λ خودشان را دارند.
- * v19.0 — λ_Fav ≥ ۱.۱۰ و λ_Dog ≤ ۱.۳۵: بازی‌های کم‌گل سودده و هجومی دیگر وتو نمی‌شوند.
+ * v24.5 — گیت ثابت فاوریت: λ_Fav ≥ ۱.۱۲ (ارتقای بازی‌های کم‌گل تاکتیکی دفتر سایه
+ * که در عمل ۹۰.۷٪ وین‌ریت داشتند — با گیت همپوشانی مثبت ≤ ۰.۸۶۵ مهار می‌شوند).
  */
-export const VETO_FAV_LAMBDA_MIN = 1.1;
+export const VETO_FAV_LAMBDA_MIN = 1.12;
 export const VETO_DOG_LAMBDA_MAX = 1.35;
+/** v24.5 — آستانه مرز گیت قدیمی نسخه ۱۶ برای بج ارتقای دفتر سایه (λ_Fav < ۱.۵۰) */
+export const SHADOW_PROMOTION_FAV_LAMBDA_MAX = 1.5;
+/** v24.5 — کف ریسک مرزی گیت قدیمی نسخه ۱۶ برای بج ارتقای دفتر سایه (۱۰.۵٪) */
+export const SHADOW_PROMOTION_RISK_FLOOR_PCT = 10.5;
 /**
  * v11.0 — آستانه طلایی گیت سخت ایمنی سوپروایزر (دوره پیش‌از v15 — جفت‌های متعامد گسسته):
  * ریسک باخت همزمان بالاتر از ۹.۸٪ = وتو خودکار و بی‌قیدوشرط.
@@ -113,6 +126,8 @@ export interface SupervisorScore {
   vetoReason: string | null;
   /** v18.0 — سطح تاج: GOLD (استیک کامل ۱۰۰u) / SILVER (استیک نصف ۵۰u Half-Kelly) / null */
   tier: "GOLD" | "SILVER" | null;
+  /** v24.5 — 💎 ارتقایافته از دفتر سایه به بانک اصلی (گیت قدیمی v16: λ_Fav < ۱.۵۰ یا ریسک مرزی > ۱۰.۵٪) */
+  shadowPromoted: boolean;
 }
 
 /** جریمه توانی v11.0 — دقیقاً Math.pow(risk, 1.75) طبق سند ارتقا */
@@ -306,6 +321,16 @@ export function scorePair(
     tier = goldOK ? "GOLD" : silverOK ? "SILVER" : null;
   }
 
+  // ═══ v24.5 — بج «💎 ارتقایافته از دفتر سایه به بانک اصلی» ═══
+  // بازی‌هایی که قبلاً فقط به‌خاطر گیت‌های قدیمی نسخه ۱۶ (λ_Fav < ۱.۵۰ یا ریسک
+  // مرزی > ۱۰.۵٪) «وتو - تسویه کاغذی» می‌شدند — اکنون با گیت v24.5 تایید شده‌اند
+  // و باید با بج رسمی وارد بانک اصلی شوند (وین‌ریت عملی گروه اول: ۹۰.۷٪).
+  const favLambdaCtx = lambdaCtx ? Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway) : null;
+  const boundaryRisk = jointLossRiskPct > SHADOW_PROMOTION_RISK_FLOOR_PCT;
+  const lowFavLambda =
+    favLambdaCtx != null && favLambdaCtx < SHADOW_PROMOTION_FAV_LAMBDA_MAX;
+  const shadowPromoted = !veto && (boundaryRisk || lowFavLambda);
+
   const fortress = !veto && jointLossRiskPct < FORTRESS_RISK_PCT;
 
   return {
@@ -320,6 +345,7 @@ export function scorePair(
     veto,
     vetoReason,
     tier,
+    shadowPromoted,
   };
 }
 

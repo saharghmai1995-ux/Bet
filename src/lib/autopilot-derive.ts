@@ -251,6 +251,7 @@ export function buildFlashcard(
           doubleWinProbPct: supervisor.score.doubleWinProbPct,
           jointLossRiskPct: supervisor.score.jointLossRiskPct,
           fortress: supervisor.score.fortress,
+          shadowPromoted: supervisor.score.shadowPromoted,
           executionMode: supervisor.executionMode,
           rejected: supervisor.rejected,
         }
