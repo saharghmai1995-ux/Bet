@@ -218,7 +218,8 @@ function parseEspnEvent(ev: any, league: LeagueMeta): LiveMatchEvent | null {
   };
 }
 
-/** اسکوربورد ESPN برای یک روز مشخص (فرمت YYYYMMDD) — کش کوتاه برای کاهش درخواست ۱۹ رقابت */
+/** اسکوربورد ESPN برای یک روز مشخص (فرمت YYYYMMDD) — کش کوتاه برای کاهش درخواست ۱۹ رقابت
+ *  v24.5 — timeout سند: ۳۵۰۰ms — هیچ لیگ کند اجازه تعطیلی کل فید را ندارد */
 const scoreboardCache = new Map<string, { at: number; events: any[] | null }>();
 const SCOREBOARD_TTL_MS = 90_000;
 
@@ -227,7 +228,8 @@ export async function fetchEspnScoreboardDay(slug: string, dateCompact: string):
   const hit = scoreboardCache.get(key);
   if (hit && Date.now() - hit.at < SCOREBOARD_TTL_MS) return hit.events;
   const data = await fetchJson<any>(
-    `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${dateCompact}`
+    `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${dateCompact}`,
+    3_500
   );
   const events = data?.events ?? null;
   scoreboardCache.set(key, { at: Date.now(), events });
@@ -309,11 +311,12 @@ function sameUtcDay(iso: string): boolean {
   );
 }
 
-/** اندپوینت جامع جهانی soccer/all/scoreboard — پشتیبان خودکار وقتی بازی روز کم است */
+/** اندپوینت جامع جهانی soccer/all/scoreboard — پشتیبان خودکار وقتی بازی روز کم است
+ *  v24.5 — timeout ۳۵۰۰ms طبق سند (اندپوینت سریع و استاندارد اسکوربورد) */
 export async function fetchEspnAllScoreboardDay(): Promise<LiveMatchEvent[]> {
   const data = await fetchJson<any>(
     "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard",
-    12_000
+    3_500
   );
   const events = data?.events ?? [];
   const out: LiveMatchEvent[] = [];
