@@ -9,6 +9,8 @@ import { simultaneousKelly } from "@/lib/engine/kelly";
 import { checkMiddleTrap, type SelectionKind, type TrapLeg } from "@/lib/engine/dutching";
 import { generateOrthogonalComplementarySlips, buildOrthoPortfolioPair, asymmetricAlphaStakes } from "@/lib/engine/orthogonal";
 import { routeBetTypes, type MarketPrices } from "@/lib/engine/betrouter";
+import { runQuantumAnnealingSolver } from "@/lib/engine/quantum-solver";
+import { buildTelemetryWarehouse, runQqlPipeline, type TelemetrySlipInput, type QqlCandidateInput } from "@/lib/engine/qql-rca-engine";
 import { buildScoreMatrix } from "@/lib/engine/poisson";
 import { getActiveRuleFor } from "@/lib/server/calibration-rules";
 import type { LambdaBreakdown } from "@/lib/engine/matchEngine";
@@ -528,6 +530,72 @@ export async function POST(req: NextRequest) {
       console.error("bet-type router failed:", routerErr);
     }
 
+    // ─── v24.0 — موتور QQL درون‌حافظه‌ای + تحلیل ریشه‌ای هوش مصنوعی (AI RCA) ───
+    // ۱) انبار تله‌متری از کارت‌های تسویه‌شده واقعی دیتابیس (صفر عدد جعلی)
+    // ۲) ۶۶ کاندیدای کوانتومی همین بازی به‌عنوان candidate_66_matrix_pairs
+    // ۳) خط لوله ۴ مرحله‌ای: K-NN twins → فیلتر قید → وتوی RCA → LIMIT 1
+    let qqlTrace: import("@/lib/types").PortfolioResultDTO["qql"] = null;
+    try {
+      const settledSlips = await db.issuedSlip.findMany({
+        where: { status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] } },
+        select: { id: true, league: true, legsA: true, legsB: true, lambdaHome: true, lambdaAway: true, status: true, netProfit: true, settledAt: true },
+        orderBy: { settledAt: "desc" },
+        take: 400,
+      });
+      const telemetry = buildTelemetryWarehouse(settledSlips as TelemetrySlipInput[]);
+      const routerMatrix = buildScoreMatrix(prim.lambdas.home, prim.lambdas.away);
+      const entropyOf = (m: number[][]): number => {
+        let sum = 0;
+        for (const row of m) for (const v of row) sum += v;
+        let H = 0;
+        for (const row of m) for (const v of row) {
+          const p = sum > 0 ? v / sum : 0;
+          if (p > 1e-12) H -= p * Math.log(p);
+        }
+        return H;
+      };
+      const qSolver = runQuantumAnnealingSolver({
+        lambdaHome: prim.lambdas.home,
+        lambdaAway: prim.lambdas.away,
+        matrix: routerMatrix,
+        lambdaCorners: 0,
+        lambdaCards: 0,
+      });
+      const qqlCandidates: QqlCandidateInput[] = qSolver.candidates.map((c) => ({
+        pairCode: c.pairCode,
+        keyA: c.keyA,
+        keyB: c.keyB,
+        oddsA: c.oddsA,
+        oddsB: c.oddsB,
+        unionProb: c.unionProb,
+        doubleWinProb: c.overlapProb,
+        jointLossProb: 1 - c.unionProb,
+      }));
+      const qql = runQqlPipeline({
+        lambdaHome: prim.lambdas.home,
+        lambdaAway: prim.lambdas.away,
+        entropy: entropyOf(routerMatrix),
+        candidates: qqlCandidates,
+        telemetry,
+      });
+      qqlTrace = {
+        executedQueryLog: qql.executedQueryLog,
+        aiRcaDiagnosis: qql.aiRcaDiagnosis,
+        firedRules: qql.firedRules.map((r) => r.id),
+        vetoedPairs: qql.vetoedPairs,
+        knnTwins: qql.twinsCount,
+        knnSummary: qql.knnSummary,
+        winnerPairCode: qql.winner?.pairCode ?? null,
+        stageCounts: qql.stageCounts,
+        quantumBestPairCode: qSolver.best?.pairCode ?? null,
+        quantumCardLine: qSolver.selectionLine,
+        quantumQualifying: qSolver.qualifying,
+        quantumEvaluated: qSolver.evaluated,
+      };
+    } catch (qqlErr) {
+      console.error("qql-rca pipeline failed:", qqlErr);
+    }
+
     // ─── ذخیره TipSet برای زوج برتر ───
     const recommendedId = topPairs[0]?.id ?? null;
     if (topPairs.length > 0) {
@@ -599,6 +667,7 @@ export async function POST(req: NextRequest) {
       batchId,
       bankroll,
       betTypeRouter,
+      qql: qqlTrace,
     };
 
     pollCacheSet(portfolioCacheKey, result);

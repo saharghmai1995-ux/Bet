@@ -219,14 +219,19 @@ export const V22_1XBET_MARGIN = 1.055;
 // ═════════ فیلتر طلایی «ضریب همپوشانی مثبت» (Strict Positive Overlap Return Filter) ═════════
 // قانون آهنین سند بازگشت v19.0: فقط بازی‌هایی تایید شوند که ضریب همپوشانی مثبت و قوی دارند.
 
-/** سقف مجموع احتمال ضمنی دو تیپ — ضریب موثر همپوشانی حداقل 1.163x (+16.3٪ سود تضمینی) */
-export const OVERLAP_IMPLIED_SUM_MAX = 0.86;
+/** سقف مجموع احتمال ضمنی دو تیپ — ضریب موثر همپوشانی حداقل 1.157x (+15.7٪ سود تضمینی)
+ *  v24.5 — سند بازیابی فوری: شرط تایید ارتقای دفتر سایه = (1/oddsA + 1/oddsB) ≤ ۰.۸۶۵ */
+export const OVERLAP_IMPLIED_SUM_MAX = 0.865;
 /** کف حاشیه سود تضمینی همپوشانی (٪) — زیر ۱۵٪ = وتو و دفتر سایه */
 export const OVERLAP_MARGIN_MIN_PCT = 15.0;
-/** کف احتمال ناحیه برد دوبل همزمان (1-0 / 2-0) */
-export const OVERLAP_DOUBLE_WIN_MIN = 0.12;
-/** سقف ریسک تله میانی (٪) — بالای ۱۱.۵٪ = وتو و دفتر سایه */
-export const OVERLAP_JOINT_LOSS_MAX_PCT = 11.5;
+/** کف احتمال ناحیه برد دوبل همزمان (1-0 / 2-0)
+ *  v24.5 — سند بازیابی فوری: شرط تایید رسمی فقط سه مورد است (ریسک ≤ ۱۴.۵٪ · λ_Fav ≥ ۱.۱۲ ·
+ *  impliedSum ≤ ۰.۸۶۵) — بازی‌های کم‌گل تاکتیکی (۱-۰/۲-۰) با جکپات دو برد بالا دیگر با
+ *  این شرط حبس نمی‌شوند (کف ۶٪ برای حذف ناحیه‌های تقریباً صفر). */
+export const OVERLAP_DOUBLE_WIN_MIN = 0.06;
+/** سقف ریسک تله میانی (٪) — v24.5: هم‌تراز با گیت تایید سند بازیابی فوری ۱۴.۵٪
+ *  (گروه اول دفتر سایه — بازی‌های مرزی ۱۰.۵٪–۱۴.۰٪ با وین‌ریت عملی ۹۰.۷٪ آزاد می‌شوند) */
+export const OVERLAP_JOINT_LOSS_MAX_PCT = 14.5;
 /** بازده هدف برد دوبل (واحد) — ناحیه همپوشانی دو برد +۱۲۰ تا +۱۸۰ واحد */
 export const OVERLAP_DOUBLE_WIN_PROFIT_MIN = 120;
 export const OVERLAP_DOUBLE_WIN_PROFIT_MAX = 180;
@@ -252,10 +257,12 @@ export function overlapMetricsOf(oddsA: number, oddsB: number, doubleWinProb: nu
   const doubleWinOverlapProb = Math.max(0, doubleWinProb);
   const jointLossRiskPct = Math.max(0, jointLossProb) * 100;
   const checks: { ok: boolean; why: string }[] = [
-    { ok: impliedSum <= OVERLAP_IMPLIED_SUM_MAX, why: `مجموع احتمال ضمنی ${impliedSum.toFixed(3)} بالای سقف ۰.۸۶ — ضریب موثر همپوشانی کمتر از 1.163x` },
+    { ok: impliedSum <= OVERLAP_IMPLIED_SUM_MAX, why: `مجموع احتمال ضمنی ${impliedSum.toFixed(3)} بالای سقف ۰.۸۶۵ — ضریب موثر همپوشانی کافی نیست` },
     { ok: guaranteedOverlapMarginPct >= OVERLAP_MARGIN_MIN_PCT, why: `حاشیه سود تضمینی همپوشانی ${guaranteedOverlapMarginPct.toFixed(1)}٪ زیر کف ۱۵٪` },
-    { ok: doubleWinOverlapProb >= OVERLAP_DOUBLE_WIN_MIN, why: `احتمال ناحیه برد دوبل همزمان (1-0/2-0) ${(doubleWinOverlapProb * 100).toFixed(1)}٪ زیر کف ۱۲٪ — ناحیه Double-Win ندارد` },
-    { ok: jointLossRiskPct <= OVERLAP_JOINT_LOSS_MAX_PCT, why: `ریسک تله میانی ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۱.۵٪` },
+    // v24.5 — سند بازیابی فوری: شرط برد دوبل ≥ ۱۲٪ حذف شد (زوج‌های متعامد مکمل ذاتاً ناحیه
+    // برد دوبل صفر دارند ولی در عمل ۹۰.۷٪ وین‌ریت و بیشترین جکپات را ثبت کرده‌اند — شرط رسمی
+    // تایید فقط سه مورد: ریسک ≤ ۱۴.۵٪ · λ_Fav ≥ ۱.۱۲ · impliedSum ≤ ۰.۸۶۵)
+    { ok: jointLossRiskPct <= OVERLAP_JOINT_LOSS_MAX_PCT, why: `ریسک تله میانی ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۴.۵٪` },
   ];
   const failed = checks.filter((c) => !c.ok);
   return {

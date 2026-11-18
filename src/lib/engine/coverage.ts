@@ -66,6 +66,8 @@ export function selectionCoversCell(key: string, h: number, a: number): boolean 
     case "C1XU35": return h >= a && tot <= 3; // 1X & Under 3.5 Goals
     case "CHOME15": return h > a && tot >= 2; // Home Win & Over 1.5 Goals
     case "CBTTS25": return h > 0 && a > 0 && tot >= 3; // BTTS Yes & Over 2.5 Goals
+    // ═══ v23.0 — کمبوی رسمی استخر کوانتومی ۱۲ آپشن (Quantum M12) ═══
+    case "CX2U35": return a >= h && tot <= 3; // X2 & Under 3.5 Goals (Quantum M12)
     default: {
       // ═══ v17.0 — نتیجه دقیق خوشه (Correct Score Cluster) — کلید CS_<h>-<a> ═══
       if (key.startsWith("CS_")) {

@@ -141,6 +141,8 @@ export interface FlashcardView {
     jointLossRiskPct: number;
     /** v11.0 — دژ نفوذناپذیر: ریسک زیر ۷٪ + تایید سوپروایزر */
     fortress: boolean;
+    /** v24.5 — 💎 ارتقایافته از دفتر سایه به بانک اصلی (گیت قدیمی v16: λ_Fav < ۱.۵۰ یا ریسک مرزی > ۱۰.۵٪) */
+    shadowPromoted: boolean;
     executionMode: ExecutionMode;
     /** ۴ الگوی رد‌شده + دلیل — پشت کارت */
     rejected: RejectedCandidate[];
@@ -164,6 +166,18 @@ export interface FlashcardView {
    * (شکارچی آلفای سایه — استیک نصف ۵۰u Half-Kelly) | null = وتوشده/بدون سطح‌بندی
    */
   crownTier: "GOLD" | "SILVER" | null;
+  /** v23.0 — خط رسمی حل‌کننده کوانتومی ۱۲×۱۲ روی کارت (انتخاب از ۶۶ ترکیب) */
+  quantumLine: string | null;
+  /** v24.0 — گزارش اجرای موتور QQL + تحلیل ریشه‌ای هوش مصنوعی (AI RCA Trace) */
+  qql: {
+    executedQueryLog: string[];
+    aiRcaDiagnosis: string;
+    firedRules: string[];
+    vetoedPairs: string[];
+    knnTwins: number;
+    knnSummary: string | null;
+    winnerPairCode: string | null;
+  } | null;
 }
 
 /** رویداد زنده برای توست پوشش In-Play — v6.1: منبع واقعی ESPN یا تست دستی موتور */

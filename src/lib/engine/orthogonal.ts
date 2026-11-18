@@ -34,6 +34,7 @@
 import { poissonPmf, dixonColesTau, buildScoreMatrix } from "./poisson";
 import { simultaneousKelly } from "./kelly";
 import type { PairStructureDTO, PortfolioPairDTO, PortfolioSelectionDTO } from "../types";
+import { runQuantumAnnealingSolver, quantumCardLine } from "./quantum-solver";
 
 // ═══════════ برچسب بازارها — فارسی + نام رسمی بین‌المللی انگلیسی ═══════════
 
@@ -63,6 +64,10 @@ export const MARKET_LABELS: Record<string, string> = {
   AWAY_O15: "مجموع گل تیم میهمان: بالای ۱.۵ گل (Team Total: Over 1.5)",
   WIN_NIL_HOME: "برد میزبان بدون گل خورده (To Nil)",
   WIN_NIL_AWAY: "برد میهمان بدون گل خورده (To Nil)",
+  C1XU35: "کمبوی رسمی: برد میزبان یا مساوی و زیر ۳.۵ گل (1X & Under 3.5)",
+  CX2U35: "کمبوی رسمی: برد میهمان یا مساوی و زیر ۳.۵ گل (X2 & Under 3.5)",
+  CHOME15: "کمبوی رسمی: برد میزبان و بالای ۱.۵ گل (Home Win & Over 1.5)",
+  CBTTS25: "کمبوی رسمی: هر دو تیم گل می‌زنند و بالای ۲.۵ گل (BTTS Yes & Over 2.5)",
   EXACT2: "دقیقاً ۲ گل کل مسابقه (Exact Total Goals: 2)",
   HOME_BY_1: "برد میزبان دقیقاً با اختلاف ۱ گل (Home by 1)",
   HT_O05: "حداقل یک گل در نیمه اول (HT بالای ۰.۵)",
@@ -104,6 +109,10 @@ export const MARKET_LABELS_EN: Record<string, string> = {
   AWAY_O15: "Away Team Total Goals: Over 1.5",
   WIN_NIL_HOME: "Home Team to Win to Nil: Yes",
   WIN_NIL_AWAY: "Away Team to Win to Nil: Yes",
+  C1XU35: "1X & Under 3.5 Goals",
+  CX2U35: "X2 & Under 3.5 Goals",
+  CHOME15: "Home Win & Over 1.5 Goals",
+  CBTTS25: "BTTS Yes & Over 2.5 Goals",
   EXACT2: "Exact Total Goals: 2 Goals",
   HOME_BY_1: "Winning Margin: Home by 1 Goal",
 };
@@ -173,6 +182,11 @@ export function orthoLegCoversCell(key: string, h: number, a: number): boolean {
     // ═══ v16.0 — بازارهای طلایی تیمی (Golden Team-Total Markets) ═══
     case "HOME_O15": return h >= 2; // مجموع گل تیم میزبان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای i≥2
     case "AWAY_O15": return a >= 2; // مجموع گل تیم میهمان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای j≥2
+    // ═══ v23.0 — کمبوهای رسمی استخر کوانتومی ۱۲ آپشن (Quantum M11/M12) ═══
+    case "C1XU35": return h >= a && tot <= 3; // برد میزبان یا مساوی و زیر ۳.۵ گل — سند v23: M11
+    case "CX2U35": return a >= h && tot <= 3; // برد میهمان یا مساوی و زیر ۳.۵ گل — سند v23: M12
+    case "CHOME15": return h > a && tot >= 2; // برد میزبان و بالای ۱.۵ گل
+    case "CBTTS25": return h > 0 && a > 0 && tot >= 3; // BTTS بله و بالای ۲.۵ گل
     default: return false; // پایه‌های خارج ماتریس
   }
 }
@@ -371,8 +385,9 @@ function buildAtomicSlip(leg: string, band: AtomicBand, ctx: OrthoContext, lp: L
 /**
  * v16.0 — کد الگوها: G1/G2/G3 (الگوهای زیان‌ده A1/A2 و الگوی A4 حذف شدند؛
  * کدهای قدیمی فقط در برچسب کارت‌های تاریخی دفتر شناخته می‌شوند).
+ * v23.0 — کد Q: حل‌کننده کوانتومی ترکیب ۱۲ آپشن × ۶۶ جفت (انتخاب اختصاصی هر بازی).
  */
-export type ArchetypeCode = "G1" | "G2" | "G3";
+export type ArchetypeCode = "G1" | "G2" | "G3" | "Q";
 /** کدهای الگوی نسخه‌های قبلی — فقط برای نمایش کارت‌های تاریخی */
 export type LegacyArchetypeCode = "A1" | "A2" | "A3" | "A4";
 
@@ -465,6 +480,17 @@ export interface OrthoPair {
   impliedSum: number;
   legsA: string[];
   legsB: string[];
+  /** v23.0 — متادیتای حل‌کننده کوانتومی (فقط الگوی Q) */
+  quantum?: {
+    pairCode: string;
+    evaluated: number;
+    qualifying: number;
+    utility: number;
+    cardLine: string;
+    doubleWinScenarios: string[];
+    aOnlyScenarios: string[];
+    bOnlyScenarios: string[];
+  };
 }
 
 export interface OrthogonalResult {
@@ -477,6 +503,9 @@ export interface OrthogonalResult {
  * برای هر ۳ الگوی طلایی یک زوج تیپ اتمیک می‌سازد (کاربر بین آن‌ها سوییچ می‌کند)
  * و الگوی متناسب با گیت‌های λ سند v16.0 را پیشنهاد می‌دهد.
  * هر تیپ فقط یک مارکت تک‌دکمه‌ای است؛ هیچ ضرب درون‌بازی وجود ندارد.
+ * v23.0 — حل‌کننده کوانتومی ۱۲×۱۲: تمام ۶۶ ترکیب استخر باز M1..M12 برای «همین بازی»
+ * اسکن می‌شود و بهترین جفت (تیپ A، تیپ B) با قید ضریب همپوشانی مثبت به‌عنوان
+ * الگوی Q به استخر اضافه می‌شود — هیچ دو کارتی شبیه هم نیستند.
  */
 export function generateOrthogonalComplementarySlips(ctx: OrthoContext): OrthogonalResult {
   const ht = buildHtProbs(ctx.lambdaHome, ctx.lambdaAway);
@@ -527,10 +556,79 @@ export function generateOrthogonalComplementarySlips(ctx: OrthoContext): Orthogo
     });
   }
 
+  // ═══ v23.0 — حل‌کننده کوانتومی ۱۲×۱۲ (Simulated Quantum Annealing Solver) ═══
+  try {
+    const q = runQuantumAnnealingSolver(ctx);
+    if (q.best) {
+      const qb = q.best;
+      // تیپ‌های کوانتومی با قیمت‌گذاری ارزش‌محور خود حل‌کننده (سازگاری دقیق قید ۰.۸۶۵)
+      const slipA: OrthoSlip = {
+        legs: [qb.keyA],
+        label: MARKET_LABELS[qb.keyA] ?? qb.labelFaA,
+        labelEn: marketEnLabel(qb.keyA),
+        odds: qb.oddsA,
+        prob: qb.probA,
+      };
+      const slipB: OrthoSlip = {
+        legs: [qb.keyB],
+        label: MARKET_LABELS[qb.keyB] ?? qb.labelFaB,
+        labelEn: marketEnLabel(qb.keyB),
+        odds: qb.oddsB,
+        prob: qb.probB,
+      };
+      const bothWin = jointWinProb(slipA.legs, slipB.legs, ctx, lp);
+      const aOnly = Math.max(0, qb.probA - bothWin);
+      const bOnly = Math.max(0, qb.probB - bothWin);
+      const bothLose = Math.max(0, 1 - qb.probA - qb.probB + bothWin);
+      archetypes.push({
+        code: "Q",
+        name: `حل‌کننده کوانتومی v23.0 — جفت اختصاصی این بازی [${qb.codeA} ↔ ${qb.codeB}] از ۶۶ ترکیب`,
+        short: `⚛️ کوانتومی [${qb.codeA} ↔ ${qb.codeB}] — ${qb.labelFaA} ↔ ${qb.labelFaB}`,
+        rationale: `اسکن کوانتومی تمام ۶۶ ترکیب استخر باز ۱۲ آپشن روی ماتریس ۶×۶ همین بازی — پوشش کل ${(qb.unionProb * 100).toFixed(1)}٪ با ناحیه برد دوبل ${qb.doubleWinScenarios.join("/") || "—"} به احتمال ${(qb.overlapProb * 100).toFixed(1)}٪ و ضریب موثر ${qb.effOdds.toFixed(2)}x (مجموع ضمنی ${qb.impliedSum.toFixed(3)} ≤ ۰.۸۶۵) با امتیاز انرژی U=${qb.utility.toFixed(1)} — امتیازدهی: U = P_union×100 + P_overlap×65 + (O_eff−1)×120 − (1−P_union)²×400`,
+        orthogonalityPct: 100,
+        coveragePct: qb.unionProb,
+        overlapPct: qb.overlapProb,
+        probUnion: qb.unionProb,
+        trueJointLossRiskPct: Math.round(bothLose * 1000) / 10,
+        doubleWinProbPct: Math.round(bothWin * 1000) / 10,
+        slipA,
+        slipB,
+        jointStates: { bothWin, aOnly, bOnly, bothLose },
+        impliedSum: qb.impliedSum,
+        legsA: [qb.keyA],
+        legsB: [qb.keyB],
+        quantum: {
+          pairCode: qb.pairCode,
+          evaluated: q.evaluated,
+          qualifying: q.qualifying,
+          utility: qb.utility,
+          cardLine: quantumCardLine(qb, q.evaluated) ?? "",
+          doubleWinScenarios: qb.doubleWinScenarios,
+          aOnlyScenarios: qb.aOnlyScenarios,
+          bOnlyScenarios: qb.bOnlyScenarios,
+        },
+      });
+      // امتیاز پیشنهاد کوانتومی: نرمال‌سازی انرژی U به مقیاس گیت‌های طلایی
+      archetypes[archetypes.length - 1].orthogonalityPct = 100;
+    }
+  } catch (qErr) {
+    console.error("quantum solver failed (fallback to golden patterns):", qErr);
+  }
+
   // پیشنهاد رسمی: بالاترین امتیاز انطباق با گیت‌های λ + کمینه‌سازی ریسک باخت همزمان
+  // v23.0 — الگوی کوانتومی Q با نرمال‌سازی U/100 در همین رقابت شرکت می‌کند
   let recommended: ArchetypeCode = "G1";
   let bestScore = -Infinity;
   for (const a of archetypes) {
+    if (a.code === "Q") {
+      const qMeta = a.quantum!;
+      const s = qMeta.utility / 100 - Math.max(0, a.jointStates.bothLose - 0.105) * 2.0;
+      if (s > bestScore) {
+        bestScore = s;
+        recommended = "Q";
+      }
+      continue;
+    }
     const def = ARCHETYPES.find((d) => d.code === a.code)!;
     // الگویی که هم انطباق آماری دارد و هم ریسک باخت همزمان معقول
     const s = def.score(ctx) - Math.max(0, a.jointStates.bothLose - 0.105) * 2.0;
@@ -796,6 +894,8 @@ export function buildOrthoPortfolioPair(
       coveragePct: a.coveragePct,
       overlapPct: a.overlapPct,
     },
+    // v23.0 — متادیتای حل‌کننده کوانتومی روی زوج (فقط الگوی Q)
+    quantum: a.quantum,
     trap: { verdict: "NONE", title: "بدون شرط وابسته", message: "هر تیپ یک مارکت تک‌دکمه‌ای رسمی است — صفر ضرب گزینه‌های وابسته (قانون آهنین Zero Same-Game Multiplication)" },
     verdict:
       a.jointStates.bothLose < 0.105

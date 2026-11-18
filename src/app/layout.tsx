@@ -3,9 +3,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 
 export const metadata: Metadata = {
-  title: "NEOBET QUANT PRO • @AINEOBET | v19.0 Restore — Orthogonal Dual-Hedge + Strict Positive Overlap Filter",
+  title: "NEOBET QUANT PRO • @AINEOBET | v24.0 Quantum Annealing 12×12 + QQL/RCA Engine",
   description:
-    "بازگشت به معماری برنده همپوشانی دوقلو v19.0 (۳ الگوی طلایی G1/G2/G3 با ناحیه برد دوبل) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله ≤ ۱۱.۵٪) + تخصیص نامتقارن ۶۵/۳۵ + سپر استاپ‌لاس دقیقه ۶۵ + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson + تسویه خودکار ESPN + کانال تلگرام VIP",
+    "حل‌کننده کوانتومی ترکیب ۱۲ آپشن × ۶۶ جفت v23.0 (انتخاب اختصاصی هر بازی با تابع انرژی U و قید همپوشانی مثبت ۰.۸۶۵) + موتور زبان پرس‌وجوی تحلیلی درون‌حافظه‌ای و تحلیل ریشه‌ای هوش مصنوعی v24.0 (K-NN twins + وتوی RCA_01/02/03) + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵/۳۵ + خط لوله ESPN · TheSportsDB · Polymarket + تسویه خودکار ESPN + کانال تلگرام VIP",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },

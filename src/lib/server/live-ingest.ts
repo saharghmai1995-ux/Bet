@@ -33,37 +33,14 @@ import { solveMarketImpliedLambdas, type MarketImpliedResult } from "@/lib/engin
 // v21.0 — جدول جهانی Elo: پایان کارت کور λ=۱.۰۰–۰.۹۲ در بازی‌های ملی
 import { lambdaFromEloRatings, lookupTeamRating } from "@/lib/engine/elo-ratings";
 // v22.0 — ترکیب ۱۰۰٪ اتوماتیک با بازار آزاد Polymarket (Zero-Vig)
-import { fetchPolymarketMap, matchPolymarketLine, type PolyMarketLine, fetchEspnCoreOdds, parseEspnExternalId, type EspnCoreOdds } from "./odds-providers";
+import { fetchPolymarketMap, matchPolymarketLine, type PolyMarketLine } from "./odds-providers";
 import type { LiveFeedDTO, LiveFeedSourceDTO } from "@/lib/types";
 
-// ═══ v22.0 — کش اندپوینت مستقیم ESPN Core Odds (Bet365/Unibet/William Hill/DraftKings) ═══
-// هر رویداد حداکثر هر ۱۰ دقیقه یک‌بار واکشی می‌شود — ضد Rate-Limit.
-const espnCoreCache = new Map<string, { at: number; core: EspnCoreOdds | null }>();
-const ESPN_CORE_TTL_MS = 10 * 60_000;
-async function fetchEspnCoreOddsCached(slug: string, eventId: string): Promise<EspnCoreOdds | null> {
-  const key = `${slug}-${eventId}`;
-  const hit = espnCoreCache.get(key);
-  if (hit && Date.now() - hit.at < ESPN_CORE_TTL_MS) return hit.core;
-  const core = await fetchEspnCoreOdds(slug, eventId).catch(() => null);
-  if (espnCoreCache.size > 400) espnCoreCache.clear();
-  espnCoreCache.set(key, { at: Date.now(), core });
-  return core;
-}
-
-/** بهترین خط 1X2 بین بوک‌میکرهای رسمی ESPN Core (Bet365/Unibet/William Hill/...) */
-function bestEspnCoreLine(core: EspnCoreOdds | null): { provider: string; home: number; draw: number; away: number } | null {
-  if (!core) return null;
-  let best: { provider: string; home: number; draw: number; away: number } | null = null;
-  const impliedSum = (l: { home: number; draw: number; away: number }) => 1 / l.home + 1 / l.draw + 1 / l.away;
-  for (const b of core.bookmakers) {
-    if (!b.home || !b.draw || !b.away) continue;
-    if (b.home <= 1.01 || b.draw <= 1.01 || b.away <= 1.01) continue;
-    const line = { provider: b.name, home: b.home, draw: b.draw, away: b.away };
-    if (!best || impliedSum(line) < impliedSum(best)) best = line; // کم‌حاشیه‌ترین خط
-  }
-  return best;
-}
-
+// ═══ v24.5 — حذف کامل اندپوینت مسدودکننده sports.core.api.espn.com از خط لوله فید ═══
+// سند بازیابی فوری v24.5: فراخوانی ترتیبی core odds برای هر بازی (~۱۵۰ فراخوانی × ۹ ثانیه)
+// باعث Timeout/500 سرور و چرخنده بی‌پایان «در حال بارگذاری کارنامه» شده بود.
+// طبق سند: فقط اندپوینت سریع و استاندارد اسکوربورد (site.api.espn.com/…/scoreboard)
+// با timeout ۳۵۰۰ms — خط بازار از espnOdds خود اسکوربورد + Polymarket + The Odds API می‌آید.
 
 // ═════════════════════ تنظیمات کش و throttle ═════════════════════
 
@@ -745,7 +722,6 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
   // ═══ v22.0 — بازار آزاد Polymarket (Zero-Vig) — کش ۵ دقیقه‌ای، بدون کلید ═══
   const polyMap = await fetchPolymarketMap().catch(() => new Map<string, PolyMarketLine>());
   let polyMatched = 0;
-  let espnCoreOddsCount = 0;
 
   for (const ev of keepEvents) {
     const kick = Date.parse(ev.kickoff);
@@ -756,18 +732,9 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
     const probs = modelProbs(d);
     const oddsEv = matchOddsEvent(ev, oddsEvents);
     if (oddsEv) oddsApiMatched += 1;
-    // v22.0 — اندپوینت مستقیم ESPN Core Odds (Bet365/Unibet/William Hill/DraftKings)
-    // وقتی نه Odds API و نه اسکوربورد خط داشت — ۱۰۰٪ اتوماتیک، بدون کلید
-    if (!oddsEv && !(ev.espnOdds && ev.espnOdds.home)) {
-      const parsedId = parseEspnExternalId(ev.externalId);
-      if (parsedId) {
-        const coreLine = bestEspnCoreLine(await fetchEspnCoreOddsCached(parsedId.slug, parsedId.eventId));
-        if (coreLine) {
-          ev.espnOdds = { provider: `${coreLine.provider} (ESPN Core)`, home: coreLine.home, draw: coreLine.draw, away: coreLine.away, over25: null, under25: null };
-          espnCoreOddsCount += 1;
-        }
-      }
-    }
+    // ═══ v24.5 — ESPN Core Odds مسدودکننده حذف شد (سند بازیابی فوری) ═══
+    // خط بازار فقط از espnOdds خود اسکوربورد (site.api.espn.com) + Polymarket + The Odds API
+    // — هیچ فراخوانی sports.core.api.espn.com در این حلقه وجود ندارد.
     // v22.0 — ترکیب با بازار آزاد Polymarket (100% اتوماتیک — بدون ورود دستی)
     const polyLine = matchPolymarketLine(polyMap, ev.homeTeam, ev.awayTeam);
     if (polyLine) polyMatched += 1;
@@ -958,15 +925,12 @@ async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
         : "تطبیق بازی‌های امروز در بازار Polymarket یافت نشد",
     latencyMs: 0,
   });
-  // ═══ v22.0 — نبض اندپوینت مستقیم ESPN Core Odds ═══
+  // ═══ v24.5 — ESPN Core Odds حذف شد؛ نبض خط بازار = اسکوربورد + Polymarket ═══
   sources.push({
     key: "espn-core-odds",
-    label: "ESPN Core Odds — v22.0 (Bet365/Unibet/William Hill)",
-    ok: espnCoreOddsCount > 0,
-    detail:
-      espnCoreOddsCount > 0
-        ? `${espnCoreOddsCount} بازی با خط مستقیم بوک‌میکرهای ESPN Core تقویت شد`
-        : "هیچ رویدادی هنوز خط ESPN Core نداشت (بوک‌میکرها خط را باز نکرده‌اند) — قانون آهنین: کارت صادر نمی‌شود",
+    label: "ESPN Core Odds — v24.5 (بازنشسته — اندپوینت مسدودکننده حذف شد)",
+    ok: false,
+    detail: "طبق سند v24.5 فراخوانی sports.core.api.espn.com از خط لوله حذف شد — Timeout/500 رفع گردید؛ خط بازار از اسکوربورد سریع + Polymarket + Odds API",
     latencyMs: 0,
   });
   sources.push({

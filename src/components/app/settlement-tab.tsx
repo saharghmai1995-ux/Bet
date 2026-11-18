@@ -1065,7 +1065,7 @@ export function SettlementTab() {
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
-              className="h-8 gap-1 bg-emerald-600 text-[11px] hover:bg-emerald-500"
+              className="h-auto min-h-8 shrink! whitespace-normal! text-right gap-1 bg-emerald-600 text-[11px] leading-4 hover:bg-emerald-500 sm:whitespace-nowrap"
               onClick={() => void dispatchNow()}
               disabled={dispatching}
             >
@@ -1082,7 +1082,7 @@ export function SettlementTab() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-[11px] text-emerald-300 hover:bg-emerald-500/20"
+              className="h-auto min-h-8 shrink! whitespace-normal! text-right gap-1.5 border-emerald-500/40 bg-emerald-500/10 text-[11px] leading-4 text-emerald-300 hover:bg-emerald-500/20 sm:whitespace-nowrap"
               onClick={recalcV19Restore}
               disabled={recalcing}
             >
@@ -1102,7 +1102,7 @@ export function SettlementTab() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 gap-1 whitespace-nowrap border-amber-500/40 px-4 py-2.5 text-[11px] text-amber-300 hover:bg-amber-500/10"
+              className="h-auto min-h-8 whitespace-normal! text-right gap-1 border-amber-500/40 px-4 py-2.5 text-[11px] leading-4 text-amber-300 hover:bg-amber-500/10 sm:whitespace-nowrap"
               onClick={() => void recalcV15()}
               disabled={recalcing}
             >
@@ -1252,8 +1252,9 @@ export function SettlementTab() {
             </p>
           </div>
         ) : (
-          <ScrollArea className="max-h-[480px]">
-            <Table>
+          // v24.0 — رفع سرریز افقی موبایل: overflow دو محوره به‌جای ScrollArea عمودی
+          <div className="max-h-[480px] overflow-auto">
+            <Table className="min-w-[640px]">
               <TableHeader className="sticky top-0 z-10 bg-[rgba(9,13,24,0.95)] backdrop-blur">
                 <TableRow className="border-white/8">
                   <TableHead className="text-right text-[10px]">بازی (نتیجه FT واقعی)</TableHead>
@@ -1271,7 +1272,7 @@ export function SettlementTab() {
                 ))}
               </TableBody>
             </Table>
-          </ScrollArea>
+          </div>
         )}
       </div>
 

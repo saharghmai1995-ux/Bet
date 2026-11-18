@@ -1334,11 +1334,13 @@ export async function getLedger(): Promise<LedgerDTO> {
   // فقط کارت‌های تاییدشده غیربازخوانی تسویه‌شده — هم‌مبنا با stats؛ انتهای منحنی
   // دقیقاً با «سود خالص مجموع» تیتر برابر است (رفع باگ نمایش/محاسبه).
   // v18.0 — کارت‌های تاج نقره‌ای از منحنی طلایی خارج شدند (منحنی مجزای silverHarvest).
+  // v25.0 — کارت‌های نقره‌ای اکنون «پول واقعی منتشرشده» هستند (استیک ۵۰u Half-Kelly،
+  // تایید سوپروایزر، تسویه ESPN) — منحنی «ترکیبی دو کتاب واقعی» ساخته می‌شود تا
+  // انتهای منحنی دقیقاً برابر تیتر بانک ترکیبی هیرو باشد (منبع واحد حقیقت).
   const curveRows = await db.issuedSlip.findMany({
     where: {
       supervisorApproved: true,
       retroIssued: false,
-      crownTier: { not: "SILVER_SHADOW" },
       status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
       settledAt: { not: null },
     },

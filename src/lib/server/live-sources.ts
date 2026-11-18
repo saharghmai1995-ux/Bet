@@ -218,17 +218,23 @@ function parseEspnEvent(ev: any, league: LeagueMeta): LiveMatchEvent | null {
   };
 }
 
-/** اسکوربورد ESPN برای یک روز مشخص (فرمت YYYYMMDD) — کش کوتاه برای کاهش درخواست ۱۹ رقابت */
+/** اسکوربورد ESPN برای یک روز مشخص (فرمت YYYYMMDD) — کش کوتاه برای کاهش درخواست ۱۹ رقابت
+ *  v24.5 — timeout سند: ۳۵۰۰ms — هیچ لیگ کند اجازه تعطیلی کل فید را ندارد */
 const scoreboardCache = new Map<string, { at: number; events: any[] | null }>();
 const SCOREBOARD_TTL_MS = 90_000;
 
-export async function fetchEspnScoreboardDay(slug: string, dateCompact: string): Promise<any[] | null> {
+export async function fetchEspnScoreboardDay(slug: string, dateCompact: string, bypassCache = false): Promise<any[] | null> {
   const key = `${slug}::${dateCompact}`;
-  const hit = scoreboardCache.get(key);
-  if (hit && Date.now() - hit.at < SCOREBOARD_TTL_MS) return hit.events;
+  if (!bypassCache) {
+    const hit = scoreboardCache.get(key);
+    if (hit && Date.now() - hit.at < SCOREBOARD_TTL_MS) return hit.events;
+  }
   const data = await fetchJson<any>(
-    `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${dateCompact}`
+    `https://site.api.espn.com/apis/site/v2/sports/soccer/${slug}/scoreboard?dates=${dateCompact}`,
+    3_500
   );
+  // v25.0 — فقط پاسخ موفق کش می‌شود؛ خطای شبکه/timeout کش نمی‌شود تا تلاش مجدد ممکن بماند
+  if (data === null) return null;
   const events = data?.events ?? null;
   scoreboardCache.set(key, { at: Date.now(), events });
   if (scoreboardCache.size > 500) {
@@ -250,8 +256,30 @@ function dedupEvents(list: LiveMatchEvent[]): LiveMatchEvent[] {
 }
 
 /**
+ * v25.0 — استخر همزمانی محدود: هرگز بیش از N درخواست شبکه هم‌زمان به ESPN نمی‌زنیم.
+ * ریشه باگ «اسکن ۲۱ روزه فقط ۳۶ بازی»: Promise.allSettled بی‌مرز با ۴۵۶ درخواست هم‌زمان
+ * باعث throttle/timeout انبوه می‌شد و اکثریت پاسخ‌ها null برمی‌گشت.
+ */
+const ESPN_FETCH_CONCURRENCY = 8;
+
+async function poolAll<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
  * جمع‌آوری بازی‌های بازه [fromOffset..toOffset] روز نسبت به امروز برای همه لیگ‌ها.
  * ESPN محدودیت کلید ندارد و برای هر لیگ-روز یک پاسخ سبک برمی‌گرداند.
+ * v25.0 — همزمانی محدود (۸ کارگر) + یک تلاش مجدد برای هر لیگ-روز ناموفق.
  */
 export async function fetchEspnEvents(fromOffset = 0, toOffset = 7): Promise<LiveMatchEvent[]> {
   const jobs: { league: LeagueMeta; day: string }[] = [];
@@ -264,18 +292,22 @@ export async function fetchEspnEvents(fromOffset = 0, toOffset = 7): Promise<Liv
     }
   }
 
-  const settled = await Promise.allSettled(
-    jobs.map(async ({ league, day }) => {
-      const events = await fetchEspnScoreboardDay(league.slug, day);
-      if (!events) return [];
-      return events.map((ev: any) => parseEspnEvent(ev, league)).filter((x): x is LiveMatchEvent => x !== null);
-    })
-  );
+  const fetchDay = async ({ league, day }: { league: LeagueMeta; day: string }): Promise<LiveMatchEvent[]> => {
+    let events = await fetchEspnScoreboardDay(league.slug, day);
+    if (events === null) {
+      // v25.0 — تلاش مجدد یک‌باره با دورزدن کش (خطای گذرای timeout/throttle کش نمی‌شود)
+      await new Promise((r) => setTimeout(r, 150));
+      events = await fetchEspnScoreboardDay(league.slug, day, true);
+    }
+    if (!events) return [];
+    return events.map((ev: any) => parseEspnEvent(ev, league)).filter((x): x is LiveMatchEvent => x !== null);
+  };
+
+  const results = await poolAll(jobs, ESPN_FETCH_CONCURRENCY, fetchDay);
 
   const merged: LiveMatchEvent[] = [];
-  for (const r of settled) {
-    if (r.status !== "fulfilled") continue;
-    merged.push(...r.value);
+  for (const r of results) {
+    merged.push(...r);
   }
   return dedupEvents(merged);
 }
@@ -309,11 +341,12 @@ function sameUtcDay(iso: string): boolean {
   );
 }
 
-/** اندپوینت جامع جهانی soccer/all/scoreboard — پشتیبان خودکار وقتی بازی روز کم است */
+/** اندپوینت جامع جهانی soccer/all/scoreboard — پشتیبان خودکار وقتی بازی روز کم است
+ *  v24.5 — timeout ۳۵۰۰ms طبق سند (اندپوینت سریع و استاندارد اسکوربورد) */
 export async function fetchEspnAllScoreboardDay(): Promise<LiveMatchEvent[]> {
   const data = await fetchJson<any>(
     "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard",
-    12_000
+    3_500
   );
   const events = data?.events ?? [];
   const out: LiveMatchEvent[] = [];
