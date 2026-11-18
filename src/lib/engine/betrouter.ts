@@ -257,10 +257,12 @@ export function overlapMetricsOf(oddsA: number, oddsB: number, doubleWinProb: nu
   const doubleWinOverlapProb = Math.max(0, doubleWinProb);
   const jointLossRiskPct = Math.max(0, jointLossProb) * 100;
   const checks: { ok: boolean; why: string }[] = [
-    { ok: impliedSum <= OVERLAP_IMPLIED_SUM_MAX, why: `مجموع احتمال ضمنی ${impliedSum.toFixed(3)} بالای سقف ۰.۸۶ — ضریب موثر همپوشانی کمتر از 1.163x` },
+    { ok: impliedSum <= OVERLAP_IMPLIED_SUM_MAX, why: `مجموع احتمال ضمنی ${impliedSum.toFixed(3)} بالای سقف ۰.۸۶۵ — ضریب موثر همپوشانی کافی نیست` },
     { ok: guaranteedOverlapMarginPct >= OVERLAP_MARGIN_MIN_PCT, why: `حاشیه سود تضمینی همپوشانی ${guaranteedOverlapMarginPct.toFixed(1)}٪ زیر کف ۱۵٪` },
-    { ok: doubleWinOverlapProb >= OVERLAP_DOUBLE_WIN_MIN, why: `احتمال ناحیه برد دوبل همزمان (1-0/2-0) ${(doubleWinOverlapProb * 100).toFixed(1)}٪ زیر کف ۱۲٪ — ناحیه Double-Win ندارد` },
-    { ok: jointLossRiskPct <= OVERLAP_JOINT_LOSS_MAX_PCT, why: `ریسک تله میانی ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۱.۵٪` },
+    // v24.5 — سند بازیابی فوری: شرط برد دوبل ≥ ۱۲٪ حذف شد (زوج‌های متعامد مکمل ذاتاً ناحیه
+    // برد دوبل صفر دارند ولی در عمل ۹۰.۷٪ وین‌ریت و بیشترین جکپات را ثبت کرده‌اند — شرط رسمی
+    // تایید فقط سه مورد: ریسک ≤ ۱۴.۵٪ · λ_Fav ≥ ۱.۱۲ · impliedSum ≤ ۰.۸۶۵)
+    { ok: jointLossRiskPct <= OVERLAP_JOINT_LOSS_MAX_PCT, why: `ریسک تله میانی ${jointLossRiskPct.toFixed(1)}٪ بالای سقف ۱۴.۵٪` },
   ];
   const failed = checks.filter((c) => !c.ok);
   return {

@@ -269,8 +269,8 @@ export function scorePair(
   if (!veto && lambdaCtx) {
     const fav = Math.max(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
     const dog = Math.min(lambdaCtx.lambdaHome, lambdaCtx.lambdaAway);
-    // v18.0 — پنجره λ اختصاصی هر رژیم (جدول سند)؛ گیت ثابت فقط برای BANKER/بدون زمینه.
-    // DUAL_HEDGE پنجره λ ندارد (سند: فقط ریسک ≤ ۱۱.۲٪ و شارپ ≥ ۰.۲۴).
+    // v24.5 — شرط تایید رسمی سند بازیابی فوری برای همه رژیم‌ها: λ_Fav ≥ ۱.۱۲ (و λ_Dog ≤ ۱.۳۵) —
+    // رژیم DUAL_HEDGE دیگر معاف نیست؛ پنجره λ اختصاصی CORRECT_SCORE/COMBO سخت‌گیرانه‌تر باقی است.
     if (regime === "CORRECT_SCORE") {
       if (fav < 1.15 || fav > 1.85 || dog > 1.15) {
         veto = true;
@@ -281,9 +281,9 @@ export function scorePair(
         veto = true;
         vetoReason = `🛡️ گیت کمبو v18.0: λ_Fav=${fav.toFixed(2)} باید ≥ 1.35 و λ_Dog=${dog.toFixed(2)} ≤ 1.25 — کمبو 1X&U3.5 / 1&O1.5 فقط روی فاوریت کنترل‌گر/هجومی صادر می‌شود`;
       }
-    } else if (regime !== "DUAL_HEDGE" && (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX)) {
+    } else if (fav < VETO_FAV_LAMBDA_MIN || dog > VETO_DOG_LAMBDA_MAX) {
       veto = true;
-      vetoReason = `🛡️ گیت فاوریت قاطع v19.0: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۱۰ یا λ_Dog = ${dog.toFixed(2)} > ۱.۳۵) — رژیم ${regime ?? "پیش‌فرض"} فقط روی فاوریت‌های قاطع صادر می‌شود — وتو و انتقال به دفتر سایه`;
+      vetoReason = `🛡️ گیت فاوریت قاطع v24.5: برتری واضح وجود ندارد (λ_Fav = ${fav.toFixed(2)} < ۱.۱۲ یا λ_Dog = ${dog.toFixed(2)} > ۱.۳۵) — رژیم ${regime ?? "پیش‌فرض"} فقط روی فاوریت‌های قاطع صادر می‌شود — وتو و انتقال به دفتر سایه`;
     }
   }
   if (!veto && regimeCtx && regimeSharpe != null) {
