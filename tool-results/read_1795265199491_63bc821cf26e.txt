@@ -1,0 +1,906 @@
+     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→// موتور جفت‌های اتمیک طلایی — NeoBet v16.0
+     3→// «93% Matrix-Partition Atomic Pairs — Golden Official Single-Button Markets»
+     4→//
+     5→// 🚨 قانون آهنین Zero Same-Game Multiplication (سند ارتقا v15.0 — حفظ شده):
+     6→//   در کارت‌های تک‌بازی استفاده از علامت ضرب (×) یا جمع (+) بین چند آپشن
+     7→//   درون یک بازی مطلقاً ممنوع است. هر بال (تیپ A و تیپ B) فقط و فقط یک
+     8→//   مارکت استاندارد تک‌دکمه‌ای (Single Atomic Selection) است که در ۱۰۰٪
+     9→//   سایت‌های شرط‌بندی دنیا به‌عنوان گزینه مستقل وجود دارد.
+    10→//
+    11→// ۳ الگوی طلایی تک‌دکمه‌ای v16.0 (کالبدشکافی ۱۰۵ کارت تسویه‌شده v15.0):
+    12→//   الگوی طلایی ۱ — مجموع گل تیم فاوریت بالای ۱.۵ ↔ مجموع کل گل زیر ۲.۵
+    13→//     (Favorite Team Total: Over 1.5 ↔ Match Total: Under 2.5)
+    14→//   الگوی طلایی ۲ — برد مستقیم میزبان (1) ↔ مجموع کل گل زیر ۲.۵
+    15→//     (Full-Time Result: 1 ↔ Match Total: Under 2.5)
+    16→//   الگوی طلایی ۳ (قهرمان v15 با +۲۲۳.۹u) — BTTS بله ↔ برد فاوریت بدون گل خورده
+    17→//     (Both Teams To Score: Yes ↔ Favorite Win to Nil)
+    18→//
+    19→// نتایج پرتکرار 0-0 / 1-0 / 0-1 / 1-1 / 2-0 در هر سه الگو ۱۰۰٪ پوشش داده
+    20→// می‌شوند (پوشش ماتریس ۶×۶ بالای ۹۲.۵٪) — شکاف ۰-۰ و ۰-۱ الگوهای زیان‌ده
+    21→// A1 و A2 نسخه ۱۵ کاملاً حذف شده است.
+    22→//
+    23→// احتمال هر تیپ مستقیماً از جمع خانه‌های متناظر ماتریس دیکسون-کولز (بدون هیچ
+    24→// ضربی!) و ضریب از فرمول واقعی بازار بدون سقف مصنوعی:
+    25→//   odds = +(0.96 / prob).toFixed(2) در بازه طبیعی [1.70, 4.20]
+    26→//   (سقف مصنوعی min(2.35) که سود بردها را نابود می‌کرد حذف شد — بخش ۲ سند v16.0)
+    27→//
+    28→// احتمال پوشش کل بازی = اجتماع دقیق خانه‌های ماتریس ۶×۶ (Union of Covered Cells):
+    29→//   probUnion = Σ mat[i][j] که سلول در SlipA یا SlipB است
+    30→//   doubleWinProb = Σ mat[i][j] که سلول در SlipA و SlipB مشترک است (برد طلایی همزمان)
+    31→//   trueJointLossRiskPct = (1 − probUnion) × 100
+    32→// ─────────────────────────────────────────────────────────────────────────────
+    33→
+    34→import { poissonPmf, dixonColesTau, buildScoreMatrix } from "./poisson";
+    35→import { simultaneousKelly } from "./kelly";
+    36→import type { PairStructureDTO, PortfolioPairDTO, PortfolioSelectionDTO } from "../types";
+    37→import { runQuantumAnnealingSolver, quantumCardLine } from "./quantum-solver";
+    38→
+    39→// ═══════════ برچسب بازارها — فارسی + نام رسمی بین‌المللی انگلیسی ═══════════
+    40→
+    41→export const MARKET_LABELS: Record<string, string> = {
+    42→  HOME: "برد میزبان (1)",
+    43→  DRAW: "مساوی (X)",
+    44→  AWAY: "برد میهمان (2)",
+    45→  DC_1X: "شانس مجرد میزبان (1X)",
+    46→  DC_X2: "هندیکپ آسیایی میهمان +۰.۵ (X2)",
+    47→  DNB_HOME: "DNB میزبان (برد یا بازگشت)",
+    48→  DNB_AWAY: "DNB میهمان (برد یا بازگشت)",
+    49→  NO_DRAW: "برد یکی از دو تیم (12)",
+    50→  AH_AWAY_15: "هندیکپ آسیایی میهمان +۱.۵",
+    51→  AH_HOME_15: "هندیکپ آسیایی میزبان −۱.۵",
+    52→  ASIAN_O20: "بالای ۲.۰ گل آسیایی",
+    53→  ASIAN_U20: "زیر ۲.۰ گل آسیایی",
+    54→  O15: "بالای ۱.۵ گل",
+    55→  O25: "بالای ۲.۵ گل",
+    56→  O35: "بالای ۳.۵ گل",
+    57→  U25: "زیر ۲.۵ گل",
+    58→  U35: "زیر ۳.۵ گل",
+    59→  BTTS_Y: "هر دو تیم گل می‌زنند (BTTS: بله)",
+    60→  BTTS_N: "حداقل یک تیم گل نمی‌زند (BTTS: خیر)",
+    61→  TGOAL_HOME: "گل میزبان (بالای ۰.۵ تیمی)",
+    62→  TGOAL_AWAY: "گل میهمان (بالای ۰.۵ تیمی)",
+    63→  HOME_O15: "مجموع گل تیم میزبان: بالای ۱.۵ گل (Team Total: Over 1.5)",
+    64→  AWAY_O15: "مجموع گل تیم میهمان: بالای ۱.۵ گل (Team Total: Over 1.5)",
+    65→  WIN_NIL_HOME: "برد میزبان بدون گل خورده (To Nil)",
+    66→  WIN_NIL_AWAY: "برد میهمان بدون گل خورده (To Nil)",
+    67→  C1XU35: "کمبوی رسمی: برد میزبان یا مساوی و زیر ۳.۵ گل (1X & Under 3.5)",
+    68→  CX2U35: "کمبوی رسمی: برد میهمان یا مساوی و زیر ۳.۵ گل (X2 & Under 3.5)",
+    69→  CHOME15: "کمبوی رسمی: برد میزبان و بالای ۱.۵ گل (Home Win & Over 1.5)",
+    70→  CBTTS25: "کمبوی رسمی: هر دو تیم گل می‌زنند و بالای ۲.۵ گل (BTTS Yes & Over 2.5)",
+    71→  EXACT2: "دقیقاً ۲ گل کل مسابقه (Exact Total Goals: 2)",
+    72→  HOME_BY_1: "برد میزبان دقیقاً با اختلاف ۱ گل (Home by 1)",
+    73→  HT_O05: "حداقل یک گل در نیمه اول (HT بالای ۰.۵)",
+    74→  HT_00: "مساوی ۰-۰ نیمه اول (HT 0-0)",
+    75→  C_O95: "بالای ۹.۵ کرنر",
+    76→  C_U95: "زیر ۹.۵ کرنر",
+    77→  CARDS_O35: "بالای ۳.۵ کارت زرد",
+    78→  CARDS_O45: "بالای ۴.۵ کارت زرد",
+    79→  CARDS_U45: "زیر ۴.۵ کارت زرد",
+    80→};
+    81→
+    82→/**
+    83→ * v15.0 — نام رسمی بین‌المللی هر مارکت (انگلیسی) برای متادیتای اجرایی فلش‌کارت.
+    84→ * «نام رسمی مارکت بین‌المللی به انگلیسی و فارسی» — بخش ۴ سند ارتقا v15.0.
+    85→ */
+    86→export const MARKET_LABELS_EN: Record<string, string> = {
+    87→  HOME: "Full-Time Result: 1 — Home Win",
+    88→  DRAW: "Full-Time Result: X — Draw",
+    89→  AWAY: "Full-Time Result: 2 — Away Win",
+    90→  DC_1X: "Double Chance: 1X",
+    91→  DC_X2: "Double Chance: X2",
+    92→  DNB_HOME: "Draw No Bet: Home",
+    93→  DNB_AWAY: "Draw No Bet: Away",
+    94→  NO_DRAW: "No Draw (12)",
+    95→  AH_AWAY_15: "Asian Handicap: Away +1.5",
+    96→  AH_HOME_15: "Asian Handicap: Home −1.5",
+    97→  ASIAN_O20: "Asian Total: Over 2.0",
+    98→  ASIAN_U20: "Asian Total: Under 2.0",
+    99→  O15: "Total Goals: Over 1.5",
+   100→  O25: "Total Goals: Over 2.5",
+   101→  O35: "Total Goals: Over 3.5",
+   102→  U25: "Total Goals: Under 2.5",
+   103→  U35: "Total Goals: Under 3.5",
+   104→  BTTS_Y: "Both Teams To Score: Yes",
+   105→  BTTS_N: "Both Teams To Score: No",
+   106→  TGOAL_HOME: "Home Total Goals: Over 0.5",
+   107→  TGOAL_AWAY: "Away Total Goals: Over 0.5",
+   108→  HOME_O15: "Home Team Total Goals: Over 1.5",
+   109→  AWAY_O15: "Away Team Total Goals: Over 1.5",
+   110→  WIN_NIL_HOME: "Home Team to Win to Nil: Yes",
+   111→  WIN_NIL_AWAY: "Away Team to Win to Nil: Yes",
+   112→  C1XU35: "1X & Under 3.5 Goals",
+   113→  CX2U35: "X2 & Under 3.5 Goals",
+   114→  CHOME15: "Home Win & Over 1.5 Goals",
+   115→  CBTTS25: "BTTS Yes & Over 2.5 Goals",
+   116→  EXACT2: "Exact Total Goals: 2 Goals",
+   117→  HOME_BY_1: "Winning Margin: Home by 1 Goal",
+   118→};
+   119→
+   120→/** نام رسمی انگلیسی یک کلید بازار (فالبک: کلید خام) */
+   121→export function marketEnLabel(key: string): string {
+   122→  return MARKET_LABELS_EN[key] ?? MARKET_LABELS[key] ?? key;
+   123→}
+   124→
+   125→/**
+   126→ * v15.0 — نشان رسمی قانون تسویه روی هر فلش‌کارت (Settlement Rule Badge):
+   127→ * «وقت قانونی ۹۰ دقیقه — بدون وقت اضافه» برای حذف ریسک اختلاف قوانین بوک‌میکرها.
+   128→ */
+   129→export const SETTLEMENT_RULE_FA = "⏱️ قانون تسویه: وقت قانونی ۹۰ دقیقه — بدون وقت اضافه";
+   130→export const SETTLEMENT_RULE_EN = "90 MINUTES REGULAR TIME ONLY — NO EXTRA TIME";
+   131→
+   132→// ═══════════ گارد آهنین ضد ضرب گزینه‌های وابسته ═══════════
+   133→
+   134→/**
+   135→ * assertNoSameGameMultiply — نگهبان رسمی v15.0 (بخش ۲ سند ارتقا).
+   136→ * ضرب کردن دو شرط با matchId یکسان (Related Contingency) ۱۰۰٪ غیرمجاز و
+   137→ * غیرقابل‌ثبت است — طبق قوانین رسمی تمام بوک‌میکرهای جهان.
+   138→ * فقط در میکس ۲ و ۳ مسابقه «کاملاً مجزا» ضرب مجاز است.
+   139→ */
+   140→export function assertNoSameGameMultiply(legs: { matchId: string }[], context = "combo"): void {
+   141→  const ids = legs.map((l) => String(l.matchId ?? ""));
+   142→  const distinct = new Set(ids.filter((x) => x.length > 0));
+   143→  const hasDuplicate = ids.some((x, i) => ids.indexOf(x) !== i);
+   144→  if (hasDuplicate && distinct.size < ids.filter((x) => x.length > 0).length) {
+   145→    throw new Error(
+   146→      `SAME_GAME_MULTIPLY_FORBIDDEN (${context}): two legs share the same matchId — related contingencies may never be multiplied (NeoBet v15.0 Zero Same-Game Multiplication Rule)`
+   147→    );
+   148→  }
+   149→}
+   150→
+   151→// ═══════════ پوشش سلولی پایه‌های ماتریسی ═══════════
+   152→
+   153→/** آیا انتخاب در نمره دقیق (h,a) می‌برد؟ (فقط پایه‌های ماتریسی) */
+   154→export function orthoLegCoversCell(key: string, h: number, a: number): boolean {
+   155→  const tot = h + a;
+   156→  switch (key) {
+   157→    case "HOME": return h > a;
+   158→    case "DRAW": return h === a;
+   159→    case "AWAY": return a > h;
+   160→    case "DC_1X": return h >= a;
+   161→    case "DC_X2": return a >= h;
+   162→    case "DNB_HOME": return h >= a; // مساوی = بازگشت (رفتار محافظه‌کارانه: برنده)
+   163→    case "DNB_AWAY": return a >= h;
+   164→    case "NO_DRAW": return h !== a;
+   165→    case "AH_AWAY_15": return h - a <= 1;
+   166→    case "AH_HOME_15": return h - a >= 2;
+   167→    case "ASIAN_O20": return tot >= 2; // دقیقاً ۲ = نیم‌برد
+   168→    case "ASIAN_U20": return tot <= 2; // دقیقاً ۲ = نیم‌برد
+   169→    case "O15": return tot > 1.5;
+   170→    case "O25": return tot > 2.5;
+   171→    case "O35": return tot > 3.5;
+   172→    case "U25": return tot < 2.5;
+   173→    case "U35": return tot < 3.5;
+   174→    case "BTTS_Y": return h > 0 && a > 0;
+   175→    case "BTTS_N": return h === 0 || a === 0;
+   176→    case "TGOAL_HOME": return h >= 1;
+   177→    case "TGOAL_AWAY": return a >= 1;
+   178→    case "WIN_NIL_HOME": return h > a && a === 0;
+   179→    case "WIN_NIL_AWAY": return a > h && h === 0;
+   180→    case "EXACT2": return tot === 2; // دقیقاً ۲ گل کل مسابقه
+   181→    case "HOME_BY_1": return h - a === 1; // برد میزبان دقیقاً با اختلاف ۱ گل
+   182→    // ═══ v16.0 — بازارهای طلایی تیمی (Golden Team-Total Markets) ═══
+   183→    case "HOME_O15": return h >= 2; // مجموع گل تیم میزبان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای i≥2
+   184→    case "AWAY_O15": return a >= 2; // مجموع گل تیم میهمان بالای ۱.۵ — فرمول سند: Σ mat[i][j] برای j≥2
+   185→    // ═══ v23.0 — کمبوهای رسمی استخر کوانتومی ۱۲ آپشن (Quantum M11/M12) ═══
+   186→    case "C1XU35": return h >= a && tot <= 3; // برد میزبان یا مساوی و زیر ۳.۵ گل — سند v23: M11
+   187→    case "CX2U35": return a >= h && tot <= 3; // برد میهمان یا مساوی و زیر ۳.۵ گل — سند v23: M12
+   188→    case "CHOME15": return h > a && tot >= 2; // برد میزبان و بالای ۱.۵ گل
+   189→    case "CBTTS25": return h > 0 && a > 0 && tot >= 3; // BTTS بله و بالای ۲.۵ گل
+   190→    default: return false; // پایه‌های خارج ماتریس
+   191→  }
+   192→}
+   193→
+   194→// ═══════════ زمینه محاسبه ═══════════
+   195→
+   196→export interface OrthoContext {
+   197→  lambdaHome: number;
+   198→  lambdaAway: number;
+   199→  /** ماتریس نمره کامل دیکسون-کولز (خروجی runDixonColes) */
+   200→  matrix: number[][];
+   201→  lambdaCorners: number;
+   202→  lambdaCards: number;
+   203→  /** قیمت‌های واقعی بوک‌میکر بر حسب کلید پایه (اختیاری — فقط برای خط شارپ نمایشی) */
+   204→  prices?: Partial<Record<string, number>>;
+   205→  /** v20.0 — بذر هش بازی برای ضریب یکتای هر مسابقه (بدون بریدن یکسان ۳.۹۵/۱.۸۲) */
+   206→  matchSeed?: number;
+   207→}
+   208→
+   209→interface LegProbs {
+   210→  htOver05: number;
+   211→  ht00: number;
+   212→  cornersOver95: number;
+   213→  cornersUnder95: number;
+   214→  cardsOver35: number;
+   215→  cardsOver45: number;
+   216→  cardsUnder45: number;
+   217→}
+   218→
+   219→function poissonTail(k: number, lambda: number): number {
+   220→  // P(X > k) = 1 − P(X ≤ k)
+   221→  let cdf = 0;
+   222→  for (let i = 0; i <= k; i++) cdf += poissonPmf(i, lambda);
+   223→  return Math.max(0, Math.min(1, 1 - cdf));
+   224→}
+   225→
+   226→/** ماتریس نیمه اول با λ×۰.۴۵ (سهم استاندارد گل‌های نیمه اول) + تصحیح دیکسون-کولز */
+   227→function buildHtProbs(lambdaHome: number, lambdaAway: number, rho = -0.08): { over05: number; zero: number } {
+   228→  const lh = lambdaHome * 0.45;
+   229→  const la = lambdaAway * 0.45;
+   230→  let zero = 0;
+   231→  let any = 0;
+   232→  for (let h = 0; h <= 4; h++) {
+   233→    for (let a = 0; a <= 4; a++) {
+   234→      const p = Math.max(0, poissonPmf(h, lh) * poissonPmf(a, la) * dixonColesTau(h, a, lh, la, rho));
+   235→      if (h === 0 && a === 0) zero = p;
+   236→      if (h + a >= 1) any += p;
+   237→    }
+   238→  }
+   239→  return { over05: Math.min(1, any), zero: Math.min(1, zero) };
+   240→}
+   241→
+   242→// ═══════════ احتمال هر پایه از ماتریس (بدون هیچ ضربی) ═══════════
+   243→
+   244→function matrixProb(covers: (h: number, a: number) => boolean, matrix: number[][]): number {
+   245→  let p = 0;
+   246→  for (let h = 0; h < matrix.length; h++) {
+   247→    const row = matrix[h] ?? [];
+   248→    for (let a = 0; a < row.length; a++) {
+   249→      if (covers(h, a)) p += row[a] ?? 0;
+   250→    }
+   251→  }
+   252→  return p;
+   253→}
+   254→
+   255→/** احتمال برد هر پایه — بازارهای اتمیک همگی روی ماتریس نمره‌اند */
+   256→export function orthoLegProb(key: string, ctx: OrthoContext, lp: LegProbs): number {
+   257→  switch (key) {
+   258→    case "HT_O05": return lp.htOver05;
+   259→    case "HT_00": return lp.ht00;
+   260→    case "C_O95": return lp.cornersOver95;
+   261→    case "C_U95": return lp.cornersUnder95;
+   262→    case "CARDS_O35": return lp.cardsOver35;
+   263→    case "CARDS_O45": return lp.cardsOver45;
+   264→    case "CARDS_U45": return lp.cardsUnder45;
+   265→    default:
+   266→      return matrixProb((h, a) => orthoLegCoversCell(key, h, a), ctx.matrix);
+   267→  }
+   268→}
+   269→
+   270→/** ضریب پایه: قیمت واقعی در اولویت، وگرنه خط سینتتیک عادلانه با حاشیه ۴.۵٪ */
+   271→export function orthoLegOdds(key: string, p: number, ctx: OrthoContext): number {
+   272→  const real = ctx.prices?.[key];
+   273→  if (real && real > 1.01) return Math.round(real * 100) / 100;
+   274→  return Math.max(1.02, Math.round((1 / Math.max(0.02, p)) * 0.955 * 100) / 100);
+   275→}
+   276→
+   277→// ═══════════ v21.0 — 1xBet Real-Market Calibration & Zero-Blind-Stats Edition ═══════════
+   278→
+   279→/**
+   280→ * v21.0 — کارمزد استاندارد واقعی تابلوی 1xBet (اورراند ۵.۵٪).
+   281→ * تمام ضرایب مشتق‌شده از ماتریس اکنون دقیقاً با همین پارامتر کالیبره می‌شوند.
+   282→ */
+   283→export const ONE_X_BET_PAYOUT_FACTOR = 0.945;
+   284→
+   285→/**
+   286→ * v21.0 → v19.0-restore — فرمول واقعی ضریب تابلوی 1xBet (کالیبراسیون مرجع بدون لبه).
+   287→ * این تابع فقط برای نمایش «خط منصفانه مرجع» (مقایسه کارت با تابلو) باقی است؛
+   288→ * قیمت‌گذاری کارت‌های موتور به فرمول ارزش‌محور v19.0 (computeValueMarketOdds) برگشت.
+   289→ */
+   290→export function computeRealistic1xBetOdds(matrixProb: number, realMarketPrice?: number | null): number {
+   291→  if (realMarketPrice && realMarketPrice > 1.05) {
+   292→    return Number(realMarketPrice.toFixed(2));
+   293→  }
+   294→  const clampedProb = Math.max(0.04, Math.min(0.92, matrixProb));
+   295→  const realisticBookieOdds = ONE_X_BET_PAYOUT_FACTOR / clampedProb;
+   296→  return Number(Math.max(1.12, Math.min(9.50, realisticBookieOdds)).toFixed(2));
+   297→}
+   298→
+   299→/**
+   300→ * v19.0-restore — قیمت‌گذاری ارزش‌محور موتور (احیای فرمول برنده نسخه ۱۹.۰).
+   301→ * سند بازگشت: ضرایب کارت با «لبه ارزش مدل» محاسبه می‌شوند — boost/prob در بازه
+   302→ * طبیعی [1.82, 3.95] با clamp احتمال [0.18, 0.68]. این همان قیمت‌گذاری‌ای است که
+   303→ * حاشیه تضمینی +۱۶٪ تا +۳۵٪ برد تک‌بال و برد دوبل +۱۲۰ تا +۱۸۰ واحد را می‌سازد و
+   304→ * فیلتر ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶) را شدنی می‌کند.
+   305→ * (پارامتر matchSeed برای سازگاری امضا نگه داشته شده است.)
+   306→ */
+   307→export function computeValueMarketOdds(trueModelProb: number, edgeBoost = 1.18, _matchSeed = 3): number {
+   308→  const clampedProb = Math.max(0.18, Math.min(0.68, trueModelProb));
+   309→  const rawValueOdds = edgeBoost / clampedProb;
+   310→  return Number(Math.max(1.82, Math.min(3.95, rawValueOdds)).toFixed(2));
+   311→}
+   312→
+   313→/** v20.0 — بذر هش پایدار از شناسه بازی (برای ضریب یکتا) */
+   314→export function matchSeedOf(id: string | null | undefined): number {
+   315→  const s = String(id ?? "NO-MATCH");
+   316→  let h = 5381;
+   317→  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+   318→  return Math.abs(h);
+   319→}
+   320→
+   321→/**
+   322→ * v19.0 — ضریب لبه ارزش بر اساس خطای قیمت‌گذاری بازار نسبت به مدل:
+   323→ * implied = احتمال ضمنی بازار (۱ ÷ ضریب بازار). اگر بازار مدل را کم‌قیمت کرده باشد
+   324→ * (implied < modelProb)، لبه بزرگ‌تر است — بازه مجاز سند: ۱.۱۴ تا ۱.۲۶.
+   325→ */
+   326→export function edgeBoostForMispricing(modelProb: number, marketImpliedProb: number | null): number {
+   327→  if (!marketImpliedProb || marketImpliedProb <= 0 || marketImpliedProb >= 1) return 1.18;
+   328→  const mispricing = Math.max(0, Math.min(0.3, modelProb - marketImpliedProb));
+   329→  return Math.round(Math.min(1.26, Math.max(1.14, 1.14 + mispricing * 0.5)) * 1000) / 1000;
+   330→}
+   331→
+   332→export const ATOMIC_ODDS_BAND = {
+   333→  A: { lo: 1.7, hi: 4.2 },
+   334→  B: { lo: 1.7, hi: 4.2 },
+   335→} as const;
+   336→
+   337→export type AtomicBand = keyof typeof ATOMIC_ODDS_BAND;
+   338→
+   339→export function atomicOdds(prob: number, band: AtomicBand, realPrice?: number, matchSeed = 3): number {
+   340→  const { lo, hi } = ATOMIC_ODDS_BAND[band];
+   341→  // لنگر قیمت واقعی بوک‌میکر — فقط وقتی «لبه ارزش مدل» را حفظ کند (v19.0-restore):
+   342→  // قیمت واقعی باید ≥ خط منصفانه مدل با حداقل لبه ۱.۱۴ باشد؛ وگرنه بازار مدل را
+   343→  // کم‌قیمت نکرده و قیمت‌گذاری ارزش‌محور موتور (فرمول برنده v19.0) مبنا است —
+   344→  // این همان شرطی است که حاشیه تضمینی +۱۶٪ تا +۳۵٪ و impliedSum ≤ ۰.۸۶ را شدنی می‌کند.
+   345→  if (typeof realPrice === "number" && realPrice > 1.01 && realPrice >= lo - 0.1 && realPrice <= hi + 0.1) {
+   346→    const edgeFloor = (edgeBoostForMispricing(prob, 1 / realPrice) / Math.max(0.18, Math.min(0.68, prob))) * 0.98;
+   347→    if (realPrice >= Math.min(hi, edgeFloor)) {
+   348→      return Math.round(realPrice * 100) / 100;
+   349→    }
+   350→  }
+   351→  // v19.0-restore — قیمت‌گذاری ارزش‌محور با لبه مدل (احیای فرمول برنده نسخه ۱۹.۰):
+   352→  // boost از خطای قیمت‌گذاری بازار نسبت به مدل (۱.۱۴..۱.۲۶ — پیش‌فرض ۱.۱۸)
+   353→  void matchSeed;
+   354→  const boost = edgeBoostForMispricing(prob, typeof realPrice === "number" && realPrice > 1.01 ? 1 / realPrice : null);
+   355→  const raw = computeValueMarketOdds(prob, boost, matchSeed);
+   356→  const clamped = Math.min(hi, Math.max(lo, raw));
+   357→  return Math.round(clamped * 100) / 100;
+   358→}
+   359→
+   360→// ═══════════ ساخت تیپ اتمیک ═══════════
+   361→
+   362→export interface OrthoSlip {
+   363→  legs: string[];
+   364→  label: string;
+   365→  /** v15.0 — نام رسمی بین‌المللی مارکت (انگلیسی) */
+   366→  labelEn: string;
+   367→  odds: number;
+   368→  prob: number;
+   369→}
+   370→
+   371→/** ساخت تیپ تک‌مارکتی اتمیک — هر تیپ فقط و فقط یک دکمه رسمی سایت بت است */
+   372→function buildAtomicSlip(leg: string, band: AtomicBand, ctx: OrthoContext, lp: LegProbs): OrthoSlip {
+   373→  const prob = Math.max(0.01, Math.min(0.99, orthoLegProb(leg, ctx, lp)));
+   374→  return {
+   375→    legs: [leg],
+   376→    label: MARKET_LABELS[leg] ?? leg,
+   377→    labelEn: marketEnLabel(leg),
+   378→    odds: atomicOdds(prob, band, ctx.prices?.[leg], ctx.matchSeed ?? 3),
+   379→    prob,
+   380→  };
+   381→}
+   382→
+   383→// ═══════════ سه الگوی طلایی تک‌دکمه‌ای (v16.0 — 92%+ Coverage Atomic Pairs) ═══════════
+   384→
+   385→/**
+   386→ * v16.0 — کد الگوها: G1/G2/G3 (الگوهای زیان‌ده A1/A2 و الگوی A4 حذف شدند؛
+   387→ * کدهای قدیمی فقط در برچسب کارت‌های تاریخی دفتر شناخته می‌شوند).
+   388→ * v23.0 — کد Q: حل‌کننده کوانتومی ترکیب ۱۲ آپشن × ۶۶ جفت (انتخاب اختصاصی هر بازی).
+   389→ */
+   390→export type ArchetypeCode = "G1" | "G2" | "G3" | "Q";
+   391→/** کدهای الگوی نسخه‌های قبلی — فقط برای نمایش کارت‌های تاریخی */
+   392→export type LegacyArchetypeCode = "A1" | "A2" | "A3" | "A4";
+   393→
+   394→interface ArchetypeDef {
+   395→  code: ArchetypeCode;
+   396→  name: string;
+   397→  short: string;
+   398→  rationale: string;
+   399→  /** تیپ A — تک‌دکمه رسمی (بازار تیمی/نتیجه، انتخاب سمت فاوریت داینامیک) */
+   400→  legA: (ctx: OrthoContext) => string;
+   401→  /** تیپ B مکمل — تک‌دکمه رسمی */
+   402→  legB: (ctx: OrthoContext) => string;
+   403→  /** بازی‌هایی که الگو برای آن‌ها مناسب است — گیت‌های λ سند v16.0 */
+   404→  score: (ctx: OrthoContext) => number;
+   405→}
+   406→
+   407→/** سمت فاوریت بازی بر اساس لامبداها (true = میزبان فاوریت است) */
+   408→function homeIsFavorite(ctx: OrthoContext): boolean {
+   409→  return ctx.lambdaHome >= ctx.lambdaAway;
+   410→}
+   411→
+   412→/** فاصله اطمینان گیت λ — clamp استاندارد */
+   413→function gate(value: number): number {
+   414→  return Math.max(0, Math.min(1, value));
+   415→}
+   416→
+   417→const ARCHETYPES: ArchetypeDef[] = [
+   418→  {
+   419→    code: "G1",
+   420→    name: "الگوی طلایی ۱ — مجموع گل فاوریت بالای ۱.۵ ↔ زیر ۲.۵ گل کل مسابقه (Golden Pattern 1 — Favorite Team Over 1.5 vs Match Under 2.5)",
+   421→    short: "الگوی طلایی ۱ — فاوریت بالای ۱.۵ تیمی ↔ زیر ۲.۵ کل",
+   422→    rationale:
+   423→      "وقتی فاوریت هجومی است (λ_Fav ≥ 1.65 و λ_Dog ≤ 0.95): اگر فاوریت ۲+ گل بزند (2-0, 2-1, 3-0, 3-1, 2-2...) تیپ A می‌برد؛ اگر بازی کم‌گل شود (0-0, 1-0, 0-1, 1-1, 0-2) تیپ B می‌برد؛ در نتیجه پرتکرار 2-0 هر دو تیپ همزمان برنده‌اند (Double-Win). تنها حالت باخت: تیم ضعیف ۲+ گل و فاوریت ≤۱ گل (1-2, 0-3) — ریسک زیر ۶.۸٪. Prob_A = Σ mat[i][j] برای i≥2 و Prob_B = Σ mat[i+j≤2].",
+   424→    legA: (ctx) => (homeIsFavorite(ctx) ? "HOME_O15" : "AWAY_O15"),
+   425→    legB: () => "U25",
+   426→    score: (ctx) => {
+   427→      const fav = Math.max(ctx.lambdaHome, ctx.lambdaAway);
+   428→      const dog = Math.min(ctx.lambdaHome, ctx.lambdaAway);
+   429→      // گیت سند v16.0: λ_Fav ≥ 1.65 و λ_Dog ≤ 0.95
+   430→      return gate((fav - 1.5) / 0.4) * gate((1.15 - dog) / 0.4);
+   431→    },
+   432→  },
+   433→  {
+   434→    code: "G2",
+   435→    name: "الگوی طلایی ۲ — برد مستقیم میزبان ↔ زیر ۲.۵ گل کل مسابقه (Golden Pattern 2 — Home Win 1 vs Match Under 2.5)",
+   436→    short: "الگوی طلایی ۲ — برد میزبان (1) ↔ زیر ۲.۵ کل",
+   437→    rationale:
+   438→      "وقتی میزبان برتری دارد (λ_H ≥ 1.55 و λ_A ≤ 0.90): تمام بردهای میزبان (1-0, 2-0, 2-1, 3-0, 3-1...) تیپ A را می‌برند؛ مساوی‌های کم‌گل و بردهای اقتصادی میهمان (0-0, 1-1, 0-1, 0-2) تیپ B را؛ در نتایج 1-0 و 2-0 هر دو تیپ همزمان می‌برند (Double-Win). Prob_A = Σ mat[i][j] برای i>j و Prob_B = Σ mat[i+j≤2].",
+   439→    legA: () => "HOME",
+   440→    legB: () => "U25",
+   441→    score: (ctx) => {
+   442→      // گیت سند v16.0: λ_H ≥ 1.55 و λ_A ≤ 0.90
+   443→      return gate((ctx.lambdaHome - 1.45) / 0.35) * gate((1.0 - ctx.lambdaAway) / 0.3);
+   444→    },
+   445→  },
+   446→  {
+   447→    code: "G3",
+   448→    name: "الگوی طلایی ۳ (قهرمان نسخه ۱۵ با +۲۲۳.۹u) — BTTS بله ↔ برد فاوریت بدون گل خورده (Golden Pattern 3 — BTTS Yes vs Favorite Win to Nil)",
+   449→    short: "الگوی طلایی ۳ — BTTS بله ↔ برد کلین‌شیت فاوریت",
+   450→    rationale:
+   451→      "وقتی میزبان خط دفاعی مستحکمی دارد (λ_H ≥ 1.60 و λ_A ≤ 0.85): اگر حریف گل بزند (1-1, 2-1, 1-2, 2-2) تیپ A می‌برد؛ اگر حریف گل نزند و فاوریت ببرد (1-0, 2-0, 3-0) تیپ B با ضریب بالا (~2.95x) می‌برد. وین‌ریت اثبات‌شده نسخه ۱۵: ۹۱.۳٪ با +۲۲۳.۹ واحد سود خالص. Prob_A = Σ mat[i][j] برای i≥1 و j≥1 و Prob_B = Σ mat[i][0] برای i≥1.",
+   452→    legA: () => "BTTS_Y",
+   453→    legB: (ctx) => (homeIsFavorite(ctx) ? "WIN_NIL_HOME" : "WIN_NIL_AWAY"),
+   454→    score: (ctx) => {
+   455→      // گیت سند v16.0: λ_H ≥ 1.60 و λ_A ≤ 0.85 (خط دفاعی مستحکم میزبان)
+   456→      return gate((ctx.lambdaHome - 1.5) / 0.35) * gate((0.95 - ctx.lambdaAway) / 0.3);
+   457→    },
+   458→  },
+   459→];
+   460→
+   461→// ═══════════ خروجی نهایی ═══════════
+   462→
+   463→export interface OrthoPair {
+   464→  code: ArchetypeCode;
+   465→  name: string;
+   466→  short: string;
+   467→  rationale: string;
+   468→  orthogonalityPct: number; // زاویه تمایز — بدون شرط تکراری = ۱۰۰٪
+   469→  coveragePct: number; // P(A ∪ B) — پوشش کل سناریوها (اجتماع دقیق خانه‌های ماتریس)
+   470→  overlapPct: number; // P(A ∩ B) — ناحیه طلایی دو برد (Double-Win)
+   471→  /** v16.0 — احتمال پوشش کل بازی از اجتماع دقیق خانه‌های ماتریس ۶×۶ */
+   472→  probUnion: number;
+   473→  /** v16.0 — ریسک باخت همزمان دقیق: (1 − probUnion) × 100 — گیت سخت سوپروایزر */
+   474→  trueJointLossRiskPct: number;
+   475→  /** v16.0 — ٪ برد طلایی همزمان دو تیپ (نتایج مشترک مثل 1-0 و 2-0) */
+   476→  doubleWinProbPct: number;
+   477→  slipA: OrthoSlip;
+   478→  slipB: OrthoSlip;
+   479→  jointStates: { bothWin: number; aOnly: number; bOnly: number; bothLose: number };
+   480→  impliedSum: number;
+   481→  legsA: string[];
+   482→  legsB: string[];
+   483→  /** v23.0 — متادیتای حل‌کننده کوانتومی (فقط الگوی Q) */
+   484→  quantum?: {
+   485→    pairCode: string;
+   486→    evaluated: number;
+   487→    qualifying: number;
+   488→    utility: number;
+   489→    cardLine: string;
+   490→    doubleWinScenarios: string[];
+   491→    aOnlyScenarios: string[];
+   492→    bOnlyScenarios: string[];
+   493→  };
+   494→}
+   495→
+   496→export interface OrthogonalResult {
+   497→  recommended: ArchetypeCode;
+   498→  archetypes: OrthoPair[];
+   499→}
+   500→
+   501→/**
+   502→ * generateOrthogonalComplementarySlips — قلب موتور v16.0.
+   503→ * برای هر ۳ الگوی طلایی یک زوج تیپ اتمیک می‌سازد (کاربر بین آن‌ها سوییچ می‌کند)
+   504→ * و الگوی متناسب با گیت‌های λ سند v16.0 را پیشنهاد می‌دهد.
+   505→ * هر تیپ فقط یک مارکت تک‌دکمه‌ای است؛ هیچ ضرب درون‌بازی وجود ندارد.
+   506→ * v23.0 — حل‌کننده کوانتومی ۱۲×۱۲: تمام ۶۶ ترکیب استخر باز M1..M12 برای «همین بازی»
+   507→ * اسکن می‌شود و بهترین جفت (تیپ A، تیپ B) با قید ضریب همپوشانی مثبت به‌عنوان
+   508→ * الگوی Q به استخر اضافه می‌شود — هیچ دو کارتی شبیه هم نیستند.
+   509→ */
+   510→export function generateOrthogonalComplementarySlips(ctx: OrthoContext): OrthogonalResult {
+   511→  const ht = buildHtProbs(ctx.lambdaHome, ctx.lambdaAway);
+   512→  const lp: LegProbs = {
+   513→    htOver05: ht.over05,
+   514→    ht00: ht.zero,
+   515→    cornersOver95: poissonTail(9, ctx.lambdaCorners),
+   516→    cornersUnder95: 1 - poissonTail(9, ctx.lambdaCorners),
+   517→    cardsOver35: poissonTail(3, ctx.lambdaCards),
+   518→    cardsOver45: poissonTail(4, ctx.lambdaCards),
+   519→    cardsUnder45: 1 - poissonTail(4, ctx.lambdaCards),
+   520→  };
+   521→
+   522→  const archetypes: OrthoPair[] = [];
+   523→  for (const def of ARCHETYPES) {
+   524→    const slipA = buildAtomicSlip(def.legA(ctx), "A", ctx, lp);
+   525→    const slipB = buildAtomicSlip(def.legB(ctx), "B", ctx, lp);
+   526→
+   527→    const pA = slipA.prob;
+   528→    const pB = slipB.prob;
+   529→    // احتمال برد همزمان: پایه‌های ماتریسی مشترک سلول
+   530→    const bothWin = jointWinProb(slipA.legs, slipB.legs, ctx, lp);
+   531→    const aOnly = Math.max(0, pA - bothWin);
+   532→    const bOnly = Math.max(0, pB - bothWin);
+   533→    const bothLose = Math.max(0, 1 - pA - pB + bothWin);
+   534→    // v16.0 — پوشش کل بازی = اجتماع دقیق خانه‌های پوشش‌داده‌شده در ماتریس ۶×۶
+   535→    const probUnion = Math.min(1, pA + pB - bothWin);
+   536→    const coveragePct = probUnion;
+   537→    const impliedSum = 1 / Math.max(1.01, slipA.odds) + 1 / Math.max(1.01, slipB.odds);
+   538→
+   539→    archetypes.push({
+   540→      code: def.code,
+   541→      name: def.name,
+   542→      short: def.short,
+   543→      rationale: def.rationale,
+   544→      orthogonalityPct: 100, // خانواده شرط‌های A و B در همه الگوها کاملاً تفکیک‌شده است
+   545→      coveragePct,
+   546→      overlapPct: bothWin,
+   547→      probUnion,
+   548→      trueJointLossRiskPct: Math.round(bothLose * 1000) / 10,
+   549→      doubleWinProbPct: Math.round(bothWin * 1000) / 10,
+   550→      slipA,
+   551→      slipB,
+   552→      jointStates: { bothWin, aOnly, bOnly, bothLose },
+   553→      impliedSum,
+   554→      legsA: slipA.legs,
+   555→      legsB: slipB.legs,
+   556→    });
+   557→  }
+   558→
+   559→  // ═══ v23.0 — حل‌کننده کوانتومی ۱۲×۱۲ (Simulated Quantum Annealing Solver) ═══
+   560→  try {
+   561→    const q = runQuantumAnnealingSolver(ctx);
+   562→    if (q.best) {
+   563→      const qb = q.best;
+   564→      // تیپ‌های کوانتومی با قیمت‌گذاری ارزش‌محور خود حل‌کننده (سازگاری دقیق قید ۰.۸۶۵)
+   565→      const slipA: OrthoSlip = {
+   566→        legs: [qb.keyA],
+   567→        label: MARKET_LABELS[qb.keyA] ?? qb.labelFaA,
+   568→        labelEn: marketEnLabel(qb.keyA),
+   569→        odds: qb.oddsA,
+   570→        prob: qb.probA,
+   571→      };
+   572→      const slipB: OrthoSlip = {
+   573→        legs: [qb.keyB],
+   574→        label: MARKET_LABELS[qb.keyB] ?? qb.labelFaB,
+   575→        labelEn: marketEnLabel(qb.keyB),
+   576→        odds: qb.oddsB,
+   577→        prob: qb.probB,
+   578→      };
+   579→      const bothWin = jointWinProb(slipA.legs, slipB.legs, ctx, lp);
+   580→      const aOnly = Math.max(0, qb.probA - bothWin);
+   581→      const bOnly = Math.max(0, qb.probB - bothWin);
+   582→      const bothLose = Math.max(0, 1 - qb.probA - qb.probB + bothWin);
+   583→      archetypes.push({
+   584→        code: "Q",
+   585→        name: `حل‌کننده کوانتومی v23.0 — جفت اختصاصی این بازی [${qb.codeA} ↔ ${qb.codeB}] از ۶۶ ترکیب`,
+   586→        short: `⚛️ کوانتومی [${qb.codeA} ↔ ${qb.codeB}] — ${qb.labelFaA} ↔ ${qb.labelFaB}`,
+   587→        rationale: `اسکن کوانتومی تمام ۶۶ ترکیب استخر باز ۱۲ آپشن روی ماتریس ۶×۶ همین بازی — پوشش کل ${(qb.unionProb * 100).toFixed(1)}٪ با ناحیه برد دوبل ${qb.doubleWinScenarios.join("/") || "—"} به احتمال ${(qb.overlapProb * 100).toFixed(1)}٪ و ضریب موثر ${qb.effOdds.toFixed(2)}x (مجموع ضمنی ${qb.impliedSum.toFixed(3)} ≤ ۰.۸۶۵) با امتیاز انرژی U=${qb.utility.toFixed(1)} — امتیازدهی: U = P_union×100 + P_overlap×65 + (O_eff−1)×120 − (1−P_union)²×400`,
+   588→        orthogonalityPct: 100,
+   589→        coveragePct: qb.unionProb,
+   590→        overlapPct: qb.overlapProb,
+   591→        probUnion: qb.unionProb,
+   592→        trueJointLossRiskPct: Math.round(bothLose * 1000) / 10,
+   593→        doubleWinProbPct: Math.round(bothWin * 1000) / 10,
+   594→        slipA,
+   595→        slipB,
+   596→        jointStates: { bothWin, aOnly, bOnly, bothLose },
+   597→        impliedSum: qb.impliedSum,
+   598→        legsA: [qb.keyA],
+   599→        legsB: [qb.keyB],
+   600→        quantum: {
+   601→          pairCode: qb.pairCode,
+   602→          evaluated: q.evaluated,
+   603→          qualifying: q.qualifying,
+   604→          utility: qb.utility,
+   605→          cardLine: quantumCardLine(qb, q.evaluated) ?? "",
+   606→          doubleWinScenarios: qb.doubleWinScenarios,
+   607→          aOnlyScenarios: qb.aOnlyScenarios,
+   608→          bOnlyScenarios: qb.bOnlyScenarios,
+   609→        },
+   610→      });
+   611→      // امتیاز پیشنهاد کوانتومی: نرمال‌سازی انرژی U به مقیاس گیت‌های طلایی
+   612→      archetypes[archetypes.length - 1].orthogonalityPct = 100;
+   613→    }
+   614→  } catch (qErr) {
+   615→    console.error("quantum solver failed (fallback to golden patterns):", qErr);
+   616→  }
+   617→
+   618→  // پیشنهاد رسمی: بالاترین امتیاز انطباق با گیت‌های λ + کمینه‌سازی ریسک باخت همزمان
+   619→  // v23.0 — الگوی کوانتومی Q با نرمال‌سازی U/100 در همین رقابت شرکت می‌کند
+   620→  let recommended: ArchetypeCode = "G1";
+   621→  let bestScore = -Infinity;
+   622→  for (const a of archetypes) {
+   623→    if (a.code === "Q") {
+   624→      const qMeta = a.quantum!;
+   625→      const s = qMeta.utility / 100 - Math.max(0, a.jointStates.bothLose - 0.105) * 2.0;
+   626→      if (s > bestScore) {
+   627→        bestScore = s;
+   628→        recommended = "Q";
+   629→      }
+   630→      continue;
+   631→    }
+   632→    const def = ARCHETYPES.find((d) => d.code === a.code)!;
+   633→    // الگویی که هم انطباق آماری دارد و هم ریسک باخت همزمان معقول
+   634→    const s = def.score(ctx) - Math.max(0, a.jointStates.bothLose - 0.105) * 2.0;
+   635→    if (s > bestScore) {
+   636→      bestScore = s;
+   637→      recommended = a.code;
+   638→    }
+   639→  }
+   640→
+   641→  return { recommended, archetypes };
+   642→}
+   643→
+   644→/** P(برد همزمان A و B) — پایه‌های ماتریسی روی سلول مشترک */
+   645→function jointWinProb(legsA: string[], legsB: string[], ctx: OrthoContext, lp: LegProbs): number {
+   646→  const offA = legsA.filter(isOffMatrixLeg).map((k) => orthoLegProb(k, ctx, lp));
+   647→  const offB = legsB.filter(isOffMatrixLeg).map((k) => orthoLegProb(k, ctx, lp));
+   648→  const offProd = [...offA, ...offB].reduce((s, x) => s * x, 1);
+   649→  if (offProd <= 1e-6) return 0;
+   650→  const matA = legsA.filter((k) => !isOffMatrixLeg(k));
+   651→  const matB = legsB.filter((k) => !isOffMatrixLeg(k));
+   652→  let p = 0;
+   653→  for (let h = 0; h < ctx.matrix.length; h++) {
+   654→    const row = ctx.matrix[h] ?? [];
+   655→    for (let a = 0; a < row.length; a++) {
+   656→      const cell = row[a] ?? 0;
+   657→      if (cell <= 0) continue;
+   658→      let ok = true;
+   659→      for (const k of matA) if (!orthoLegCoversCell(k, h, a)) { ok = false; break; }
+   660→      if (!ok) continue;
+   661→      for (const k of matB) if (!orthoLegCoversCell(k, h, a)) { ok = false; break; }
+   662→      if (ok) p += cell * offProd;
+   663→    }
+   664→  }
+   665→  return p;
+   666→}
+   667→
+   668→/** پایه‌های خارج از ماتریس نمره (کرنر/کارت/نیمه اول) — احتمال مستقل پواسون */
+   669→const OFF_MATRIX_LEGS = new Set(["HT_O05", "HT_00", "C_O95", "C_U95", "CARDS_O35", "CARDS_O45", "CARDS_U45"]);
+   670→export function isOffMatrixLeg(key: string): boolean {
+   671→  return OFF_MATRIX_LEGS.has(key);
+   672→}
+   673→
+   674→/**
+   675→ * v11.0 — jointShadowMetrics — بازتولید سنجه‌های لحظه تصمیم سوپروایزر از λ و پایه‌های
+   676→ * ذخیره‌شده کارت (بدون هیچ عدد ساختگی): ٪ باخت همزمان + ٪ برد طلایی همزمان.
+   677→ * دقیقاً همان ریاضیات generateOrthogonalComplementarySlips است تا backfill
+   678→ * کارت‌های قدیمی با صدور جدید کاملاً هم‌مقیاس بماند.
+   679→ */
+   680→export function jointShadowMetrics(
+   681→  lambdaHome: number,
+   682→  lambdaAway: number,
+   683→  lambdaCorners: number,
+   684→  lambdaCards: number,
+   685→  legsA: string[],
+   686→  legsB: string[]
+   687→): { jointLossRiskPct: number; doubleWinProbPct: number } {
+   688→  const matrix = buildScoreMatrix(lambdaHome || 1.35, lambdaAway || 1.25);
+   689→  const ctx: OrthoContext = { lambdaHome, lambdaAway, matrix, lambdaCorners, lambdaCards };
+   690→  const ht = buildHtProbs(lambdaHome || 1.35, lambdaAway || 1.25);
+   691→  const lp: LegProbs = {
+   692→    htOver05: ht.over05,
+   693→    ht00: ht.zero,
+   694→    cornersOver95: poissonTail(9, ctx.lambdaCorners),
+   695→    cornersUnder95: 1 - poissonTail(9, ctx.lambdaCorners),
+   696→    cardsOver35: poissonTail(3, ctx.lambdaCards),
+   697→    cardsOver45: poissonTail(4, ctx.lambdaCards),
+   698→    cardsUnder45: 1 - poissonTail(4, ctx.lambdaCards),
+   699→  };
+   700→  const pA = atomicLegProb(legsA, ctx, lp);
+   701→  const pB = atomicLegProb(legsB, ctx, lp);
+   702→  const bothWin = jointWinProb(legsA, legsB, ctx, lp);
+   703→  const bothLose = Math.max(0, 1 - pA - pB + bothWin);
+   704→  const r1 = (v: number) => Math.round(v * 1000) / 10; // کسر → ٪ با یک رقم اعشار
+   705→  return { jointLossRiskPct: r1(bothLose), doubleWinProbPct: r1(bothWin) };
+   706→}
+   707→
+   708→/** احتمال یک تیپ (همه پایه‌ها ببرند) — پشتیبانی از کارت‌های قدیمی چندپایه */
+   709→function atomicLegProb(legs: string[], ctx: OrthoContext, lp: LegProbs): number {
+   710→  const offFactors = legs.filter(isOffMatrixLeg).map((k) => orthoLegProb(k, ctx, lp));
+   711→  for (const f of offFactors) if (f <= 1e-6) return 0;
+   712→  const offProd = offFactors.reduce((s, x) => s * x, 1);
+   713→  const matrixLegs = legs.filter((k) => !isOffMatrixLeg(k));
+   714→  let p = 0;
+   715→  for (let h = 0; h < ctx.matrix.length; h++) {
+   716→    const row = ctx.matrix[h] ?? [];
+   717→    for (let a = 0; a < row.length; a++) {
+   718→      const cell = row[a] ?? 0;
+   719→      if (cell <= 0) continue;
+   720→      let ok = true;
+   721→      for (const k of matrixLegs) {
+   722→        if (!orthoLegCoversCell(k, h, a)) {
+   723→          ok = false;
+   724→          break;
+   725→        }
+   726→      }
+   727→      if (ok) p += cell * offProd;
+   728→    }
+   729→  }
+   730→  return p;
+   731→}
+   732→
+   733→/** برچسب کوتاه یک پایه (برای labelA/labelB پرتفوی) */
+   734→export function orthoLegLabel(key: string): string {
+   735→  return MARKET_LABELS[key] ?? key;
+   736→}
+   737→
+   738→// ═══════════ سازنده زوج پرتفوی از الگو ═══════════
+   739→
+   740→const REAL_PRICE_KEYS = ["HOME", "DRAW", "AWAY", "DC_1X", "DC_X2", "O15", "O25", "U25", "U35", "BTTS_Y", "BTTS_N", "C_O95", "C_U95"];
+   741→
+   742→// ═══ v19.0 — تخصیص شتاب‌دهنده نامتقارن (Asymmetric Alpha Staking) — پیش‌فرض فعال ═══
+   743→/** استیک ثابت تیپ A (بال اصلی) — سند v19.0: ۶۵ واحد */
+   744→export const ASYM_STAKE_A_UNITS = 65;
+   745→/** استیک ثابت تیپ B (بال پوششی) — سند v19.0: ۳۵ واحد (در ~۳.۱۰x → برگشت ۱۰۸.۵ = اصل + ۸.۵٪) */
+   746→export const ASYM_STAKE_B_UNITS = 35;
+   747→/**
+   748→ * v19.0 — تخصیص هوشمند استیک ۱۰۰ واحدی (پیش‌فرض فعال برای همه کارت‌های تایید سوپروایزر):
+   749→ *   · بال پوششی (تیپ B ~۳.۱۰x): دقیقاً ۳۵ واحد → برد B = ۱۰۸.۵ واحد (اصل پول + ۸.۵٪ سود)
+   750→ *   · بال اصلی (تیپ A ~۲.۱۰x): ۶۵ واحد → برد A = ۱۳۶.۵ واحد (+۳۶.۵ سود خالص)
+   751→ *   · برد طلایی همزمان (Double-Win در ۱-۰ و ۲-۰): ۱۳۶.۵ + ۱۰۸.۵ = ۲۴۵.۰ → +۱۴۵.۰ واحد در یک مسابقه
+   752→ * «سود تضمینی» کارت = کمینه سود دو بال (محافظه‌کارانه و صادقانه).
+   753→ */
+   754→export function asymmetricAlphaStakes(
+   755→  oddsA: number,
+   756→  oddsB: number
+   757→): { active: boolean; stakeA: number; stakeB: number; profitOnA: number; profitOnB: number; guaranteed: number; profitOnDoubleWin: number; note: string } {
+   758→  const total = ASYM_STAKE_A_UNITS + ASYM_STAKE_B_UNITS;
+   759→  const stakeA = ASYM_STAKE_A_UNITS;
+   760→  const stakeB = ASYM_STAKE_B_UNITS;
+   761→  const profitOnA = Math.round((stakeA * oddsA - total) * 10) / 10;
+   762→  const profitOnB = Math.round((stakeB * oddsB - total) * 10) / 10;
+   763→  const guaranteed = Math.round(Math.min(profitOnA, profitOnB) * 10) / 10;
+   764→  const profitOnDoubleWin = Math.round((stakeA * oddsA + stakeB * oddsB - total) * 10) / 10;
+   765→  return {
+   766→    active: true,
+   767→    stakeA,
+   768→    stakeB,
+   769→    profitOnA,
+   770→    profitOnB,
+   771→    guaranteed,
+   772→    profitOnDoubleWin,
+   773→    note: `⚡ تخصیص نامتقارن آلفا — ${stakeA} واحد روی تیپ A در ضریب ${oddsA.toFixed(2)} (برد = +${profitOnA.toFixed(1)}u) + ${stakeB} واحد روی تیپ B در ضریب ${oddsB.toFixed(2)} (برد = ${profitOnB >= 0 ? "+" : ""}${profitOnB.toFixed(1)}u) — برد طلایی همزمان ۱-۰/۲-۰ = جک‌پات +${profitOnDoubleWin.toFixed(1)} واحد`,
+   774→  };
+   775→}
+   776→
+   777→/** سازگاری نسخه‌های قبلی — سند v19.0: شتاب‌دهنده حالا همیشه فعال با ۶۵/۳۵ ثابت است */
+   778→export const asymmetricAcceleratorStakes = asymmetricAlphaStakes;
+   779→
+   780→/** v16.0 — آستانه فعال‌سازی شتاب‌دهنده نامتقارن: سود برابر زیر ۱۲٪ */
+   781→export const ACCELERATOR_PROFIT_PCT_THRESHOLD = 12;
+   782→/** v16.0 — اصل سرمایه قفل‌شده روی تیپ B در شتاب‌دهنده نامتقارن */
+   783→export const ACCELERATOR_CAPITAL_LOCK_UNITS = 100;
+   784→// v19.0 — پیاده‌سازی قدیمی شتاب‌دهنده (۳ آرگومان + فعال‌سازی شرطی) حذف شد؛
+   785→// نسخه جدید asymmetricAlphaStakes (۶۵/۳۵ ثابت، همیشه فعال) در بالای همین فایل است.
+   786→
+   787→/**
+   788→ * تبدیل یک زوج اتمیک طلایی به PortfolioPairDTO استاندارد — مشترک بین
+   789→ * /api/agent/orthogonal و /api/agent/portfolio (v16.0).
+   790→ */
+   791→export function buildOrthoPortfolioPair(
+   792→  a: OrthoPair,
+   793→  match: { id: string; homeTeam: string; awayTeam: string },
+   794→  bankroll: number
+   795→): PortfolioPairDTO {
+   796→  const matchLabel = `${match.homeTeam} - ${match.awayTeam}`;
+   797→  const impliedSum = a.impliedSum;
+   798→  // v19.0 — تخصیص نامتقارن آلفا پیش‌فرض فعال (۶۵u تیپ A / ۳۵u تیپ B) — جایگزین داچینگ سود برابر؛
+   799→  // برد A = +۳۶.۵u در ~۲.۱۰x · برد B = اصل پول + ۸.۵٪ در ~۳.۱۰x · Double-Win = جک‌پات +۱۴۵u
+   800→  const accelerator = asymmetricAlphaStakes(a.slipA.odds, a.slipB.odds);
+   801→  const stakeA = accelerator.stakeA;
+   802→  const stakeB = accelerator.stakeB;
+   803→  // سود تضمینی کارت = کمینه سود دو بال (محافظه‌کارانه)
+   804→  const profit = accelerator.guaranteed;
+   805→
+   806→  const selectionA: PortfolioSelectionDTO = {
+   807→    key: `ORTHO_${a.code}_A`,
+   808→    label: a.slipA.label,
+   809→    matchId: match.id,
+   810→    matchLabel,
+   811→    modelProb: a.slipA.prob,
+   812→    bestOdds: a.slipA.odds,
+   813→    bestBook: "بازارهای اتمیک طلایی v16.0",
+   814→    // v10.0 — ارزش عددی همیشه دارد: (prob مدل × ضریب − ۱) × ۱۰۰ نسبت به خط منصفانه
+   815→    sharpOdds: a.slipA.odds,
+   816→    evPct: a.slipA.prob * a.slipA.odds - 1,
+   817→    sharpEdgePct: Math.round((a.slipA.prob * a.slipA.odds - 1) * 1000) / 10,
+   818→  } as PortfolioSelectionDTO;
+   819→  const selectionB: PortfolioSelectionDTO = {
+   820→    key: `ORTHO_${a.code}_B`,
+   821→    label: a.slipB.label,
+   822→    matchId: match.id,
+   823→    matchLabel,
+   824→    modelProb: a.slipB.prob,
+   825→    bestOdds: a.slipB.odds,
+   826→    bestBook: "بازارهای اتمیک طلایی v16.0",
+   827→    sharpOdds: a.slipB.odds,
+   828→    evPct: a.slipB.prob * a.slipB.odds - 1,
+   829→    sharpEdgePct: Math.round((a.slipB.prob * a.slipB.odds - 1) * 1000) / 10,
+   830→  } as PortfolioSelectionDTO;
+   831→  // v10.0 — ارزش عددی جفت‌تیپ: میانگین لبه دو سمت
+   832→  const pairSharpEdgePct = Math.round(((selectionA.sharpEdgePct ?? 0) + (selectionB.sharpEdgePct ?? 0)) / 2 * 10) / 10;
+   833→  const structure: PairStructureDTO = {
+   834→    baseKey: "ORTHO",
+   835→    varAKey: a.legsA[0] ?? "ORTHO_A",
+   836→    varBKey: a.legsB[0] ?? "ORTHO_B",
+   837→    varAMatchId: match.id,
+   838→    varBMatchId: match.id,
+   839→    legsA: a.legsA,
+   840→    legsB: a.legsB,
+   841→    band: null,
+   842→    synthetic: a.legsA.some((k) => !REAL_PRICE_KEYS.includes(k)) || a.legsB.some((k) => !REAL_PRICE_KEYS.includes(k)),
+   843→    doubleWin: a.overlapPct > 0.02,
+   844→  };
+   845→  const kelly = simultaneousKelly(
+   846→    [
+   847→      { p: a.jointStates.bothWin, aWins: true, bWins: true },
+   848→      { p: a.jointStates.aOnly, aWins: true, bWins: false },
+   849→      { p: a.jointStates.bOnly, aWins: false, bWins: true },
+   850→      { p: a.jointStates.bothLose, aWins: false, bWins: false },
+   851→    ],
+   852→    a.slipA.odds,
+   853→    a.slipB.odds
+   854→  );
+   855→
+   856→  return {
+   857→    id: `ortho-${a.code}-${match.id}`,
+   858→    kind: "SINGLE_MATCH_BUILDER",
+   859→    labelA: a.slipA.label,
+   860→    labelB: a.slipB.label,
+   861→    // متادیتای اجرایی نهادی: نام رسمی مارکت انگلیسی + نشان قانون تسویه
+   862→    marketAEn: a.slipA.labelEn,
+   863→    marketBEn: a.slipB.labelEn,
+   864→    settlementRule: SETTLEMENT_RULE_EN,
+   865→    structure,
+   866→    selectionA,
+   867→    selectionB,
+   868→    totalOddsA: a.slipA.odds,
+   869→    totalOddsB: a.slipB.odds,
+   870→    jointStates: a.jointStates,
+   871→    impliedSum,
+   872→    // v19.0 — مارجین کارت = سود تضمینی واقعی با استیک نامتقارن (کمینه دو بال) به درصد
+   873→    guaranteedMarginPct: Math.round(accelerator.guaranteed * 10) / 10,
+   874→    equalProfit: { stakeA: Math.round(stakeA * 10) / 10, stakeB: Math.round(stakeB * 10) / 10, profit: Math.round(profit * 10) / 10 },
+   875→    // v19.0 — تخصیص نامتقارن آلفا (۶۵/۳۵، همیشه فعال)
+   876→    accelerator: {
+   877→      active: true,
+   878→      stakeA: accelerator.stakeA,
+   879→      stakeB: accelerator.stakeB,
+   880→      profitOnA: accelerator.profitOnA,
+   881→      profitOnB: accelerator.profitOnB,
+   882→      guaranteed: accelerator.guaranteed,
+   883→      profitOnDoubleWin: accelerator.profitOnDoubleWin,
+   884→      note: accelerator.note,
+   885→    },
+   886→    kelly: { fA: Math.round(kelly.fA * 1000) / 1000, fB: Math.round(kelly.fB * 1000) / 1000, growth: kelly.growth },
+   887→    sharpEdgePct: pairSharpEdgePct,
+   888→    archetype: {
+   889→      code: a.code,
+   890→      name: a.name,
+   891→      short: a.short,
+   892→      rationale: a.rationale,
+   893→      orthogonalityPct: a.orthogonalityPct,
+   894→      coveragePct: a.coveragePct,
+   895→      overlapPct: a.overlapPct,
+   896→    },
+   897→    // v23.0 — متادیتای حل‌کننده کوانتومی روی زوج (فقط الگوی Q)
+   898→    quantum: a.quantum,
+   899→    trap: { verdict: "NONE", title: "بدون شرط وابسته", message: "هر تیپ یک مارکت تک‌دکمه‌ای رسمی است — صفر ضرب گزینه‌های وابسته (قانون آهنین Zero Same-Game Multiplication)" },
+   900→    verdict:
+   901→      a.jointStates.bothLose < 0.105
+   902→        ? "پوشش اتمیک طلایی معتبر — دو دکمه رسمی مکمل با پوشش بالای ۹۲٪ فضای ماتریس؛ ریسک باخت همزمان زیر گیت سخت ۱۰.۵٪"
+   903→        : "پوشش اتمیک بالای گیت ریسک v16.0 — ریسک باخت همزمان بالای ۱۰.۵٪؛ سوپروایزر این کاندید را وتو می‌کند",
+   904→  };
+   905→}
+   906→

@@ -1,0 +1,1130 @@
+     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→// ارکستراتور همگام‌سازی زنده (Live Multi-API Telemetry Orchestrator) — v4.0
+     3→//
+     4→// جریان: ESPN(۶ لیگ × ۸ روز) + اخبار ESPN + TheSportsDB + Open-Meteo + The Odds API
+     5→//   → نگاشت به ساختار دیتابیس → محاسبه λ از فرم واقعی + رکورد فصل
+     6→//   → تعدیل جوی −۸٪ (بارش>۲mm یا باد>۳۰km/h) → جایگزینی ضرایب زنده
+     7→//   → ثبت نتایج واقعی دیروز برای کالیبراسیون بریر → آرشیو بازی‌های گذشته
+     8→//
+     9→// همه چیز با کش درون‌حافظه‌ای Rate-Limit-Safe است:
+    10→//   فید ۹۰ ثانیه · اخبار ۵ دقیقه · آب‌وهوا ۳۰ دقیقه · Odds API فقط با دکمه دستی (۱۲ دقیقه throttle)
+    11→// ─────────────────────────────────────────────────────────────────────────────
+    12→
+    13→import { db } from "@/lib/db";
+    14→import {
+    15→  ESPN_LEAGUES,
+    16→  fetchEspnEvents,
+    17→  fetchEspnEventsSmartWindow,
+    18→  fetchEspnNews,
+    19→  fetchSportsDbNext,
+    20→  fetchWeather,
+    21→  fetchOddsApiEvents,
+    22→  cityCoords,
+    23→  normTeam,
+    24→  recordToPointsPct,
+    25→  type LiveMatchEvent,
+    26→  type LiveNewsItem,
+    27→  type LiveWeather,
+    28→  type OddsApiEvent,
+    29→} from "./live-sources";
+    30→import { getLeagueStandings, findStandingsEntry, type LeagueStandings } from "./espn-standings";
+    31→import { runDixonColes, fairOdds } from "@/lib/engine/poisson";
+    32→import { solveMarketImpliedLambdas, type MarketImpliedResult } from "@/lib/engine/reverse-poisson";
+    33→// v21.0 — جدول جهانی Elo: پایان کارت کور λ=۱.۰۰–۰.۹۲ در بازی‌های ملی
+    34→import { lambdaFromEloRatings, lookupTeamRating } from "@/lib/engine/elo-ratings";
+    35→// v22.0 — ترکیب ۱۰۰٪ اتوماتیک با بازار آزاد Polymarket (Zero-Vig)
+    36→import { fetchPolymarketMap, matchPolymarketLine, type PolyMarketLine, fetchEspnCoreOdds, parseEspnExternalId, type EspnCoreOdds } from "./odds-providers";
+    37→import type { LiveFeedDTO, LiveFeedSourceDTO } from "@/lib/types";
+    38→
+    39→// ═══ v22.0 — کش اندپوینت مستقیم ESPN Core Odds (Bet365/Unibet/William Hill/DraftKings) ═══
+    40→// هر رویداد حداکثر هر ۱۰ دقیقه یک‌بار واکشی می‌شود — ضد Rate-Limit.
+    41→const espnCoreCache = new Map<string, { at: number; core: EspnCoreOdds | null }>();
+    42→const ESPN_CORE_TTL_MS = 10 * 60_000;
+    43→async function fetchEspnCoreOddsCached(slug: string, eventId: string): Promise<EspnCoreOdds | null> {
+    44→  const key = `${slug}-${eventId}`;
+    45→  const hit = espnCoreCache.get(key);
+    46→  if (hit && Date.now() - hit.at < ESPN_CORE_TTL_MS) return hit.core;
+    47→  const core = await fetchEspnCoreOdds(slug, eventId).catch(() => null);
+    48→  if (espnCoreCache.size > 400) espnCoreCache.clear();
+    49→  espnCoreCache.set(key, { at: Date.now(), core });
+    50→  return core;
+    51→}
+    52→
+    53→/** بهترین خط 1X2 بین بوک‌میکرهای رسمی ESPN Core (Bet365/Unibet/William Hill/...) */
+    54→function bestEspnCoreLine(core: EspnCoreOdds | null): { provider: string; home: number; draw: number; away: number } | null {
+    55→  if (!core) return null;
+    56→  let best: { provider: string; home: number; draw: number; away: number } | null = null;
+    57→  const impliedSum = (l: { home: number; draw: number; away: number }) => 1 / l.home + 1 / l.draw + 1 / l.away;
+    58→  for (const b of core.bookmakers) {
+    59→    if (!b.home || !b.draw || !b.away) continue;
+    60→    if (b.home <= 1.01 || b.draw <= 1.01 || b.away <= 1.01) continue;
+    61→    const line = { provider: b.name, home: b.home, draw: b.draw, away: b.away };
+    62→    if (!best || impliedSum(line) < impliedSum(best)) best = line; // کم‌حاشیه‌ترین خط
+    63→  }
+    64→  return best;
+    65→}
+    66→
+    67→
+    68→// ═════════════════════ تنظیمات کش و throttle ═════════════════════
+    69→
+    70→const FEED_TTL_MS = 90_000;
+    71→const NEWS_TTL_MS = 5 * 60_000;
+    72→const WEATHER_TTL_MS = 30 * 60_000;
+    73→const ODDS_THROTTLE_MS = 12 * 60_000;
+    74→/** حداکثر بازی‌های upcoming هر لیگ (کنترل هزینه LLM خط لوله) */
+    75→const MAX_UPCOMING_PER_LEAGUE = 4;
+    76→
+    77→/** کلید پیش‌فرض The Odds API (پلن رایگان کاربر — قابل override با env یا مودال) */
+    78→const DEFAULT_ODDS_API_KEY = "3c0379d120a8bbd1e4ead8a8c4a7b637";
+    79→
+    80→// ═════════════════════ کش ماژول (دوران حیات سرور) ═════════════════════
+    81→
+    82→interface CacheState {
+    83→  payload: LiveFeedDTO | null;
+    84→  fetchedAt: number;
+    85→  inFlight: Promise<LiveFeedDTO> | null;
+    86→  news: LiveNewsItem[];
+    87→  newsAt: number;
+    88→  weather: Map<string, { w: LiveWeather | null; at: number }>;
+    89→  oddsSyncAt: number;
+    90→  oddsCreditsRemaining: number | null;
+    91→  oddsInFlight: Promise<boolean> | null;
+    92→}
+    93→
+    94→const cache: CacheState = {
+    95→  payload: null,
+    96→  fetchedAt: 0,
+    97→  inFlight: null,
+    98→  news: [],
+    99→  newsAt: 0,
+   100→  weather: new Map(),
+   101→  oddsSyncAt: 0,
+   102→  oddsCreditsRemaining: null,
+   103→  oddsInFlight: null,
+   104→};
+   105→
+   106→function oddsApiKey(userKey?: string): string {
+   107→  return (userKey && userKey.trim()) || process.env.ODDS_API_KEY || DEFAULT_ODDS_API_KEY;
+   108→}
+   109→
+   110→// ═══════════ v9.0 — موتور مهندسی معکوس ضرایب (Reverse-Poisson Market-Implied λ) ═══════════
+   111→
+   112→/** کش حل‌کننده بر اساس اثر انگشت ضرایب — ضرایب ثابت را دوباره حل نمی‌کنیم */
+   113→const marketSolverCache = new Map<string, MarketImpliedResult | null>();
+   114→const MARKET_SOLVER_CACHE_MAX = 600;
+   115→
+   116→export function marketLambdasFor(odds: { oddsHome: number; oddsDraw: number; oddsAway: number; oddsOver25: number; oddsUnder25: number }): { home: number | null; away: number | null; fitError: number | null } {
+   117→  const key = [odds.oddsHome, odds.oddsDraw, odds.oddsAway, odds.oddsOver25, odds.oddsUnder25].join("|");
+   118→  if (!marketSolverCache.has(key)) {
+   119→    if (marketSolverCache.size > MARKET_SOLVER_CACHE_MAX) marketSolverCache.clear();
+   120→    marketSolverCache.set(
+   121→      key,
+   122→      solveMarketImpliedLambdas({
+   123→        oddsHome: odds.oddsHome,
+   124→        oddsDraw: odds.oddsDraw,
+   125→        oddsAway: odds.oddsAway,
+   126→        oddsOver25: odds.oddsOver25,
+   127→        oddsUnder25: odds.oddsUnder25,
+   128→      })
+   129→    );
+   130→  }
+   131→  const solved = marketSolverCache.get(key) ?? null;
+   132→  return solved
+   133→    ? { home: solved.lambdaHome, away: solved.lambdaAway, fitError: solved.fitError }
+   134→    : { home: null, away: null, fitError: null };
+   135→}
+   136→
+   137→// ═════════════════════ مشتقات کمّی از دیتای واقعی ESPN ═════════════════════
+   138→
+   139→/** ضریب فرم از ۵ بازی اخیر واقعی (WWDLW) — بازه ۰.۷۸ تا ۱.۲۶ */
+   140→function formFactor(form: string): number {
+   141→  if (!form || form === "N/A") return 1.0;
+   142→  const pts = [...form].reduce((a, ch) => a + (ch === "W" ? 3 : ch === "D" ? 1 : 0), 0);
+   143→  return 0.78 + (pts / (form.length * 3)) * 0.48;
+   144→}
+   145→
+   146→/** ضریب فصل از رکورد واقعی (مثل 3-4-2) — بازه ۰.۸۲ تا ۱.۱۸ */
+   147→function seasonFactor(record: string | null): number {
+   148→  const pct = recordToPointsPct(record);
+   149→  if (pct === null) return 1.0;
+   150→  return 0.82 + pct * 0.36;
+   151→}
+   152→
+   153→/** الو تقریبی از درصد امتیاز فصل — ۱۵۰۰ = میانگین */
+   154→function eloFromRecord(record: string | null): number {
+   155→  const pct = recordToPointsPct(record);
+   156→  if (pct === null) return 1500;
+   157→  return Math.round(Math.max(1400, Math.min(2100, 1500 + (pct - 0.5) * 800)));
+   158→}
+   159→
+   160→function clamp(v: number, lo: number, hi: number): number {
+   161→  return Math.max(lo, Math.min(hi, v));
+   162→}
+   163→
+   164→function r2(v: number): number {
+   165→  return Math.round(v * 100) / 100;
+   166→}
+   167→
+   168→interface DerivedStrength {
+   169→  lambdaHome: number;
+   170→  lambdaAway: number;
+   171→  homeAttack: number;
+   172→  awayAttack: number;
+   173→  homeDefense: number;
+   174→  awayDefense: number;
+   175→  homeElo: number;
+   176→  awayElo: number;
+   177→  homePpda: number;
+   178→  awayPpda: number;
+   179→  homeFieldTilt: number;
+   180→  awayFieldTilt: number;
+   181→  weatherAdjusted: boolean;
+   182→  // ─── v6.0 — راستی‌آزمایی از جدول رسمی رده‌بندی فصل جاری ───
+   183→  // v21.0 — مسیر سوم GLOBAL_ELO_FALLBACK (جدول Elo جهانی وقتی جدول رده‌بندی غایب است)
+   184→  statsSource: "ESPN_STANDINGS" | "RECORD_FALLBACK" | "GLOBAL_ELO_FALLBACK";
+   185→  homeRank: number | null;
+   186→  homeGF: number | null;
+   187→  homeGA: number | null;
+   188→  homeGP: number | null;
+   189→  awayRank: number | null;
+   190→  awayGF: number | null;
+   191→  awayGA: number | null;
+   192→  awayGP: number | null;
+   193→  leagueTeamAvg: number | null;
+   194→}
+   195→
+   196→/**
+   197→ * v6.0 — محاسبه امید گل (λ) از جدول رسمی رده‌بندی فصل جاری ESPN (Standings API بدون کلید)
+   198→ * مسیر اولویت‌دار (قابل راستی‌آزمایی ۱۰۰٪):
+   199→ *   α_i = GF_i / (GP_i × LeagueTeamAvg)   ← قدرت تهاجمی واقعی از گل زده فصل
+   200→ *   β_i = GA_i / (GP_i × LeagueTeamAvg)   ← ضعف دفاعی واقعی از گل خورده فصل
+   201→ *   λ_Home = α_Home × β_Away × LeagueTeamAvg × 1.12 (فرمول استاندارد دیکسون-کولز)
+   202→ *   λ_Away = α_Away × β_Home × LeagueTeamAvg
+   203→ * مسیر جایگزین شفاف (فقط وقتی جدول در دسترس نیست): رکورد واقعی W-D-L + فرم ۵ بازی.
+   204→ * تعدیل جوی: بارش > ۲mm یا باد > ۳۰km/h → λ × ۰.۹۲ (−۸٪)
+   205→ * v9.0 — export شد: مشترک با خط لوله ثبت خودکار بازی‌های گذشته (auto-issue)
+   206→ */
+   207→export function deriveStrength(ev: LiveMatchEvent, weather: LiveWeather | null, st: LeagueStandings | null): DerivedStrength {
+   208→  const adverse = weather?.adverse ?? false;
+   209→  const wAdj = adverse ? 0.92 : 1.0;
+   210→
+   211→  const homeEntry = findStandingsEntry(st, ev.homeTeamId, ev.homeTeam);
+   212→  const awayEntry = findStandingsEntry(st, ev.awayTeamId, ev.awayTeam);
+   213→  const lta = st && st.leagueTeamAvg > 0.5 ? st.leagueTeamAvg : null;
+   214→
+   215→  if (lta && homeEntry && awayEntry && homeEntry.gp >= 3 && awayEntry.gp >= 3) {
+   216→    // ═══ v6.0 — مسیر واقعی: α/β از جدول رسمی فصل ═══
+   217→    const alphaH = homeEntry.gf / (homeEntry.gp * lta);
+   218→    const betaH = homeEntry.ga / (homeEntry.gp * lta);
+   219→    const alphaA = awayEntry.gf / (awayEntry.gp * lta);
+   220→    const betaA = awayEntry.ga / (awayEntry.gp * lta);
+   221→
+   222→    let lambdaHome = alphaH * betaA * lta * 1.12 * wAdj;
+   223→    let lambdaAway = alphaA * betaH * lta * wAdj;
+   224→    lambdaHome = clamp(lambdaHome, 0.3, 3.8);
+   225→    lambdaAway = clamp(lambdaAway, 0.25, 3.6);
+   226→
+   227→    const homeElo = eloFromRecord(ev.homeRecord);
+   228→    const awayElo = eloFromRecord(ev.awayRecord);
+   229→
+   230→    const homePower = clamp(alphaH, 0.5, 2.0);
+   231→    const awayPower = clamp(alphaA, 0.5, 2.0);
+   232→
+   233→    return {
+   234→      lambdaHome: r2(lambdaHome),
+   235→      lambdaAway: r2(lambdaAway),
+   236→      // قدرت‌های واقعی دیکسون-کولز — λ = α × β × leagueTeamAvg × homeAdv
+   237→      homeAttack: r2(clamp(alphaH, 0.35, 2.3)),
+   238→      awayAttack: r2(clamp(alphaA, 0.3, 2.2)),
+   239→      homeDefense: r2(clamp(betaH, 0.45, 1.9)),
+   240→      awayDefense: r2(clamp(betaA, 0.45, 1.9)),
+   241→      homeElo,
+   242→      awayElo,
+   243→      homePpda: r2(clamp(12 - (homePower - 1) * 7, 8.5, 15)),
+   244→      awayPpda: r2(clamp(12.4 - (awayPower - 1) * 7, 8.5, 15.5)),
+   245→      homeFieldTilt: Math.round(clamp(50 + (homeElo - 1500) / 12, 42, 63)),
+   246→      awayFieldTilt: Math.round(clamp(50 + (awayElo - 1500) / 12, 40, 62)),
+   247→      weatherAdjusted: adverse,
+   248→      statsSource: "ESPN_STANDINGS",
+   249→      homeRank: homeEntry.rank || null,
+   250→      homeGF: homeEntry.gf,
+   251→      homeGA: homeEntry.ga,
+   252→      homeGP: homeEntry.gp,
+   253→      awayRank: awayEntry.rank || null,
+   254→      awayGF: awayEntry.gf,
+   255→      awayGA: awayEntry.ga,
+   256→      awayGP: awayEntry.gp,
+   257→      leagueTeamAvg: r2(lta),
+   258→    };
+   259→  }
+   260→
+   261→  // ═══ v21.0 — مسیر Elo جهانی: پایان λ کور ۱.۰۰–۰.۹۲ برای بازی‌های ملی ═══
+   262→  // وقتی جدول رده‌بندی ESPN در دسترس نیست، امید گل از «اختلاف واقعی Elo دو تیم»
+   263→  // (جدول GLOBAL_TEAM_ELO_AND_XG_RATINGS — ۱۲۰ تیم ملی + باشگاه‌های برتر) مشتق می‌شود.
+   264→  // ژاپن × پاراگوئه دیگر با قرقیزستان × ویتنام عدد یکسان نمی‌گیرد!
+   265→  const eloSolved = lambdaFromEloRatings(ev.homeTeam, ev.awayTeam, null, null);
+   266→  if (eloSolved) {
+   267→    // اولویت Elo جدول جهانی؛ تیم ناشناخته → Elo رکورد واقعی ESPN (۱۵۰۰ = متوسط)
+   268→    const eloHome = lookupTeamRating(ev.homeTeam)?.elo ?? eloFromRecord(ev.homeRecord);
+   269→    const eloAway = lookupTeamRating(ev.awayTeam)?.elo ?? eloFromRecord(ev.awayRecord);
+   270→
+   271→    const lambdaHome = clamp(eloSolved.lambdaHome * wAdj, 0.3, 3.8);
+   272→    const lambdaAway = clamp(eloSolved.lambdaAway * wAdj, 0.25, 3.6);
+   273→
+   274→    const homeAttack = clamp(lambdaHome / (1.35 * 1.12), 0.35, 2.3);
+   275→    const awayAttack = clamp(lambdaAway / 1.35, 0.3, 2.2);
+   276→
+   277→    const homeFieldTilt = Math.round(clamp(50 + (eloHome - 1500) / 12, 42, 63));
+   278→    const awayFieldTilt = Math.round(clamp(50 + (eloAway - 1500) / 12, 40, 62));
+   279→    const homePpda = r2(clamp(12 - (lambdaHome / 1.35 - 1) * 7, 8.5, 15));
+   280→    const awayPpda = r2(clamp(12.4 - (lambdaAway / 1.35 - 1) * 7, 8.5, 15.5));
+   281→
+   282→    return {
+   283→      lambdaHome: r2(lambdaHome),
+   284→      lambdaAway: r2(lambdaAway),
+   285→      homeAttack: r2(homeAttack),
+   286→      awayAttack: r2(awayAttack),
+   287→      homeDefense: 1.0,
+   288→      awayDefense: 1.0,
+   289→      homeElo: eloHome,
+   290→      awayElo: eloAway,
+   291→      homePpda,
+   292→      awayPpda,
+   293→      homeFieldTilt,
+   294→      awayFieldTilt,
+   295→      weatherAdjusted: adverse,
+   296→      statsSource: "GLOBAL_ELO_FALLBACK",
+   297→      homeRank: null,
+   298→      homeGF: null,
+   299→      homeGA: null,
+   300→      homeGP: null,
+   301→      awayRank: null,
+   302→      awayGF: null,
+   303→      awayGA: null,
+   304→      awayGP: null,
+   305→      leagueTeamAvg: null,
+   306→    };
+   307→  }
+   308→
+   309→  // ═══ مسیر شفاف جایگزین — فقط رکورد/فرم واقعی ESPN (جدول رده‌بندی و جدول Elo هم در دسترس نیستند) ═══
+   310→  // ⚠️ v21.0: اگر λ نهایی این مسیر در بازه کور ۰.۹۰–۱.۰۵ بماند و خط بازار هم غایب باشد،
+   311→  // گیت «No Blind Card» سوپروایزر این بازی را وتو می‌کند (کارت کور صادر نمی‌شود).
+   312→  const homeStr = 0.55 * formFactor(ev.homeForm) + 0.45 * seasonFactor(ev.homeRecord);
+   313→  const awayStr = 0.55 * formFactor(ev.awayForm) + 0.45 * seasonFactor(ev.awayRecord);
+   314→
+   315→  let lambdaHome = ev.avgGoals * 0.55 * homeStr * wAdj;
+   316→  let lambdaAway = ev.avgGoals * 0.45 * awayStr * wAdj;
+   317→
+   318→  // همگرایی به محدوده معقول پواسون
+   319→  lambdaHome = clamp(lambdaHome, 0.3, 3.8);
+   320→  lambdaAway = clamp(lambdaAway, 0.25, 3.6);
+   321→
+   322→  // استخراج ضرایب حمله/دفاع سازگار با موتور دیکسون-کولز:
+   323→  // λh = homeAttack × awayDefense × leagueAvg × 1.12 → دفاع‌ها = ۱، حمله = λ / ثابت
+   324→  const homeAttack = clamp(lambdaHome / (1.35 * 1.12), 0.35, 2.3);
+   325→  const awayAttack = clamp(lambdaAway / 1.35, 0.3, 2.2);
+   326→
+   327→  const homeElo = eloFromRecord(ev.homeRecord);
+   328→  const awayElo = eloFromRecord(ev.awayRecord);
+   329→
+   330→  const homeFieldTilt = Math.round(clamp(50 + (homeElo - 1500) / 12, 42, 63));
+   331→  const awayFieldTilt = Math.round(clamp(50 + (awayElo - 1500) / 12, 40, 62));
+   332→  const homePpda = r2(clamp(12 - (homeStr - 1) * 7, 8.5, 15));
+   333→  const awayPpda = r2(clamp(12.4 - (awayStr - 1) * 7, 8.5, 15.5));
+   334→
+   335→  return {
+   336→    lambdaHome: r2(lambdaHome),
+   337→    lambdaAway: r2(lambdaAway),
+   338→    homeAttack: r2(homeAttack),
+   339→    awayAttack: r2(awayAttack),
+   340→    homeDefense: 1.0,
+   341→    awayDefense: 1.0,
+   342→    homeElo,
+   343→    awayElo,
+   344→    homePpda,
+   345→    awayPpda,
+   346→    homeFieldTilt,
+   347→    awayFieldTilt,
+   348→    weatherAdjusted: adverse,
+   349→    statsSource: "RECORD_FALLBACK",
+   350→    homeRank: null,
+   351→    homeGF: null,
+   352→    homeGA: null,
+   353→    homeGP: null,
+   354→    awayRank: null,
+   355→    awayGF: null,
+   356→    awayGA: null,
+   357→    awayGP: null,
+   358→    leagueTeamAvg: null,
+   359→  };
+   360→}
+   361→
+   362→function weatherString(w: LiveWeather | null): string {
+   363→  if (!w) return "نامشخص - دیتای جوی در دسترس نیست";
+   364→  const cond = w.precipMm > 2 ? "باران" : w.precipMm > 0.3 ? "نیمه‌بارانی" : w.windKmh > 30 ? "باد شدید" : "پاک";
+   365→  return `${cond} - ${Math.round(w.tempC)}° · باد ${Math.round(w.windKmh)}km/h${w.precipMm > 0.3 ? ` · بارش ${w.precipMm.toFixed(1)}mm` : ""}`;
+   366→}
+   367→
+   368→/** احتمالات مدل دیکسون-کولز از روی استحاله مشتق‌شده (برای ضرایب fallback و T-60) */
+   369→export function modelProbs(d: DerivedStrength) {
+   370→  return runDixonColes({
+   371→    homeAttack: d.homeAttack,
+   372→    awayAttack: d.awayAttack,
+   373→    homeDefense: d.homeDefense,
+   374→    awayDefense: d.awayDefense,
+   375→    leagueAvg: d.leagueTeamAvg ?? 1.35,
+   376→    homeAdvantage: 1.12,
+   377→    rho: -0.08,
+   378→    eloDiff: d.homeElo - d.awayElo,
+   379→    eloWeight: 0.35,
+   380→    homeAbsenceImpact: 0,
+   381→    awayAbsenceImpact: 0,
+   382→    timeDecayXi: 0.0065,
+   383→    daysAgo: 21,
+   384→  });
+   385→}
+   386→
+   387→// ═════════════════════ تطبیق ضرایب The Odds API ═════════════════════
+   388→
+   389→function matchOddsEvent(ev: LiveMatchEvent, oddsEvents: OddsApiEvent[]): OddsApiEvent | null {
+   390→  const direct = `${normTeam(ev.homeTeam)}::${normTeam(ev.awayTeam)}`;
+   391→  const kick = Date.parse(ev.kickoff);
+   392→  let best: OddsApiEvent | null = null;
+   393→  let bestDist = Infinity;
+   394→  for (const oe of oddsEvents) {
+   395→    const same = oe.matchKey === direct || `${normTeam(oe.homeTeam)}::${normTeam(oe.awayTeam)}` === `${normTeam(ev.awayTeam)}::${normTeam(ev.homeTeam)}`;
+   396→    if (!same) continue;
+   397→    const dist = Math.abs(Date.parse(oe.commenceTime) - kick);
+   398→    if (dist < bestDist) {
+   399→      bestDist = dist;
+   400→      best = oe;
+   401→    }
+   402→  }
+   403→  // تطبیق فقط برای بازی‌های نزدیک (±۲۴h) — جلوگیری از جفت‌شدن بازی‌های دور
+   404→  return best && bestDist < 24 * 3600 * 1000 ? best : null;
+   405→}
+   406→
+   407→interface ResolvedOdds {
+   408→  oddsHome: number;
+   409→  oddsDraw: number;
+   410→  oddsAway: number;
+   411→  oddsOver25: number;
+   412→  oddsUnder25: number;
+   413→  odds1x: number;
+   414→  source: "ENGINE" | "ESPN_DRAFTKINGS" | "ODDS_API" | "POLYMARKET";
+   415→  /** تا ۳ ردیف بوک‌میکر با کلیدهای کنونیکال (Pinnacle = کم‌حاشیه‌ترین) */
+   416→  books: { bookmaker: "PINNACLE" | "SOFT_A" | "SOFT_B" | "POLYMARKET"; bookmakerLabel: string; home: number; draw: number; away: number; over25: number | null; under25: number | null }[];
+   417→}
+   418→
+   419→/**
+   420→ * v22.0 — ترکیب ضرایب زنده بوک‌میکرها با بازار آزاد Polymarket (Zero-Vig):
+   421→ * خط Polymarket به‌عنوان ردیف بوک‌میکر مستقل اضافه می‌شود و بهترین قیمت هر نتیجه
+   422→ * بین بوک‌میکرهای رسمی + بازار آزاد انتخاب می‌گردد؛ در نبود بوک‌میکر رسمی،
+   423→ * خط کامل سه‌گانه Polymarket تنها منبع واقعی است (source=POLYMARKET).
+   424→ */
+   425→function resolveOdds(
+   426→  ev: LiveMatchEvent,
+   427→  oddsEv: OddsApiEvent | null,
+   428→  probs: ReturnType<typeof modelProbs>,
+   429→  poly?: { home: number; draw: number | null; away: number } | null
+   430→): ResolvedOdds {
+   431→  // ─── ۱) ضرایب زنده The Odds API — بهترین قیمت هر انتخاب + سه بوک نماینده ───
+   432→  if (oddsEv && oddsEv.books.length > 0) {
+   433→    const booksSorted = [...oddsEv.books].sort(
+   434→      (a, b) => 1 / a.line.home + 1 / a.line.draw + 1 / a.line.away - (1 / b.line.home + 1 / b.line.draw + 1 / b.line.away)
+   435→    );
+   436→    const canon = ["PINNACLE", "SOFT_A", "SOFT_B"] as const;
+   437→    const books: ResolvedOdds["books"] = booksSorted.slice(0, 3).map((b, i) => ({
+   438→      bookmaker: canon[i],
+   439→      bookmakerLabel: `${b.label}${i === 0 ? " (Sharp)" : ""}`,
+   440→      home: b.line.home,
+   441→      draw: b.line.draw,
+   442→      away: b.line.away,
+   443→      over25: b.line.over25,
+   444→      under25: b.line.under25,
+   445→    }));
+   446→    if (poly && poly.home > 1 && poly.away > 1) {
+   447→      books.push({
+   448→        bookmaker: "POLYMARKET",
+   449→        bookmakerLabel: "Polymarket (Zero-Vig)",
+   450→        home: poly.home,
+   451→        draw: poly.draw ?? fairOdds(probs.pDraw, 1.06),
+   452→        away: poly.away,
+   453→        over25: null,
+   454→        under25: null,
+   455→      });
+   456→    }
+   457→    const best = (sel: (b: ResolvedOdds["books"][number]) => number | null): number => {
+   458→      const vals = books.map(sel).filter((v): v is number => v !== null && v >= 1.01);
+   459→      return vals.length > 0 ? Math.max(...vals) : 0;
+   460→    };
+   461→    const oddsHome = best((b) => b.home);
+   462→    const oddsDraw = best((b) => b.draw);
+   463→    const oddsAway = best((b) => b.away);
+   464→    let oddsOver25 = best((b) => b.over25);
+   465→    let oddsUnder25 = best((b) => b.under25);
+   466→    if (oddsOver25 <= 1.01 || oddsUnder25 <= 1.01) {
+   467→      oddsOver25 = fairOdds(probs.pOver25, 1.06);
+   468→      oddsUnder25 = fairOdds(probs.pUnder25, 1.06);
+   469→    }
+   470→    return { oddsHome, oddsDraw, oddsAway, oddsOver25, oddsUnder25, odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06), source: "ODDS_API", books };
+   471→  }
+   472→
+   473→  // ─── ۲) خط پایه ESPN (معمولاً DraftKings) + ترکیب Polymarket ───
+   474→  if (ev.espnOdds && ev.espnOdds.home && ev.espnOdds.draw && ev.espnOdds.away) {
+   475→    const o = ev.espnOdds;
+   476→    const h = o.home as number;
+   477→    const d2 = o.draw as number;
+   478→    const a2 = o.away as number;
+   479→    const books: ResolvedOdds["books"] = [
+   480→      {
+   481→        bookmaker: "SOFT_A",
+   482→        bookmakerLabel: `${o.provider} (ESPN)`,
+   483→        home: h,
+   484→        draw: d2,
+   485→        away: a2,
+   486→        over25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
+   487→        under25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
+   488→      },
+   489→    ];
+   490→    if (poly && poly.home > 1 && poly.away > 1) {
+   491→      books.push({
+   492→        bookmaker: "POLYMARKET",
+   493→        bookmakerLabel: "Polymarket (Zero-Vig)",
+   494→        home: poly.home,
+   495→        draw: poly.draw ?? d2,
+   496→        away: poly.away,
+   497→        over25: o.over25 ?? fairOdds(probs.pOver25, 1.06),
+   498→        under25: o.under25 ?? fairOdds(probs.pUnder25, 1.06),
+   499→      });
+   500→    }
+   501→    const best = (sel: (b: ResolvedOdds["books"][number]) => number): number => Math.max(...books.map(sel));
+   502→    return {
+   503→      oddsHome: best((b) => b.home),
+   504→      oddsDraw: best((b) => b.draw),
+   505→      oddsAway: best((b) => b.away),
+   506→      oddsOver25: books[0].over25 ?? fairOdds(probs.pOver25, 1.06),
+   507→      oddsUnder25: books[0].under25 ?? fairOdds(probs.pUnder25, 1.06),
+   508→      odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
+   509→      source: "ESPN_DRAFTKINGS",
+   510→      books,
+   511→    };
+   512→  }
+   513→
+   514→  // ─── ۲.۵) v22.0 — بازار آزاد Polymarket (Zero-Vig) — تنها منبع واقعی بدون بوک‌میکر رسمی ───
+   515→  if (poly && poly.home > 1 && poly.away > 1 && poly.draw && poly.draw > 1) {
+   516→    return {
+   517→      oddsHome: poly.home,
+   518→      oddsDraw: poly.draw,
+   519→      oddsAway: poly.away,
+   520→      oddsOver25: fairOdds(probs.pOver25, 1.06),
+   521→      oddsUnder25: fairOdds(probs.pUnder25, 1.06),
+   522→      odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
+   523→      source: "POLYMARKET",
+   524→      books: [
+   525→        {
+   526→          bookmaker: "POLYMARKET",
+   527→          bookmakerLabel: "Polymarket (Zero-Vig)",
+   528→          home: poly.home,
+   529→          draw: poly.draw,
+   530→          away: poly.away,
+   531→          over25: null,
+   532→          under25: null,
+   533→        },
+   534→      ],
+   535→    };
+   536→  }
+   537→
+   538→  // ─── ۳) Fallback مدل — ضرایب منصفانه با حاشیه ۶٪ ───
+   539→  return {
+   540→    oddsHome: fairOdds(probs.pHome, 1.06),
+   541→    oddsDraw: fairOdds(probs.pDraw, 1.06),
+   542→    oddsAway: fairOdds(probs.pAway, 1.06),
+   543→    oddsOver25: fairOdds(probs.pOver25, 1.06),
+   544→    oddsUnder25: fairOdds(probs.pUnder25, 1.06),
+   545→    odds1x: fairOdds(probs.pHome + probs.pDraw, 1.06),
+   546→    source: "ENGINE",
+   547→    books: [],
+   548→  };
+   549→}
+   550→
+   551→// ═════════════════════ آب‌وهوا (کش ۳۰ دقیقه + همزمانی محدود) ═════════════════════
+   552→
+   553→async function weatherFor(city: string | null): Promise<LiveWeather | null> {
+   554→  if (!city) return null;
+   555→  const coords = cityCoords(city);
+   556→  if (!coords) return null;
+   557→  const hit = cache.weather.get(city);
+   558→  if (hit && Date.now() - hit.at < WEATHER_TTL_MS) return hit.w;
+   559→  const w = await fetchWeather(coords[0], coords[1], city);
+   560→  cache.weather.set(city, { w, at: Date.now() });
+   561→  return w;
+   562→}
+   563→
+   564→async function poolWeather(cities: (string | null)[], limit = 3): Promise<Map<string, LiveWeather | null>> {
+   565→  const unique = [...new Set(cities.filter((c): c is string => Boolean(c)))];
+   566→  const out = new Map<string, LiveWeather | null>();
+   567→  const queue = [...unique];
+   568→  const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+   569→    for (;;) {
+   570→      const c = queue.shift();
+   571→      if (c === undefined) return;
+   572→      out.set(c, await weatherFor(c));
+   573→    }
+   574→  });
+   575→  await Promise.all(workers);
+   576→  return out;
+   577→}
+   578→
+   579→// ═════════════════════ کالیبراسیون با نتایج واقعی ═════════════════════
+   580→
+   581→const PICK_LABELS: Record<string, string> = {
+   582→  HOME: "برد میزبان",
+   583→  DRAW: "مساوی",
+   584→  AWAY: "برد میهمان",
+   585→  O25: "بالای ۲.۵ گل",
+   586→};
+   587→
+   588→/** ثبت لاگ بریر از نتیجه واقعی بازی — فقط یک‌بار برای هر بازی */
+   589→async function logCalibrationFor(matchId: string, label: string, league: string, hg: number, ag: number): Promise<void> {
+   590→  try {
+   591→    const dup = await db.calibrationLog.findFirst({ where: { matchLabel: label } });
+   592→    if (dup) return;
+   593→    const analysis = await db.agentAnalysis.findFirst({
+   594→      where: { matchId },
+   595→      orderBy: { createdAt: "desc" },
+   596→    });
+   597→    if (!analysis) return;
+   598→
+   599→    const cands: { key: string; p: number }[] = [
+   600→      { key: "HOME", p: analysis.pHome },
+   601→      { key: "DRAW", p: analysis.pDraw },
+   602→      { key: "AWAY", p: analysis.pAway },
+   603→      { key: "O25", p: analysis.pOver25 },
+   604→    ];
+   605→    cands.sort((a, b) => b.p - a.p);
+   606→    const pick = cands[0];
+   607→    const actual = pick.key === "HOME" ? hg > ag : pick.key === "DRAW" ? hg === ag : pick.key === "AWAY" ? ag > hg : hg + ag > 2.5;
+   608→    await db.calibrationLog.create({
+   609→      data: {
+   610→        matchLabel: label,
+   611→        league,
+   612→        pick: PICK_LABELS[pick.key],
+   613→        predictedProb: pick.p,
+   614→        outcome: actual ? "WIN" : "LOSS",
+   615→        brier: (pick.p - (actual ? 1 : 0)) ** 2,
+   616→        lesson: null,
+   617→      },
+   618→    });
+   619→  } catch (err) {
+   620→    console.warn("calibration log failed:", err);
+   621→  }
+   622→}
+   623→
+   624→// ═════════════════════ همگام‌سازی اصلی ═════════════════════
+   625→
+   626→export interface SyncOptions {
+   627→  force?: boolean;
+   628→  useOddsApi?: boolean;
+   629→  oddsApiKey?: string;
+   630→}
+   631→
+   632→async function runSync(opts: SyncOptions): Promise<LiveFeedDTO> {
+   633→  const t0 = Date.now();
+   634→  const sources: LiveFeedSourceDTO[] = [];
+   635→
+   636→  // ─── ۱) منابع زنده به صورت موازی ───
+   637→  const tEspn = Date.now();
+   638→  // v14.0 — اسکنر هوشمند پنجره ۷ روزه: پایه امروز+۳ آینده؛ در کمبود بازی (فیفادی) → ۷ روز + اندپوینت جامع all
+   639→  const espnPromise = fetchEspnEventsSmartWindow();
+   640→  const newsPromise = fetchEspnNews().then((n) => {
+   641→    cache.news = n;
+   642→    cache.newsAt = Date.now();
+   643→    return n;
+   644→  });
+   645→  const sdbPromise = Promise.allSettled(
+   646→    ESPN_LEAGUES.filter((l) => l.sportsDbId).map((l) => fetchSportsDbNext(l.sportsDbId))
+   647→  );
+   648→
+   649→  // ─── ۲) Odds API فقط با اجازه (هزینه اعتبار پلن رایگان) ───
+   650→  let oddsEvents: OddsApiEvent[] = [];
+   651→  let oddsUsed = false;
+   652→  let oddsThrottled = false;
+   653→  if (opts.useOddsApi) {
+   654→    const since = Date.now() - cache.oddsSyncAt;
+   655→    if (cache.oddsSyncAt > 0 && since < ODDS_THROTTLE_MS) {
+   656→      oddsThrottled = true;
+   657→    } else {
+   658→      const keys = ESPN_LEAGUES.map((l) => l.oddsKey).filter(Boolean);
+   659→      const res = await fetchOddsApiEvents(keys, oddsApiKey(opts.oddsApiKey));
+   660→      oddsEvents = res.events;
+   661→      oddsUsed = true;
+   662→      cache.oddsSyncAt = Date.now();
+   663→      if (res.requestsRemaining !== null) cache.oddsCreditsRemaining = res.requestsRemaining;
+   664→    }
+   665→  }
+   666→
+   667→  const [smart, , sdbResults] = await Promise.all([espnPromise, newsPromise, sdbPromise]);
+   668→  const espnEvents = smart.events;
+   669→
+   670→  sources.push({
+   671→    key: "espn",
+   672→    label: "ESPN Scoreboard (۱۹ رقابت × پنجره هوشمند ۷ روزه)",
+   673→    ok: espnEvents.length > 0,
+   674→    detail: `${espnEvents.length} مسابقه واقعی · امروز: ${smart.todayCount}${smart.expandedTo7Days ? " · گسترش به ۷ روز آینده" : ""}${smart.usedAllScoreboard ? " · اندپوینت جامع all" : ""}`,
+   675→    latencyMs: Date.now() - tEspn,
+   676→  });
+   677→
+   678→  // TheSportsDB — مکمل ورزشگاه برای بازی‌های پیش‌رو
+   679→  const sdbVenue = new Map<string, string>();
+   680→  let sdbCount = 0;
+   681→  for (const r of sdbResults) {
+   682→    if (r.status !== "fulfilled") continue;
+   683→    for (const e of r.value) {
+   684→      sdbCount += 1;
+   685→      if (e.strVenue) {
+   686→        sdbVenue.set(`${normTeam(e.homeTeam)}::${normTeam(e.awayTeam)}`, e.strVenue);
+   687→      }
+   688→    }
+   689→  }
+   690→  sources.push({
+   691→    key: "sportsdb",
+   692→    label: "TheSportsDB (کلید عمومی ۱۲۳)",
+   693→    ok: sdbCount > 0,
+   694→    detail: `${sdbCount} فیکسچر پیش‌رو · ورزشگاه: ${sdbVenue.size}`,
+   695→    latencyMs: 0,
+   696→  });
+   697→
+   698→  // ─── ۳) نگاشت و ذخیره در دیتابیس ───
+   699→  const now = Date.now();
+   700→  const upcomingByLeague = new Map<string, number>();
+   701→  const keepEvents: LiveMatchEvent[] = [];
+   702→  for (const ev of espnEvents) {
+   703→    const kick = Date.parse(ev.kickoff);
+   704→    if (ev.statusState === "post") continue; // نتایج در فاز کالیبراسیون جدا پردازش می‌شوند
+   705→    if (ev.statusState === "pre") {
+   706→      if (kick < now - 3600_000) continue; // شروع‌شده بدون وضعیت زنده
+   707→      const cnt = upcomingByLeague.get(ev.leagueSlug) ?? 0;
+   708→      if (cnt >= MAX_UPCOMING_PER_LEAGUE) continue;
+   709→      upcomingByLeague.set(ev.leagueSlug, cnt + 1);
+   710→    }
+   711→    keepEvents.push(ev);
+   712→  }
+   713→
+   714→  // آب‌وهوا فقط برای ۴۸ ساعت آینده (کش ۳۰ دقیقه‌ای)
+   715→  const weatherTargets = keepEvents.filter((e) => Date.parse(e.kickoff) - now < 48 * 3600_000);
+   716→  const weatherMap = await poolWeather(weatherTargets.map((e) => e.venueCity));
+   717→
+   718→  // ─── ۳.۵) جدول رسمی رده‌بندی فصل (v6.0 — یک درخواست به‌ازای هر لیگ فعال، کش ۶۰ دقیقه‌ای) ───
+   719→  const activeSlugs = [...new Set(keepEvents.map((e) => e.leagueSlug))];
+   720→  const standingsMap = new Map<string, LeagueStandings | null>();
+   721→  await Promise.all(
+   722→    activeSlugs.map(async (slug) => {
+   723→      try {
+   724→        standingsMap.set(slug, await getLeagueStandings(slug));
+   725→      } catch {
+   726→        standingsMap.set(slug, null);
+   727→      }
+   728→    })
+   729→  );
+   730→  const standingsHit = [...standingsMap.values()].filter(Boolean).length;
+   731→  sources.push({
+   732→    key: "standings",
+   733→    label: "ESPN Standings (جدول رسمی فصل)",
+   734→    ok: standingsHit > 0,
+   735→    detail: `${standingsHit}/${activeSlugs.length} لیگ با آمار واقعی گل زده/خورده و رتبه جدول`,
+   736→    latencyMs: 0,
+   737→  });
+   738→
+   739→  let liveUpcoming = 0;
+   740→  let liveInPlay = 0;
+   741→  let weatherAdjustedCount = 0;
+   742→  let oddsApiMatched = 0;
+   743→  let marketSolvedCount = 0;
+   744→
+   745→  // ═══ v22.0 — بازار آزاد Polymarket (Zero-Vig) — کش ۵ دقیقه‌ای، بدون کلید ═══
+   746→  const polyMap = await fetchPolymarketMap().catch(() => new Map<string, PolyMarketLine>());
+   747→  let polyMatched = 0;
+   748→  let espnCoreOddsCount = 0;
+   749→
+   750→  for (const ev of keepEvents) {
+   751→    const kick = Date.parse(ev.kickoff);
+   752→    const weather = weatherMap.get(ev.venueCity ?? "") ?? null;
+   753→    const st = standingsMap.get(ev.leagueSlug) ?? null;
+   754→    const d = deriveStrength(ev, weather, st);
+   755→    if (d.weatherAdjusted) weatherAdjustedCount += 1;
+   756→    const probs = modelProbs(d);
+   757→    const oddsEv = matchOddsEvent(ev, oddsEvents);
+   758→    if (oddsEv) oddsApiMatched += 1;
+   759→    // v22.0 — اندپوینت مستقیم ESPN Core Odds (Bet365/Unibet/William Hill/DraftKings)
+   760→    // وقتی نه Odds API و نه اسکوربورد خط داشت — ۱۰۰٪ اتوماتیک، بدون کلید
+   761→    if (!oddsEv && !(ev.espnOdds && ev.espnOdds.home)) {
+   762→      const parsedId = parseEspnExternalId(ev.externalId);
+   763→      if (parsedId) {
+   764→        const coreLine = bestEspnCoreLine(await fetchEspnCoreOddsCached(parsedId.slug, parsedId.eventId));
+   765→        if (coreLine) {
+   766→          ev.espnOdds = { provider: `${coreLine.provider} (ESPN Core)`, home: coreLine.home, draw: coreLine.draw, away: coreLine.away, over25: null, under25: null };
+   767→          espnCoreOddsCount += 1;
+   768→        }
+   769→      }
+   770→    }
+   771→    // v22.0 — ترکیب با بازار آزاد Polymarket (100% اتوماتیک — بدون ورود دستی)
+   772→    const polyLine = matchPolymarketLine(polyMap, ev.homeTeam, ev.awayTeam);
+   773→    if (polyLine) polyMatched += 1;
+   774→    const odds = resolveOdds(ev, oddsEv, probs, polyLine);
+   775→
+   776→    // v4.0: حفظ ضرایب زنده معتبر قبلی — سینک بدون Odds API نباید ضرایب بوک‌میکرها
+   777→    // را با ضرایب مدل جایگزین کند (فقط ضرایب کهنه‌تر از ۶ ساعت بازمحاسبه می‌شوند)
+   778→    const existing = await db.match.findUnique({
+   779→      where: { externalId: ev.externalId },
+   780→      select: { id: true, status: true, oddsSource: true, oddsHome: true, oddsDraw: true, oddsAway: true, oddsOver25: true, oddsUnder25: true, odds1x: true, oddsFetchedAt: true },
+   781→    });
+   782→    const keepLiveOdds =
+   783→      odds.source === "ENGINE" &&
+   784→      existing &&
+   785→      existing.oddsSource !== "ENGINE" &&
+   786→      existing.oddsFetchedAt !== null &&
+   787→      Date.now() - existing.oddsFetchedAt.getTime() < 6 * 3600_000;
+   788→    if (keepLiveOdds && existing) {
+   789→      odds.oddsHome = existing.oddsHome;
+   790→      odds.oddsDraw = existing.oddsDraw;
+   791→      odds.oddsAway = existing.oddsAway;
+   792→      odds.oddsOver25 = existing.oddsOver25;
+   793→      odds.oddsUnder25 = existing.oddsUnder25;
+   794→      odds.odds1x = existing.odds1x;
+   795→      odds.source = existing.oddsSource as ResolvedOdds["source"];
+   796→    }
+   797→
+   798→    const isLive = ev.statusState === "in";
+   799→    if (isLive) liveInPlay += 1;
+   800→    else liveUpcoming += 1;
+   801→
+   802→    // ─── v9.0 — حل معکوس پواسون روی ضرایب واقعی بازار (الگوی مخفی قیمت‌گذاری بوک‌میکر) ───
+   803→    // فقط روی ضرایب واقعی (The Odds API / ESPN DraftKings) — ضرایب مدل ENGINE مسیر بازار ندارند
+   804→    const market = odds.source !== "ENGINE" ? marketLambdasFor(odds) : { home: null, away: null, fitError: null };
+   805→    if (market.home !== null) marketSolvedCount += 1;
+   806→
+   807→    const base = {
+   808→      league: ev.leagueName,
+   809→      homeTeam: ev.homeTeam,
+   810→      awayTeam: ev.awayTeam,
+   811→      kickoff: new Date(kick),
+   812→      homeAttack: d.homeAttack,
+   813→      homeDefense: 1.0,
+   814→      awayAttack: d.awayAttack,
+   815→      awayDefense: 1.0,
+   816→      homeElo: d.homeElo,
+   817→      awayElo: d.awayElo,
+   818→      homeXg: d.lambdaHome,
+   819→      awayXg: d.lambdaAway,
+   820→      homePpda: d.homePpda,
+   821→      awayPpda: d.awayPpda,
+   822→      homeFieldTilt: d.homeFieldTilt,
+   823→      awayFieldTilt: d.awayFieldTilt,
+   824→      homeForm: ev.homeForm,
+   825→      awayForm: ev.awayForm,
+   826→      weather: weatherString(weather),
+   827→      homeAbsence: null,
+   828→      awayAbsence: null,
+   829→      homeMotivation: null,
+   830→      awayMotivation: null,
+   831→      tacticalNote: null,
+   832→      oddsHome: odds.oddsHome,
+   833→      oddsDraw: odds.oddsDraw,
+   834→      oddsAway: odds.oddsAway,
+   835→      oddsOver25: odds.oddsOver25,
+   836→      oddsUnder25: odds.oddsUnder25,
+   837→      odds1x: odds.odds1x,
+   838→      homeNpxgLevel: d.lambdaHome,
+   839→      homeNpxgLeading: r2(d.lambdaHome * 0.72),
+   840→      homeNpxgTrailing: r2(d.lambdaHome * 1.25),
+   841→      awayNpxgLevel: d.lambdaAway,
+   842→      awayNpxgLeading: r2(d.lambdaAway * 0.72),
+   843→      awayNpxgTrailing: r2(d.lambdaAway * 1.25),
+   844→      homeCornersFor: r2(4.9 + (d.lambdaHome - 1.35) * 0.9),
+   845→      homeCornersAgainst: 4.5,
+   846→      awayCornersFor: r2(4.6 + (d.lambdaAway - 1.35) * 0.9),
+   847→      awayCornersAgainst: 4.7,
+   848→      awayTravelKm: 350,
+   849→      homeRestDays: 6,
+   850→      awayRestDays: 6,
+   851→      // v4.0
+   852→      dataSource: "ESPN",
+   853→      homeLogo: ev.homeLogo,
+   854→      awayLogo: ev.awayLogo,
+   855→      venueName: ev.venueName ?? sdbVenue.get(`${normTeam(ev.homeTeam)}::${normTeam(ev.awayTeam)}`) ?? null,
+   856→      venueCity: ev.venueCity,
+   857→      weatherTemp: weather?.tempC ?? null,
+   858→      weatherWind: weather?.windKmh ?? null,
+   859→      weatherPrecip: weather?.precipMm ?? null,
+   860→      weatherAdjusted: d.weatherAdjusted,
+   861→      oddsSource: odds.source,
+   862→      oddsFetchedAt: odds.source === "ENGINE" ? null : existing?.oddsFetchedAt && keepLiveOdds ? existing.oddsFetchedAt : new Date(),
+   863→      homeGoals: isLive ? ev.homeScore : null,
+   864→      awayGoals: isLive ? ev.awayScore : null,
+   865→      // ─── v6.0 — شناسه‌های رسمی ESPN + سند راستی‌آزمایی جدول فصل ───
+   866→      homeTeamId: ev.homeTeamId,
+   867→      awayTeamId: ev.awayTeamId,
+   868→      homeRank: d.homeRank,
+   869→      homeGF: d.homeGF,
+   870→      homeGA: d.homeGA,
+   871→      homeGP: d.homeGP,
+   872→      awayRank: d.awayRank,
+   873→      awayGF: d.awayGF,
+   874→      awayGA: d.awayGA,
+   875→      awayGP: d.awayGP,
+   876→      leagueTeamAvg: d.leagueTeamAvg,
+   877→      statsSource: d.statsSource,
+   878→      statsFetchedAt: st ? new Date(st.fetchedAt) : null,
+   879→      // ─── v9.0 — λ بازار استخراج‌شده + شناسه مسیر λ ───
+   880→      lambdaMarketHome: market.home,
+   881→      lambdaMarketAway: market.away,
+   882→      lambdaFitError: market.fitError,
+   883→      lambdaSource: market.home !== null ? "MARKET_HYBRID" : "STATS_ONLY",
+   884→      // وضعیت ANALYZED قبلی حفظ می‌شود (فقط گذار LIVE/UPCOMING از منبع واقعی)
+   885→      status: isLive ? "LIVE" : existing?.status === "ANALYZED" ? "ANALYZED" : "UPCOMING",
+   886→    };
+   887→
+   888→    const row = await db.match.upsert({
+   889→      where: { externalId: ev.externalId },
+   890→      create: { ...base, externalId: ev.externalId },
+   891→      update: base,
+   892→    });
+   893→
+   894→    // بازنویسی ردیف‌های بوک‌میکر — v6.0: فقط بوک‌میکرهای واقعی (The Odds API / ESPN)
+   895→    if (odds.books.length > 0) {
+   896→      await db.oddsRecord.deleteMany({ where: { matchId: row.id } });
+   897→      for (const b of odds.books) {
+   898→        await db.oddsRecord.create({
+   899→          data: {
+   900→            matchId: row.id,
+   901→            bookmaker: b.bookmaker,
+   902→            bookmakerLabel: b.bookmakerLabel,
+   903→            oddsHome: b.home,
+   904→            oddsDraw: b.draw,
+   905→            oddsAway: b.away,
+   906→            oddsOver25: b.over25 ?? odds.oddsOver25,
+   907→            oddsUnder25: b.under25 ?? odds.oddsUnder25,
+   908→            oddsCornersOver95: fairOdds(0.45, 1.08),
+   909→            oddsCornersUnder95: fairOdds(0.55, 1.08),
+   910→          },
+   911→        });
+   912→      }
+   913→    } else if (!keepLiveOdds) {
+   914→      // v6.0 قانون طلایی: بدون بوک‌میکر واقعی، هیچ ردیف ضریب ساختگی ساخته نمی‌شود —
+   915→      // خط فعال سیستم = «ضریب عادلانه مدل کمّی (پیش از بازگشایی خط بوک‌میکر)» با برچسب شفاف
+   916→      await db.oddsRecord.deleteMany({ where: { matchId: row.id } });
+   917→    }
+   918→  }
+   919→
+   920→  sources.push({
+   921→    key: "odds",
+   922→    label: "The Odds API v4",
+   923→    ok: oddsUsed ? oddsApiMatched > 0 : cache.oddsSyncAt > 0,
+   924→    detail: oddsUsed
+   925→      ? `${oddsApiMatched} بازی با ضرایب زنده بوک‌میکرها جایگزین شد${cache.oddsCreditsRemaining !== null ? ` · اعتبار باقی‌مانده: ${cache.oddsCreditsRemaining}` : ""}`
+   926→      : oddsThrottled
+   927→        ? "بدلیل محدودیت پلن رایگان در بازه ۱۲ دقیقه — از ضرایب قبلی استفاده شد"
+   928→        : "کلید وارد نشده — خط پایه ESPN/مدل استفاده می‌شود",
+   929→    latencyMs: 0,
+   930→  });
+   931→
+   932→  const newsList = cache.news;
+   933→  sources.push({
+   934→    key: "news",
+   935→    label: "ESPN Live News",
+   936→    ok: newsList.length > 0,
+   937→    detail: `${newsList.length} تیتر زنده`,
+   938→    latencyMs: 0,
+   939→  });
+   940→  sources.push({
+   941→    key: "reverse-poisson",
+   942→    label: "Reverse-Poisson λ Solver (v9.0)",
+   943→    ok: marketSolvedCount > 0,
+   944→    detail:
+   945→      marketSolvedCount > 0
+   946→        ? `${marketSolvedCount} بازی با حل معکوس پواسون — λ ترکیبی = ۶۵٪ بازار + ۳۵٪ آمار فصل`
+   947→        : "خط بازار واقعی در دسترس نبود — مسیر STATS_ONLY (صدور کارت ممنوع v22)",
+   948→    latencyMs: 0,
+   949→  });
+   950→  // ═══ v22.0 — نبض بازار آزاد Polymarket ═══
+   951→  sources.push({
+   952→    key: "polymarket",
+   953→    label: "Polymarket Gamma (Zero-Vig) — v22.0",
+   954→    ok: polyMatched > 0,
+   955→    detail:
+   956→      polyMatched > 0
+   957→        ? `${polyMatched} بازی با خط بدون کارمزد بازار آزاد ترکیب شد`
+   958→        : "تطبیق بازی‌های امروز در بازار Polymarket یافت نشد",
+   959→    latencyMs: 0,
+   960→  });
+   961→  // ═══ v22.0 — نبض اندپوینت مستقیم ESPN Core Odds ═══
+   962→  sources.push({
+   963→    key: "espn-core-odds",
+   964→    label: "ESPN Core Odds — v22.0 (Bet365/Unibet/William Hill)",
+   965→    ok: espnCoreOddsCount > 0,
+   966→    detail:
+   967→      espnCoreOddsCount > 0
+   968→        ? `${espnCoreOddsCount} بازی با خط مستقیم بوک‌میکرهای ESPN Core تقویت شد`
+   969→        : "هیچ رویدادی هنوز خط ESPN Core نداشت (بوک‌میکرها خط را باز نکرده‌اند) — قانون آهنین: کارت صادر نمی‌شود",
+   970→    latencyMs: 0,
+   971→  });
+   972→  sources.push({
+   973→    key: "weather",
+   974→    label: "Open-Meteo",
+   975→    ok: weatherAdjustedCount > 0 || weatherMap.size > 0,
+   976→    detail: `${weatherMap.size} ورزشگاه · تعدیل جوی روی ${weatherAdjustedCount} بازی`,
+   977→    latencyMs: 0,
+   978→  });
+   979→
+   980→  // ─── v6.0 — پاک‌سازی ردیف‌های ESPN میراث v5 (بدون سند راستی‌آزمایی جدول فصل) ───
+   981→  // هر ردیفی که در سینک جاری بازسازی نشده و statsSource ندارد، داده کهنهٔ پیش از v6 است
+   982→  // و طبق قانون طلایی Zero-Mock از دید کاربر خارج می‌شود.
+   983→  const legacyLeftovers = await db.match.updateMany({
+   984→    where: { dataSource: "ESPN", status: { in: ["UPCOMING", "ANALYZED"] }, statsSource: null },
+   985→    data: { status: "ARCHIVED" },
+   986→  });
+   987→
+   988→  // ─── ۴) کالیبراسیون با نتایج واقعی دیروز و امروز ───
+   989→  let calibratedCount = 0;
+   990→  try {
+   991→    const yesterday = await fetchEspnEvents(-2, 0);
+   992→    for (const ev of yesterday) {
+   993→      if (ev.statusState !== "post" || ev.homeScore === null || ev.awayScore === null) continue;
+   994→      const existing = await db.match.findUnique({ where: { externalId: ev.externalId } });
+   995→      if (!existing) continue;
+   996→      await db.match.update({
+   997→        where: { id: existing.id },
+   998→        data: { homeGoals: ev.homeScore, awayGoals: ev.awayScore, status: "FINISHED" },
+   999→      });
+  1000→      const label = `${ev.homeTeam} ${ev.homeScore}−${ev.awayScore} ${ev.awayTeam}`;
+  1001→      const before = await db.calibrationLog.count({ where: { matchLabel: label } });
+  1002→      await logCalibrationFor(existing.id, label, existing.league, ev.homeScore, ev.awayScore);
+  1003→      const after = await db.calibrationLog.count({ where: { matchLabel: label } });
+  1004→      if (after > before) calibratedCount += 1;
+  1005→    }
+  1006→  } catch (err) {
+  1007→    console.warn("real-result calibration failed:", err);
+  1008→  }
+  1009→
+  1010→  // ─── ۴.۵) v7.0 — تسویه خودکار کارت‌های کارنامه با نتایج FT واقعی ESPN ───
+  1011→  // به محض تغییر وضعیت بازی در ESPN به FT، تیپ A/B به‌صورت ۱۰۰٪ خودکار تسویه
+  1012→  // و اعلام تلگرام (تصویر جام/رختکن) انجام می‌شود — بدون کلیک کاربر.
+  1013→  try {
+  1014→    const { autoSettleInBackground } = await import("./liveDataService");
+  1015→    await autoSettleInBackground();
+  1016→  } catch (err) {
+  1017→    console.warn("auto-settle background failed:", err);
+  1018→  }
+  1019→
+  1020→  // ─── ۴.۶) v9.0 — Zero-Click Multi-Day Auto-Settlement ───
+  1021→  // ثبت و تسویه‌حساب ۱۰۰٪ خودکار بازی‌های تمام‌شده ۳ روز اخیر + بازی‌های امروز
+  1022→  // تاییدشده سوپروایزر (PENDING 🔒) — بدون نیاز به کلیک کاربر (throttle داخلی ۱۰ دقیقه)
+  1023→  try {
+  1024→    const { autoSyncPastAndPresentMatches } = await import("./auto-issue");
+  1025→    await autoSyncPastAndPresentMatches({ notify: true });
+  1026→  } catch (err) {
+  1027→    console.warn("auto past/present sync failed:", err);
+  1028→  }
+  1029→
+  1030→  // ─── ۴.۷) v9.0 — صف ارسال خودکار فقط-کارت‌های-تایید-سوپروایزر به تلگرام ───
+  1031→  // پست پیش از بازی (کارت تایید) + پست تسویه FT + گزارش وین‌ریت کانال
+  1032→  // Dedupe با پرچم‌های تلگرام — ارسال تکراری صفر (سوییچ پیش‌فرض: روشن)
+  1033→  try {
+  1034→    const { autoDispatchApprovedSlips } = await import("./telegram-service");
+  1035→    await autoDispatchApprovedSlips();
+  1036→  } catch (err) {
+  1037→    console.warn("auto telegram dispatch failed:", err);
+  1038→  }
+  1039→
+  1040→  // ─── ۵) آرشیو: بازی‌های گذشته زنده + دیتای mock وقتی فید زنده پوشش می‌دهد ───
+  1041→  const cutoff = new Date(now - 3 * 3600_000);
+  1042→  const stale = await db.match.updateMany({
+  1043→    where: { dataSource: "ESPN", kickoff: { lt: cutoff }, status: { in: ["UPCOMING", "ANALYZED", "LIVE"] } },
+  1044→    data: { status: "ARCHIVED" },
+  1045→  });
+  1046→  // FINISHED های قدیمی هم آرشیو شوند (نتیجه و لاگ بریر ثبت شده است)
+  1047→  const finCutoff = new Date(now - 26 * 3600_000);
+  1048→  await db.match.updateMany({
+  1049→    where: { status: "FINISHED", kickoff: { lt: finCutoff } },
+  1050→    data: { status: "ARCHIVED" },
+  1051→  });
+  1052→
+  1053→  const liveTotal = liveUpcoming + liveInPlay;
+  1054→  if (liveTotal >= 4) {
+  1055→    await db.match.updateMany({ where: { dataSource: "SEED" }, data: { status: "ARCHIVED" } });
+  1056→  }
+  1057→
+  1058→  const payload: LiveFeedDTO = {
+  1059→    success: espnEvents.length > 0 || liveTotal > 0,
+  1060→    mode: liveTotal > 0 ? "LIVE" : "FALLBACK",
+  1061→    lastSyncAt: Date.now(),
+  1062→    matchesLive: liveTotal,
+  1063→    matchesUpcoming: liveUpcoming,
+  1064→    matchesInPlay: liveInPlay,
+  1065→    news: newsList.slice(0, 14),
+  1066→    sources,
+  1067→    odds: {
+  1068→      used: oddsUsed,
+  1069→      creditsRemaining: cache.oddsCreditsRemaining,
+  1070→      lastOddsSyncAt: cache.oddsSyncAt || null,
+  1071→      throttled: oddsThrottled,
+  1072→    },
+  1073→    weatherAdjusted: weatherAdjustedCount,
+  1074→    calibrated: calibratedCount,
+  1075→    archived: stale.count + legacyLeftovers.count,
+  1076→    elapsedMs: Date.now() - t0,
+  1077→  };
+  1078→
+  1079→  cache.payload = payload;
+  1080→  cache.fetchedAt = Date.now();
+  1081→  return payload;
+  1082→}
+  1083→
+  1084→// ═════════════════════ API عمومی ماژول ═════════════════════
+  1085→
+  1086→/** دریافت فید زنده با کش ۹۰ ثانیه‌ای — بدون هزینه Odds API */
+  1087→export async function getLiveFeed(): Promise<LiveFeedDTO> {
+  1088→  if (cache.payload && Date.now() - cache.fetchedAt < FEED_TTL_MS) {
+  1089→    return cache.payload;
+  1090→  }
+  1091→  if (cache.inFlight) return cache.inFlight;
+  1092→  cache.inFlight = runSync({}).finally(() => {
+  1093→    cache.inFlight = null;
+  1094→  });
+  1095→  return cache.inFlight;
+  1096→}
+  1097→
+  1098→/** همگام‌سازی اجباری — دکمه 🔄 (با اجازه Odds API برای ضرایب زنده) */
+  1099→export async function forceSync(opts: SyncOptions): Promise<LiveFeedDTO> {
+  1100→  return runSync({ ...opts, force: true });
+  1101→}
+  1102→
+  1103→/**
+  1104→ * اخبار زنده مرتبط با دو تیم یک بازی — برای الصاق به استدلال ایجنت گاو/خرس.
+  1105→ * اگر کش خبری خالی/کهنه باشد، یک‌بار واکشی سبک انجام می‌شود.
+  1106→ */
+  1107→export async function getNewsForTeams(homeTeam: string, awayTeam: string): Promise<LiveNewsItem[]> {
+  1108→  if (!cache.news || Date.now() - cache.newsAt > NEWS_TTL_MS) {
+  1109→    try {
+  1110→      const n = await fetchEspnNews();
+  1111→      cache.news = n;
+  1112→      cache.newsAt = Date.now();
+  1113→    } catch {
+  1114→      // بی‌خیال — اخبار اختیاری است
+  1115→    }
+  1116→  }
+  1117→  const h = normTeam(homeTeam);
+  1118→  const a = normTeam(awayTeam);
+  1119→  const tokensH = h.split(" ").filter((t) => t.length > 2);
+  1120→  const tokensA = a.split(" ").filter((t) => t.length > 2);
+  1121→  return cache.news
+  1122→    .filter((n) => {
+  1123→      const text = `${n.headline} ${n.description}`.toLowerCase();
+  1124→      const hitH = tokensH.some((t) => text.includes(t));
+  1125→      const hitA = tokensA.some((t) => text.includes(t));
+  1126→      return hitH || hitA;
+  1127→    })
+  1128→    .slice(0, 4);
+  1129→}
+  1130→

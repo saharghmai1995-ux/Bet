@@ -1,0 +1,600 @@
+     1→// ─────────────────────────────────────────────────────────────────────────────
+     2→// ارائه‌دهنده‌های ضرایب رایگان — Free Live Odds Providers (v5.0)
+     3→//
+     4→// ۱) ESPN Core API (بدون کلید): ضرایب بوک‌میکرها + احتمالات زنده Analytics
+     5→// ۲) Polymarket Gamma (بدون کلید): ضرایب Zero-Vig بازار پیش‌بینی آزاد
+     6→// ۳) The Odds API v4 (کلید رایگان ۵۰۰/ماه): بوک‌میکرهای حرفه‌ای
+     7→// ۴) Odds-API.io (کلید رایگان ۱۰۰/ساعت): ۴۵۰+ بوک‌میکر شامل Pinnacle
+     8→// ۵) Football-Data.co.uk (بدون کلید): مخزن CSV خطوط افتتاحیه/پایانی پیناکل برای بک‌تست CLV
+     9→//
+    10→// همه پروب‌ها با کش ۵ دقیقه‌ای — ضد Rate-Limit.
+    11→// ─────────────────────────────────────────────────────────────────────────────
+    12→
+    13→import type { OddsComparisonRowDTO, OddsSourceStatusDTO } from "@/lib/types";
+    14→
+    15→// ═════════════════════ ابزارها ═════════════════════
+    16→
+    17→/** تبدیل ضریب آمریکایی (+150 / −120) به ضریب اعشاری استاندارد */
+    18→export function americanToDecimal(americanOdds: number): number {
+    19→  if (!americanOdds || Number.isNaN(americanOdds)) return 0;
+    20→  return americanOdds > 0
+    21→    ? Number((americanOdds / 100 + 1).toFixed(2))
+    22→    : Number((100 / Math.abs(americanOdds) + 1).toFixed(2));
+    23→}
+    24→
+    25→async function fetchJson(url: string, timeoutMs = 8000): Promise<{ ok: boolean; status: number; data: unknown; headers: Headers }> {
+    26→  const ctrl = new AbortController();
+    27→  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    28→  try {
+    29→    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store", headers: { Accept: "application/json" } });
+    30→    const data = await res.json().catch(() => null);
+    31→    return { ok: res.ok, status: res.status, data, headers: res.headers };
+    32→  } finally {
+    33→    clearTimeout(t);
+    34→  }
+    35→}
+    36→
+    37→async function fetchText(url: string, timeoutMs = 12000): Promise<{ ok: boolean; status: number; text: string }> {
+    38→  const ctrl = new AbortController();
+    39→  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    40→  try {
+    41→    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
+    42→    const text = await res.text();
+    43→    return { ok: res.ok, status: res.status, text };
+    44→  } finally {
+    45→    clearTimeout(t);
+    46→  }
+    47→}
+    48→
+    49→const num = (v: unknown): number | null => {
+    50→  const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
+    51→  return Number.isFinite(n) ? n : null;
+    52→};
+    53→
+    54→/** عبارت American یا Decimal → Decimal */
+    55→function toDecimal(v: unknown): number | null {
+    56→  if (v === null || v === undefined) return null;
+    57→  if (typeof v === "number") return v > 1 ? v : null;
+    58→  const s = String(v).trim();
+    59→  if (s.startsWith("+") || s.startsWith("−") || s.startsWith("-")) {
+    60→    const d = americanToDecimal(Math.abs(parseFloat(s.replace("−", "-"))));
+    61→    return d > 1 ? d : null;
+    62→  }
+    63→  const n = parseFloat(s);
+    64→  return Number.isFinite(n) && n > 1 ? n : null;
+    65→}
+    66→
+    67→// ═════════════════════ ۱) ESPN Core ═════════════════════
+    68→
+    69→/** externalId با قالب espn-<slug>-<eventId> → دو جزء آن */
+    70→export function parseEspnExternalId(externalId: string | null | undefined): { slug: string; eventId: string } | null {
+    71→  if (!externalId || !externalId.startsWith("espn-")) return null;
+    72→  const parts = externalId.split("-");
+    73→  if (parts.length < 3) return null;
+    74→  const eventId = parts[parts.length - 1];
+    75→  const slug = parts.slice(1, -1).join("-");
+    76→  return slug && eventId ? { slug, eventId } : null;
+    77→}
+    78→
+    79→const ESPN_PROVIDER_NAMES: Record<string, string> = {
+    80→  "2000": "Bet365",
+    81→  "31": "William Hill",
+    82→  "36": "Unibet",
+    83→  "38": "Caesars",
+    84→  "19": "DraftKings",
+    85→  "45": "BetMGM",
+    86→  "47": "FanDuel",
+    87→};
+    88→
+    89→export interface EspnCoreOdds {
+    90→  bookmakers: { id: string; name: string; home: number | null; draw: number | null; away: number | null; ouLine: number | null; over: number | null; under: number | null }[];
+    91→  probabilities: { home: number | null; draw: number | null; away: number | null } | null;
+    92→}
+    93→
+    94→/** ضرایب + احتمالات زنده ESPN Core برای یک رویداد (بدون کلید) */
+    95→export async function fetchEspnCoreOdds(slug: string, eventId: string): Promise<EspnCoreOdds | null> {
+    96→  const base = `https://sports.core.api.espn.com/v2/sports/soccer/leagues/${slug}/events/${eventId}/competitions/${eventId}`;
+    97→  const [oddsRes, probRes] = await Promise.all([
+    98→    fetchJson(`${base}/odds`).catch(() => null),
+    99→    fetchJson(`${base}/probabilities`).catch(() => null),
+   100→  ]);
+   101→
+   102→  let bookmakers: EspnCoreOdds["bookmakers"] = [];
+   103→  const oddsData = oddsRes?.data as { items?: Record<string, unknown>[] } | null;
+   104→  if (oddsData && Array.isArray(oddsData.items)) {
+   105→    bookmakers = oddsData.items.map((item) => {
+   106→      const provider = item.provider as { id?: string | number; name?: string } | undefined;
+   107→      const ml = item.moneyline as { home?: Record<string, unknown>; away?: Record<string, unknown>; draw?: Record<string, unknown> } | undefined;
+   108→      const ou = item.overUnder as { line?: unknown; over?: Record<string, unknown>; under?: Record<string, unknown> } | undefined;
+   109→      const pick = (o?: Record<string, unknown>) => toDecimal(o?.american ?? o?.decimal ?? o?.value);
+   110→      return {
+   111→        id: String(provider?.id ?? ""),
+   112→        name: provider?.name ?? ESPN_PROVIDER_NAMES[String(provider?.id ?? "")] ?? `Provider ${provider?.id ?? "?"}`,
+   113→        home: pick(ml?.home),
+   114→        draw: pick(ml?.draw),
+   115→        away: pick(ml?.away),
+   116→        ouLine: num(ou?.line),
+   117→        over: pick(ou?.over),
+   118→        under: pick(ou?.under),
+   119→      };
+   120→    }).filter((b) => b.home !== null || b.away !== null || b.over !== null);
+   121→  }
+   122→
+   123→  let probabilities: EspnCoreOdds["probabilities"] = null;
+   124→  const probData = probRes?.data as { items?: Record<string, unknown>[]; statistics?: Record<string, unknown>[] } | null;
+   125→  const probItems = probData?.items ?? probData?.statistics ?? [];
+   126→  if (Array.isArray(probItems) && probItems.length > 0) {
+   127→    const first = probItems[0] as { homeTeamProbability?: { winPercentage?: unknown }; awayTeamProbability?: { winPercentage?: unknown }; drawPercentage?: unknown; tiePercentage?: unknown };
+   128→    const home = num(first?.homeTeamProbability?.winPercentage);
+   129→    const away = num(first?.awayTeamProbability?.winPercentage);
+   130→    const draw = num(first?.drawPercentage ?? first?.tiePercentage);
+   131→    if (home !== null && away !== null) {
+   132→      const s = (home + away + (draw ?? 0)) / 100 || 1;
+   133→      probabilities = { home: home / 100 / s, away: away / 100 / s, draw: (draw ?? 0) / 100 / s };
+   134→    }
+   135→  }
+   136→
+   137→  if (bookmakers.length === 0 && !probabilities) return null;
+   138→  return { bookmakers, probabilities };
+   139→}
+   140→
+   141→// ═════════════════════ ۲) Polymarket Gamma ═════════════════════
+   142→
+   143→const POLYMARKET_URL = "https://gamma-api.polymarket.com/events?active=true&closed=false&tag_slug=soccer&limit=30";
+   144→
+   145→interface PolyRow { title: string; home: string | null; draw: string | null; away: string | null; question: string }
+   146→
+   147→function normTokens(s: string): string[] {
+   148→  return s
+   149→    .toLowerCase()
+   150→    .replace(/\b(fc|cf|sc|ac|as|afc|cfc|united|city)\b/g, " ")
+   151→    .split(/[^a-z0-9]+/)
+   152→    .filter((t) => t.length > 2);
+   153→}
+   154→
+   155→function teamMatch(team: string, candidate: string): boolean {
+   156→  const tt = normTokens(team);
+   157→  const ct = normTokens(candidate);
+   158→  if (tt.length === 0 || ct.length === 0) return false;
+   159→  return tt.some((t) => ct.includes(t)) || ct.some((c) => tt.includes(c));
+   160→}
+   161→
+   162→/** قیمت‌های بدون کارمزد بازار پیش‌بینی Polymarket — با تطبیق فازی نام تیم‌ها */
+   163→export async function fetchPolymarketSoccer(homeTeam: string, awayTeam: string): Promise<PolyRow[]> {
+   164→  const res = await fetchJson(POLYMARKET_URL).catch(() => null);
+   165→  const data = res?.data as { title?: string; markets?: { question?: string; outcomes?: string; outcomePrices?: string }[] }[] | null;
+   166→  if (!Array.isArray(data)) return [];
+   167→  const rows: PolyRow[] = [];
+   168→  for (const ev of data) {
+   169→    for (const mk of ev.markets ?? []) {
+   170→      let outcomes: string[] = [];
+   171→      let prices: string[] = [];
+   172→      try { outcomes = JSON.parse(mk.outcomes ?? "[]"); } catch { continue; }
+   173→      try { prices = JSON.parse(mk.outcomePrices ?? "[]"); } catch { continue; }
+   174→      if (outcomes.length < 2 || prices.length < 2) continue;
+   175→      // دوبی/سه‌تایی: نام تیم‌ها معمولا خود outcomes هستند
+   176→      let home: string | null = null;
+   177→      let draw: string | null = null;
+   178→      let away: string | null = null;
+   179→      for (let i = 0; i < outcomes.length; i++) {
+   180→        const price = parseFloat(prices[i]);
+   181→        if (!Number.isFinite(price) || price <= 0.01 || price >= 0.99) continue;
+   182→        const odds = (1 / price).toFixed(2);
+   183→        if (outcomes[i].toLowerCase() === "draw") draw = odds;
+   184→        else if (teamMatch(homeTeam, outcomes[i])) home = odds;
+   185→        else if (teamMatch(awayTeam, outcomes[i])) away = odds;
+   186→      }
+   187→      if (home || away) {
+   188→        rows.push({ title: ev.title ?? "", question: mk.question ?? "", home, draw, away });
+   189→      }
+   190→    }
+   191→  }
+   192→  return rows;
+   193→}
+   194→
+   195→// ═════════════════════ ۳) The Odds API v4 — وضعیت و اعتبار ═════════════════════
+   196→
+   197→export async function probeTheOddsApi(key: string): Promise<{ ok: boolean; detail: string; remaining: number | null }> {
+   198→  if (!key) return { ok: false, detail: "کلید وارد نشده", remaining: null };
+   199→  const res = await fetchJson(`https://api.the-odds-api.com/v4/sports/?apiKey=${encodeURIComponent(key)}`).catch(() => null);
+   200→  if (!res) return { ok: false, detail: "شبکه در دسترس نیست", remaining: null };
+   201→  const remaining = num(res.headers.get("x-requests-remaining"));
+   202→  if (res.ok) return { ok: true, detail: remaining !== null ? `فعال — اعتبار باقی‌مانده: ${remaining} درخواست` : "فعال", remaining };
+   203→  if (res.status === 401 || res.status === 422) return { ok: false, detail: "کلید نامعتبر یا منقضی", remaining };
+   204→  if (res.status === 429) return { ok: false, detail: "سهمیه ماهانه تمام شده", remaining };
+   205→  return { ok: false, detail: `خطای HTTP ${res.status}`, remaining };
+   206→}
+   207→
+   208→// ═════════════════════ ۴) Odds-API.io — وضعیت ═════════════════════
+   209→
+   210→export async function probeOddsApiIo(key: string): Promise<{ ok: boolean; detail: string }> {
+   211→  if (!key) return { ok: false, detail: "کلید وارد نشده — رایگان ۱۰۰ درخواست/ساعت از ۴۵۰ بوک‌میکر" };
+   212→  const res = await fetchJson(`https://odds-api.io/api/v1/sports?apiKey=${encodeURIComponent(key)}`).catch(() => null);
+   213→  if (!res) return { ok: false, detail: "شبکه در دسترس نیست" };
+   214→  if (res.ok) return { ok: true, detail: "فعال — ۴۵۰+ بوک‌میکر شامل پیناکل و 1xBet" };
+   215→  if (res.status === 401 || res.status === 403) return { ok: false, detail: "کلید نامعتبر" };
+   216→  return { ok: false, detail: `خطای HTTP ${res.status}` };
+   217→}
+   218→
+   219→// ═════════════════════ ۵) Football-Data.co.uk — CSV پیناکل ═════════════════════
+   220→
+   221→export interface FootballDataRow {
+   222→  date: string;
+   223→  homeTeam: string;
+   224→  awayTeam: string;
+   225→  fthg: number | null;
+   226→  ftag: number | null;
+   227→  psh: number | null;
+   228→  psd: number | null;
+   229→  psa: number | null;
+   230→  pOver25: number | null;
+   231→  pUnder25: number | null;
+   232→}
+   233→
+   234→const FOOTBALL_DATA_LEAGUES: Record<string, { file: string; name: string }> = {
+   235→  E0: { file: "E0", name: "لیگ برتر انگلیس" },
+   236→  SP1: { file: "SP1", name: "لالیگا اسپانیا" },
+   237→  I1: { file: "I1", name: "سری آ ایتالیا" },
+   238→  D1: { file: "D1", name: "بوندسلیگا آلمان" },
+   239→  F1: { file: "F1", name: "لیگ ۱ فرانسه" },
+   240→};
+   241→
+   242→function currentSeason(): string[] {
+   243→  const now = new Date();
+   244→  const y = now.getFullYear();
+   245→  const yy = now.getMonth() >= 6 ? y : y - 1; // از جولای فصل جدید
+   246→  const s = `${yy}`.slice(2);
+   247→  const s2 = `${yy + 1}`.slice(2);
+   248→  return [`${s}${s2}`, `${Number(s) - 1}${s}`];
+   249→}
+   250→
+   251→/** پارس CSV فوتبال‌دیتا: خطوط PSH/PSD/PSA/P>2.5/P<2.5 پیناکل */
+   252→export async function fetchFootballDataOdds(league = "E0", limit = 12): Promise<{ leagueName: string; season: string; rows: FootballDataRow[] } | null> {
+   253→  const meta = FOOTBALL_DATA_LEAGUES[league] ?? FOOTBALL_DATA_LEAGUES.E0;
+   254→  for (const season of currentSeason()) {
+   255→    const res = await fetchText(`https://www.football-data.co.uk/mmz4281/${season}/${meta.file}.csv`).catch(() => null);
+   256→    if (!res || !res.ok || res.text.length < 100) continue;
+   257→    const lines = res.text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+   258→    if (lines.length < 5) continue;
+   259→    // حذف BOM ابتدای فایل CSV
+   260→    const header = lines[0].replace(/^\uFEFF/, "").split(",");
+   261→    const idx = (name: string) => header.findIndex((h) => h.trim().toUpperCase() === name);
+   262→    const iDiv = idx("DIV");
+   263→    const iDate = idx("DATE");
+   264→    const iHome = idx("HOMETEAM");
+   265→    const iAway = idx("AWAYTEAM");
+   266→    const iFthg = idx("FTHG");
+   267→    const iFtag = idx("FTAG");
+   268→    const iPsh = idx("PSH");
+   269→    const iPsd = idx("PSD");
+   270→    const iPsa = idx("PSA");
+   271→    const iOver = idx("P>2.5");
+   272→    const iUnder = idx("P<2.5");
+   273→    if (iHome < 0 || iAway < 0 || iPsh < 0) continue;
+   274→    const rows: FootballDataRow[] = [];
+   275→    for (let i = lines.length - 1; i >= 1 && rows.length < limit; i--) {
+   276→      const c = lines[i].split(",");
+   277→      if (c.length < header.length - 3) continue;
+   278→      if (iDiv >= 0 && c[iDiv] !== meta.file) continue;
+   279→      // فقط بازی‌هایی که خط پیناکل (PSH) منتشر شده — هدف فید، بک‌تست CLV است
+   280→      const pshRaw = iPsh >= 0 ? (c[iPsh] ?? "").trim() : "";
+   281→      if (!pshRaw) continue;
+   282→      const pickN = (v: string | undefined) => {
+   283→        const n = parseFloat((v ?? "").trim());
+   284→        return Number.isFinite(n) && n > 1 ? n : null;
+   285→      };
+   286→      rows.push({
+   287→        date: (c[iDate] ?? "").trim(),
+   288→        homeTeam: (c[iHome] ?? "").trim(),
+   289→        awayTeam: (c[iAway] ?? "").trim(),
+   290→        fthg: iFthg >= 0 ? parseInt(c[iFthg]) || null : null,
+   291→        ftag: iFtag >= 0 ? parseInt(c[iFtag]) || null : null,
+   292→        psh: pickN(c[iPsh]),
+   293→        psd: pickN(c[iPsd]),
+   294→        psa: pickN(c[iPsa]),
+   295→        pOver25: iOver >= 0 ? pickN(c[iOver]) : null,
+   296→        pUnder25: iUnder >= 0 ? pickN(c[iUnder]) : null,
+   297→      });
+   298→    }
+   299→    if (rows.length > 0) return { leagueName: meta.name, season, rows };
+   300→  }
+   301→  return null;
+   302→}
+   303→
+   304→// ═════════════════════ پروب جامع ۵ منبع (کش ۵ دقیقه) ═════════════════════
+   305→
+   306→interface ProbeCache {
+   307→  at: number;
+   308→  payload: OddsSourceStatusDTO[];
+   309→}
+   310→let probeCache: ProbeCache | null = null;
+   311→const PROBE_TTL_MS = 5 * 60_000;
+   312→
+   313→export async function probeOddsSources(opts: { oddsApiKey?: string; oddsApiIoKey?: string; force?: boolean }): Promise<OddsSourceStatusDTO[]> {
+   314→  if (!opts.force && probeCache && Date.now() - probeCache.at < PROBE_TTL_MS) return probeCache.payload;
+   315→
+   316→  const t0 = Date.now();
+   317→  const [espn, poly, oddsApi, oddsIo, fd] = await Promise.all([
+   318→    (async (): Promise<OddsSourceStatusDTO> => {
+   319→      const t = Date.now();
+   320→      try {
+   321→        const core = await fetchEspnCoreOdds("eng.1", "0"); // endpoint بدون رویداد → 404 قابل تشخیص
+   322→        void core;
+   323→        // پروب واقعی: یک رویداد واقعی از اسکوربورد امروز
+   324→        const sb = await fetchJson("https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard").catch(() => null);
+   325→        const events = (sb?.data as { events?: { id: string }[] } | null)?.events ?? [];
+   326→        if (events.length > 0) {
+   327→          const core2 = await fetchEspnCoreOdds("eng.1", events[0].id);
+   328→          const books = core2?.bookmakers.length ?? 0;
+   329→          return {
+   330→            key: "ESPN_CORE",
+   331→            label: "ESPN Core Odds + Analytics",
+   332→            ok: books > 0 || Boolean(core2?.probabilities),
+   333→            detail: books > 0 ? `فعال — ${books} بوک‌میکر در رویداد زنده` : core2?.probabilities ? "فعال — احتمالات Analytics زنده" : "اسکوربورد فعال — هنوز رویداد دارای ضریب نیست",
+   334→            latencyMs: Date.now() - t,
+   335→            keyRequired: false,
+   336→            keyPresent: true,
+   337→            signupUrl: "https://gist.github.com/nntrn/ee26cb2a0716de0947a0a4e9a157bc1c",
+   338→            docsUrl: "https://github.com/pseudo-r/Public-ESPN-API/blob/main/docs/sports/soccer.md",
+   339→            oddsCount: books,
+   340→          };
+   341→        }
+   342→        return {
+   343→          key: "ESPN_CORE", label: "ESPN Core Odds + Analytics", ok: Boolean(sb?.ok),
+   344→          detail: sb?.ok ? "فعال (اسکوربورد) — رویداد دارای ضریب یافت نشد" : "پاسخ نگرفت",
+   345→          latencyMs: Date.now() - t, keyRequired: false, keyPresent: true,
+   346→          signupUrl: "https://gist.github.com/nntrn/ee26cb2a0716de0947a0a4e9a157bc1c",
+   347→          docsUrl: "https://github.com/pseudo-r/Public-ESPN-API/blob/main/docs/sports/soccer.md", oddsCount: 0,
+   348→        };
+   349→      } catch {
+   350→        return { key: "ESPN_CORE", label: "ESPN Core Odds + Analytics", ok: false, detail: "خطای شبکه", latencyMs: Date.now() - t, keyRequired: false, keyPresent: true, signupUrl: "", docsUrl: "", oddsCount: 0 };
+   351→      }
+   352→    })(),
+   353→    (async (): Promise<OddsSourceStatusDTO> => {
+   354→      const t = Date.now();
+   355→      try {
+   356→        const res = await fetchJson(POLYMARKET_URL).catch(() => null);
+   357→        const evs = Array.isArray(res?.data) ? (res?.data as unknown[]).length : 0;
+   358→        return {
+   359→          key: "POLYMARKET",
+   360→          label: "Polymarket Gamma (Zero-Vig)",
+   361→          ok: evs > 0,
+   362→          detail: evs > 0 ? `فعال — ${evs} رویداد فوتبال با قیمت بدون کارمزد بازار آزاد` : "پاسخ نگرفت",
+   363→          latencyMs: Date.now() - t,
+   364→          keyRequired: false,
+   365→          keyPresent: true,
+   366→          signupUrl: "https://gamma-api.polymarket.com/events?active=true&closed=false&tag_slug=soccer&limit=30",
+   367→          docsUrl: "https://oddspapi.io/blog/polymarket-api-gamma-clob-json-format",
+   368→          oddsCount: evs,
+   369→        };
+   370→      } catch {
+   371→        return { key: "POLYMARKET", label: "Polymarket Gamma (Zero-Vig)", ok: false, detail: "خطای شبکه", latencyMs: Date.now() - t, keyRequired: false, keyPresent: true, signupUrl: "", docsUrl: "", oddsCount: 0 };
+   372→      }
+   373→    })(),
+   374→    (async (): Promise<OddsSourceStatusDTO> => {
+   375→      const t = Date.now();
+   376→      const key = opts.oddsApiKey?.trim() || "3c0379d120a8bbd1e4ead8a8c4a7b637";
+   377→      const r = await probeTheOddsApi(key).catch(() => ({ ok: false, detail: "خطای شبکه", remaining: null }));
+   378→      return {
+   379→        key: "THE_ODDS_API", label: "The Odds API v4", ok: r.ok, detail: r.detail,
+   380→        latencyMs: Date.now() - t, keyRequired: true, keyPresent: Boolean(key),
+   381→        signupUrl: "https://the-odds-api.com/liveapi/guides/v4/", docsUrl: "https://the-odds-api.com/liveapi/guides/v4/",
+   382→        oddsCount: r.remaining ?? 0,
+   383→      };
+   384→    })(),
+   385→    (async (): Promise<OddsSourceStatusDTO> => {
+   386→      const t = Date.now();
+   387→      const r = await probeOddsApiIo(opts.oddsApiIoKey?.trim() ?? "").catch(() => ({ ok: false, detail: "خطای شبکه" }));
+   388→      return {
+   389→        key: "ODDS_API_IO", label: "Odds-API.io (۴۵۰+ بوک‌میکر)", ok: r.ok, detail: r.detail,
+   390→        latencyMs: Date.now() - t, keyRequired: true, keyPresent: Boolean(opts.oddsApiIoKey?.trim()),
+   391→        signupUrl: "https://odds-api.io/", docsUrl: "https://github.com/odds-api-io/odds-api-python", oddsCount: 0,
+   392→      };
+   393→    })(),
+   394→    (async (): Promise<OddsSourceStatusDTO> => {
+   395→      const t = Date.now();
+   396→      try {
+   397→        const fd2 = await fetchFootballDataOdds("E0", 3);
+   398→        return {
+   399→          key: "FOOTBALL_DATA", label: "Football-Data.co.uk (بک‌تست CLV)", ok: Boolean(fd2),
+   400→          detail: fd2 ? `فعال — فصل ${fd2.season} با خطوط پیناکل (PSH/PSD/PSA)` : "CSV در دسترس نیست",
+   401→          latencyMs: Date.now() - t, keyRequired: false, keyPresent: true,
+   402→          signupUrl: "https://www.football-data.co.uk/notes.txt", docsUrl: "https://github.com/withqwerty/open-football",
+   403→          oddsCount: fd2?.rows.length ?? 0,
+   404→        };
+   405→      } catch {
+   406→        return { key: "FOOTBALL_DATA", label: "Football-Data.co.uk (بک‌تست CLV)", ok: false, detail: "خطای شبکه", latencyMs: Date.now() - t, keyRequired: false, keyPresent: true, signupUrl: "", docsUrl: "", oddsCount: 0 };
+   407→      }
+   408→    })(),
+   409→  ]);
+   410→
+   411→  const payload = [espn, poly, oddsApi, oddsIo, fd];
+   412→  probeCache = { at: Date.now(), payload };
+   413→  if (Date.now() - t0 > 15_000) probeCache = { at: Date.now() - PROBE_TTL_MS + 60_000, payload }; // پروب کند → زودتر منقضی
+   414→  return payload;
+   415→}
+   416→
+   417→// ═════════════════════ مقایسه ضرایب یک بازی بین منابع ═════════════════════
+   418→
+   419→/**
+   420→ * جدول مقایسه‌ای تب ۲ — v6.0: فقط منابع واقعی با برچسب شفاف منبع داده:
+   421→ * ESPN Core (بوک‌میکرها) ↔ ESPN Analytics ↔ Polymarket (Zero-Vig) ↔ خط فعال سیستم
+   422→ */
+   423→export async function fetchMatchOddsComparison(m: {
+   424→  externalId?: string | null;
+   425→  homeTeam: string;
+   426→  awayTeam: string;
+   427→  oddsHome: number;
+   428→  oddsDraw: number;
+   429→  oddsAway: number;
+   430→  /** v6.0 — منبع خط فعال سیستم برای برچسب شفاف */
+   431→  oddsSource?: string | null;
+   432→}): Promise<{ rows: OddsComparisonRowDTO[]; espnProbabilities: { home: number; draw: number; away: number } | null }> {
+   433→  const rows: OddsComparisonRowDTO[] = [];
+   434→  let espnProbabilities: { home: number; draw: number; away: number } | null = null;
+   435→
+   436→  const parsed = parseEspnExternalId(m.externalId);
+   437→  if (parsed) {
+   438→    const core = await fetchEspnCoreOdds(parsed.slug, parsed.eventId).catch(() => null);
+   439→    if (core) {
+   440→      // بهترین قیمت هر نتیجه بین بوک‌میکرهای ESPN
+   441→      const best = (k: "home" | "draw" | "away") => {
+   442→        let v: number | null = null;
+   443→        let name = "";
+   444→        for (const b of core.bookmakers) {
+   445→          const val = b[k];
+   446→          if (val && (v === null || val > v)) {
+   447→            v = val;
+   448→            name = b.name;
+   449→          }
+   450→        }
+   451→        return { odds: v, book: name };
+   452→      };
+   453→      const h = best("home");
+   454→      const d = best("draw");
+   455→      const a = best("away");
+   456→      if (h.odds || a.odds) {
+   457→        rows.push({
+   458→          source: "ESPN_CORE",
+   459→          sourceLabel: `ESPN Core — بهترین بوک‌میکر (${h.book || a.book || d.book || "—"})`,
+   460→          home: h.odds, draw: d.odds, away: a.odds,
+   461→          note: "تبدیل American→Decimal از sports.core.api (بدون کلید)",
+   462→        });
+   463→      }
+   464→      if (core.probabilities) {
+   465→        const pr = core.probabilities;
+   466→        if (pr.home !== null && pr.draw !== null && pr.away !== null) {
+   467→          espnProbabilities = { home: pr.home, draw: pr.draw, away: pr.away };
+   468→          rows.push({
+   469→            source: "ESPN_ANALYTICS",
+   470→            sourceLabel: "ESPN Analytics Predictor",
+   471→            home: Number((1 / pr.home).toFixed(2)),
+   472→            draw: Number((1 / pr.draw).toFixed(2)),
+   473→            away: Number((1 / pr.away).toFixed(2)),
+   474→            note: "احتمال زنده ESPN → معکوس به ضریب عادلانه",
+   475→          });
+   476→        }
+   477→      }
+   478→    }
+   479→  }
+   480→
+   481→  try {
+   482→    const poly = await fetchPolymarketSoccer(m.homeTeam, m.awayTeam);
+   483→    const hit = poly[0];
+   484→    if (hit) {
+   485→      rows.push({
+   486→        source: "POLYMARKET",
+   487→        sourceLabel: "Polymarket (Zero-Vig)",
+   488→        home: hit.home ? parseFloat(hit.home) : null,
+   489→        draw: hit.draw ? parseFloat(hit.draw) : null,
+   490→        away: hit.away ? parseFloat(hit.away) : null,
+   491→        note: "1/price بازار پیش‌بینی آزاد — بدون حاشیه بوک‌میکر",
+   492→      });
+   493→    }
+   494→  } catch {
+   495→    // منبع اختیاری است
+   496→  }
+   497→
+   498→  // v6.0 — خط فعال سیستم با برچسب شفاف منبع (هیچ بوک‌میکر ساختگی نمایش داده نمی‌شود)
+   499→  const src = m.oddsSource ?? "ENGINE";
+   500→  const baselineLabel =
+   501→    src === "ODDS_API"
+   502→      ? "خط فعال سیستم — بهترین قیمت واقعی The Odds API"
+   503→      : src === "ESPN_DRAFTKINGS"
+   504→        ? "خط فعال سیستم — ESPN/DraftKings"
+   505→        : "ضریب عادلانه مدل کمّی (پیش از بازگشایی خط بوک‌میکر)";
+   506→  rows.push({
+   507→    source: "SYSTEM_BASELINE",
+   508→    sourceLabel: baselineLabel,
+   509→    home: m.oddsHome,
+   510→    draw: m.oddsDraw,
+   511→    away: m.oddsAway,
+   512→    note:
+   513→      src === "ENGINE"
+   514→        ? "تا بازگشایی خط بوک‌میکر، فقط خروجی مدل دیکسون-کولز جدول فصل نمایش داده می‌شود"
+   515→        : "قیمت واقعی ثبت‌شده در آخرین همگام‌سازی زنده",
+   516→  });
+   517→
+   518→  return { rows, espnProbabilities };
+   519→}
+   520→
+   521→// ═══════════ v22.0 — نقشه کش‌شده Polymarket برای ادغام ۱۰۰٪ اتوماتیک در خط لوله زنده ═══════════
+   522→
+   523→/** خط سه‌گانه یک بازار Polymarket (توکن نرمال‌شده دو تیم + ضریب اعشاری) */
+   524→export interface PolyMarketLine {
+   525→  a: string;
+   526→  b: string;
+   527→  oddsA: number;
+   528→  oddsB: number;
+   529→  draw: number | null;
+   530→  question: string;
+   531→}
+   532→
+   533→let polyMapCache: { at: number; map: Map<string, PolyMarketLine> } | null = null;
+   534→
+   535→/**
+   536→ * نقشه کش‌شده (۵ دقیقه) همه بازارهای سه‌گانه Polymarket — بدون کلید.
+   537→ * کلید هر ردیف = توکن نرمال‌شده نام تیم؛ هر بازار دو بار (برای هر دو تیم) ثبت می‌شود.
+   538→ */
+   539→export async function fetchPolymarketMap(ttlMs = 5 * 60_000): Promise<Map<string, PolyMarketLine>> {
+   540→  if (polyMapCache && Date.now() - polyMapCache.at < ttlMs) return polyMapCache.map;
+   541→  const map = new Map<string, PolyMarketLine>();
+   542→  const res = await fetchJson(POLYMARKET_URL).catch(() => null);
+   543→  const data = res?.data as { title?: string; markets?: { question?: string; outcomes?: string; outcomePrices?: string }[] }[] | null;
+   544→  if (Array.isArray(data)) {
+   545→    for (const ev of data) {
+   546→      for (const mk of ev.markets ?? []) {
+   547→        let outcomes: string[] = [];
+   548→        let prices: string[] = [];
+   549→        try { outcomes = JSON.parse(mk.outcomes ?? "[]"); } catch { continue; }
+   550→        try { prices = JSON.parse(mk.outcomePrices ?? "[]"); } catch { continue; }
+   551→        if (outcomes.length < 2 || prices.length < 2) continue;
+   552→        const dec = outcomes.map((o, i) => {
+   553→          const pv = parseFloat(prices[i]);
+   554→          return Number.isFinite(pv) && pv > 0.01 && pv < 0.99 ? Number((1 / pv).toFixed(2)) : null;
+   555→        });
+   556→        const drawIdx = outcomes.findIndex((o) => o.toLowerCase() === "draw");
+   557→        const teamIdx = outcomes
+   558→          .map((o, i) => (i === drawIdx ? null : i))
+   559→          .filter((i): i is number => i !== null && dec[i] !== null);
+   560→        if (teamIdx.length < 2) continue;
+   561→        const [iA, iB] = teamIdx;
+   562→        const line: PolyMarketLine = {
+   563→          a: normTokens(outcomes[iA]).join(" "),
+   564→          b: normTokens(outcomes[iB]).join(" "),
+   565→          oddsA: dec[iA] as number,
+   566→          oddsB: dec[iB] as number,
+   567→          draw: drawIdx >= 0 && dec[drawIdx] !== null ? (dec[drawIdx] as number) : null,
+   568→          question: mk.question ?? "",
+   569→        };
+   570→        if (!line.a || !line.b || line.oddsA <= 1 || line.oddsB <= 1) continue;
+   571→        map.set(line.a, line);
+   572→        map.set(line.b, line);
+   573→      }
+   574→    }
+   575→  }
+   576→  polyMapCache = { at: Date.now(), map };
+   577→  return map;
+   578→}
+   579→
+   580→/** تطبیق فازی یک مسابقه ESPN با بازار Polymarket — خروجی: خط اعشاری 1X2 */
+   581→export function matchPolymarketLine(
+   582→  map: Map<string, PolyMarketLine>,
+   583→  homeTeam: string,
+   584→  awayTeam: string
+   585→): { home: number; draw: number | null; away: number } | null {
+   586→  const hTok = normTokens(homeTeam).join(" ");
+   587→  const aTok = normTokens(awayTeam).join(" ");
+   588→  if (!hTok || !aTok) return null;
+   589→  const line = map.get(hTok) ?? map.get(aTok);
+   590→  if (!line) return null;
+   591→  const fuzzy = (x: string, y: string) => x === y || (x.length > 2 && y.includes(x)) || (y.length > 2 && x.includes(y));
+   592→  const sameMarket = (fuzzy(line.a, hTok) && fuzzy(line.b, aTok)) || (fuzzy(line.a, aTok) && fuzzy(line.b, hTok));
+   593→  if (!sameMarket) return null;
+   594→  const homeIsA = fuzzy(line.a, hTok);
+   595→  const home = homeIsA ? line.oddsA : line.oddsB;
+   596→  const away = homeIsA ? line.oddsB : line.oddsA;
+   597→  if (!(home > 1) || !(away > 1)) return null;
+   598→  return { home, draw: line.draw, away };
+   599→}
+   600→

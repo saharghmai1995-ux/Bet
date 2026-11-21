@@ -922,8 +922,11 @@ export async function issueSlip(
 
   const edgeA = pinA !== null ? priceAdvantage(item.oddsA, pinA) : computeEdge(probA, item.oddsA);
   const edgeB = pinB !== null ? priceAdvantage(item.oddsB, pinB) : computeEdge(probB, item.oddsB);
-  const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MARKET_FAIR") : null;
-  const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MARKET_FAIR") : null;
+  // v24.0 — برچسب صادقانه: وقتی خط شارپ واقعی موجود نیست، مبنا «خط منصفانه مدل خود» است
+  // نه بازار واقعی — MARKET_FAIR قبلی گمراه‌کننده بود (ادعای ارزش +۲۴٪ که در سایت واقعی
+  // وجود نداشت). MODEL_FAIR = ارزش نسبت به خط خود موتور؛ PINNACLE = ارزش نسبت به خط شارپ.
+  const edgeSourceA = edgeA !== null ? (pinA !== null ? "PINNACLE" : "MODEL_FAIR") : null;
+  const edgeSourceB = edgeB !== null ? (pinB !== null ? "PINNACLE" : "MODEL_FAIR") : null;
   const tipKindA: TipKind | null = edgeA !== null ? deriveTipKind((item.legsA ?? []).map((l) => l.key), item.oddsA) : null;
   const tipKindB: TipKind | null = edgeB !== null ? deriveTipKind((item.legsB ?? []).map((l) => l.key), item.oddsB) : null;
   const koMs = new Date(item.match.kickoff).getTime();
@@ -1334,11 +1337,13 @@ export async function getLedger(): Promise<LedgerDTO> {
   // فقط کارت‌های تاییدشده غیربازخوانی تسویه‌شده — هم‌مبنا با stats؛ انتهای منحنی
   // دقیقاً با «سود خالص مجموع» تیتر برابر است (رفع باگ نمایش/محاسبه).
   // v18.0 — کارت‌های تاج نقره‌ای از منحنی طلایی خارج شدند (منحنی مجزای silverHarvest).
+  // v25.0 — کارت‌های نقره‌ای اکنون «پول واقعی منتشرشده» هستند (استیک ۵۰u Half-Kelly،
+  // تایید سوپروایزر، تسویه ESPN) — منحنی «ترکیبی دو کتاب واقعی» ساخته می‌شود تا
+  // انتهای منحنی دقیقاً برابر تیتر بانک ترکیبی هیرو باشد (منبع واحد حقیقت).
   const curveRows = await db.issuedSlip.findMany({
     where: {
       supervisorApproved: true,
       retroIssued: false,
-      crownTier: { not: "SILVER_SHADOW" },
       status: { in: ["WON_A", "WON_B", "DOUBLE_WIN", "MIDDLE_TRAP"] },
       settledAt: { not: null },
     },

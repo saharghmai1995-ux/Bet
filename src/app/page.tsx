@@ -19,6 +19,7 @@ import {
   Sparkles,
   Swords,
   Target,
+  Scale,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +36,9 @@ import { ChannelDirectorTab } from "@/components/app/channel-director";
 import { VipBotTab } from "@/components/app/vip-bot-tab";
 import { CalibrationTab } from "@/components/app/calibration-tab";
 import { BacktestTab } from "@/components/app/backtest-tab";
+import { RealityTab } from "@/components/app/reality-tab";
 import { HeroPerformance } from "@/components/app/hero-performance";
+import { QqlConsole } from "@/components/app/qql-console";
 import { RolloverLadder } from "@/components/app/autopilot/rollover-ladder";
 import { SupervisorRadar } from "@/components/app/fx/supervisor-radar";
 import { useQuantStore } from "@/lib/store";
@@ -64,6 +67,7 @@ const PRO_TABS = [
   { value: "vipbot", label: "🤖 ربات اشتراک VIP", icon: Bot },
   { value: "news", label: "رادار اخبار زنده", icon: Newspaper },
   { value: "calibration", label: "کالیبراسیون", icon: Gauge },
+  { value: "reality", label: "⚖️ راستی‌آزمایی بازار", icon: Scale },
   { value: "engine", label: "موتور احتمالات", icon: Calculator },
   { value: "backtest", label: "بک‌تست و CLV", icon: LineChart },
 ];
@@ -174,28 +178,28 @@ export default function Home() {
     <div className="flex min-h-screen flex-col">
       {/* ─── هدر v3.0 — سوییچ دو حالته + مودال تنظیمات ─── */}
       <header className="sticky top-0 z-40 border-b border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
-          <div className="flex items-center gap-3">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
             <div className="relative flex items-center justify-center size-10 rounded-xl border border-emerald-500/30 bg-emerald-500/10 shadow-[0_0_18px_rgba(16,185,129,0.25)]">
               <Target className="size-5 text-emerald-400" />
               <span className="agent-live-dot absolute -top-0.5 -left-0.5 size-2.5 rounded-full bg-emerald-500" />
             </div>
             <div className="min-w-0">
-              <h1 className="flex items-center gap-2 text-base font-bold leading-tight sm:text-lg">
+              <h1 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-bold leading-tight sm:text-lg">
                 <span dir="ltr">NEOBET QUANT PRO</span>
-                <Badge className="gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
-                  <Sparkles className="size-2.5" /> v19.0 Restore · Orthogonal Dual-Hedge G1/G2/G3 + Strict Positive Overlap Filter @AINEOBET
+                <Badge className="max-w-full gap-1 border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] text-amber-300" variant="outline">
+                  <Sparkles className="size-2.5 shrink-0" /> v24.5 Shadow Ledger Alpha · QQL/RCA Edition @AINEOBET
                 </Badge>
               </h1>
-              <p className="text-[11px] text-muted-foreground sm:text-xs">
-                معماری برنده همپوشانی دوقلو v19.0 (⚖️ G1 فاوریت بالای ۱.۵ تیمی ↔ زیر ۲.۵ · ⚖️ G2 برد میزبان ↔ زیر ۲.۵ · ⚖️ G3 BTTS بله ↔ برد کلین‌شیت) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله ≤ ۱۱.۵٪) + تخصیص نامتقارن ۶۵/۳۵ + سپر استاپ‌لاس دقیقه ۶۵ (−۴۵u) + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson + تسویه خودکار ESPN + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
+              <p className="min-w-0 text-[11px] text-muted-foreground sm:text-xs">
+                ⚛️ حل‌کننده کوانتومی v23.0 (استخر باز ۱۲ آپشن × ۶۶ ترکیب — انتخاب اختصاصی هر بازی با تابع انرژی U و قید همپوشانی مثبت ۰.۸۶۵) + 🔬 موتور QQL/RCA v24.0 (زبان پرس‌وجوی درون‌حافظه‌ای + دوقلوهای K-NN + وتوی تحلیل ریشه‌ای RCA_01/02/03) + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵/۳۵ + خط لوله ESPN · TheSportsDB · Polymarket + تسویه خودکار ESPN + ایجنت مدیر کانال عمومی/VIP · <span dir="ltr">@aineobet</span>
               </p>
             </div>
             {/* v8.0 — رادار چرخان مونت‌کارلو و سوپروایزر */}
             <SupervisorRadar className="hidden sm:inline-flex" />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* نشانگر زنده فید چند-API + دکمه همگام‌سازی */}
             <LiveSyncBadge />
 
@@ -289,6 +293,8 @@ export default function Home() {
             <FlashcardDeck />
             {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (بالای داشبورد سریع) */}
             <RolloverLadder startBank={100} />
+            {/* 💻 v24.0 — کنسول تعاملی QQL / AI RCA (زبان پرس‌وجوی علوم داده) */}
+            <QqlConsole />
             {/* 📅 v21.0 — برنامه روزانه حرفه‌ای پخش (زمان‌بندی مشخص عمومی + خصوصی) */}
             <DailyProgramBoard />
             <NewsTickerStrip />
@@ -389,6 +395,9 @@ export default function Home() {
               <CalibrationTab />
             </TabsContent>
 
+            <TabsContent value="reality">
+              <RealityTab />
+            </TabsContent>
             <TabsContent value="backtest">
               <BacktestTab />
             </TabsContent>
@@ -405,7 +414,7 @@ export default function Home() {
       <footer className="mt-auto border-t border-white/8 bg-[rgba(6,9,17,0.82)] backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:flex-row">
           <p>
-            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v19.0 Restore Edition (بازگشت به معماری برنده همپوشانی دوقلو) · ⚖️ سه الگوی طلایی G1/G2/G3 با ناحیه برد دوبل 1-0/2-0 (Double-Win +۱۲۰..+۱۸۰u) + فیلتر طلایی ضریب همپوشانی مثبت (impliedSum ≤ ۰.۸۶ · حاشیه تضمینی ≥ ۱۵٪ · برد دوبل ≥ ۱۲٪ · ریسک تله میانی ≤ ۱۱.۵٪ — مابقی وتو و دفتر سایه) + تخصیص نامتقارن ۶۵u/۳۵u + سپر استاپ‌لاس زنده دقیقه ۶۵ (−۴۵.۰u در تله میانی) + رژیم زیان‌ده خوشه نتیجه دقیق (−۱۶u) غیرفعال + خط لوله ترکیبی ESPN · TheSportsDB · Polymarket · Hybrid Poisson بدون قفل توقف + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت settledCards + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
+            <b className="text-amber-300" dir="ltr">NEOBET QUANT PRO • @AINEOBET</b> — v24.5 Shadow Ledger Alpha (بازیابی فوری فید زنده · حذف اندپوینت مسدودکننده ESPN Core · ممیزی دفتر سایه: 💎 ارتقایافته به بانک اصلی + 🚫 وتوی واقعی · گیت ریسک ۱۴.۵٪ / λ_Fav ۱.۱۲ / همپوشانی ≤ ۰.۸۶۵) · ⚛️ استخر باز M1..M12 با ۶۶ ترکیب · 🔬 QQL ۴ مرحله‌ای + سه الگوی طلایی G1/G2/G3 + تخصیص نامتقارن ۶۵u/۳۵u + بانک ۱,۰۰۰ واحدی با منبع واحد حقیقت computeMasterLedgerMetrics + ماژول حرفه‌ای منحنی بانک (روزانه/هفتگی/ماهانه + برد/باخت) + تسویه خودکار ESPN + هسته موتور مستقل از مرورگر (دیمن همیشه‌گرم)
           </p>
           <p className="flex items-center gap-1.5">
             <Database className="size-3.5" />

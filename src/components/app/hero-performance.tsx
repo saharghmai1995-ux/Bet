@@ -864,8 +864,9 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
           }
         : null;
 
-    // v18.0 — حصاد نقره‌ای: وقتی سوییچ تاج نقره‌ای روشن است، سود واقعی کارت‌های سطح ۲
-    // (تسویه‌شده با استیک ۵۰ واحدی) روی تیتر بانک اضافه می‌شود — همان تزریق +X واحد از دل دفتر سایه.
+    // v18.0 — حصاد نقره‌ای: سود واقعی کارت‌های سطح ۲ (تسویه‌شده با استیک ۵۰ واحدی).
+    // v25.0 — منحنی سرور «ترکیبی دو کتاب واقعی» است (طلایی + نقره‌ای منتشرشده)،
+    // پس تیتر بانک مستقیماً eq.finalBank است و جمع سمت کلاینت حذف شد (ضد دوبارشماری).
     const silver = ledger?.silverHarvest;
     const silverNetOn = shadowHarvestOn && silver ? silver.netProfit : 0;
     const silverSettledOn = shadowHarvestOn && silver ? silver.settled : 0;
@@ -878,10 +879,10 @@ export function HeroPerformance({ onOpenSha }: { onOpenSha: () => void }) {
         winPct,
         breakdown,
         curve: downsampleEvenly(eq.points, 31),
-        roi: Math.round(((eq.finalBank + silverNetOn - START_BANK) / START_BANK) * 1000) / 10,
+        roi: Math.round(((eq.finalBank - START_BANK) / START_BANK) * 1000) / 10,
         settledCount: settled + (shadowHarvestOn && silver ? silver.settled : 0),
-        finalBank: Math.round((eq.finalBank + silverNetOn) * 100) / 100,
-        curveBasis: eq.basis + silverSettledOn,
+        finalBank: eq.finalBank,
+        curveBasis: eq.basis,
         eqFrom: eq.firstSettledAt ?? null,
         eqTo: eq.lastSettledAt ?? null,
         silverAdded: silverNetOn,

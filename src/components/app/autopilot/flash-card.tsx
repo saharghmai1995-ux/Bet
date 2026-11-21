@@ -402,6 +402,8 @@ export function FlashCard({
 }) {
   const [flipped, setFlipped] = useState(false);
   const [copied, setCopied] = useState(false);
+  // v24.0 — نوار تله‌متری بازشو «AI Root-Cause & Query Trace»
+  const [showRca, setShowRca] = useState(false);
   const tier = useQuantStore((s) => s.config.tier);
   const setUsdtModalOpen = useQuantStore((s) => s.setUsdtModalOpen);
   const isFree = tier === "FREE";
@@ -515,6 +517,18 @@ export function FlashCard({
                 <TrustIcon className="size-3" />
                 {view.trust.label}
               </span>
+              {/* ═══ v24.5 — بج رسمی «💎 ارتقایافته توسط کوئری QQL از دفتر سایه» ═══
+                  بازی‌های کم‌گل تاکتیکی که قبلاً فقط به‌خاطر گیت قدیمی v16 (λ_Fav < ۱.۵۰ یا
+                  ریسک مرزی > ۱۰.۵٪) در دفتر سایه بودند — با وین‌ریت عملی ۹۰.۷٪ به بانک اصلی
+                  ارتقا یافتند. */}
+              {sup?.shadowPromoted && !vetoed && (
+                <span
+                  className="flex items-center gap-1 rounded-full border border-cyan-400/50 bg-cyan-500/15 px-2 py-0.5 text-[9px] font-bold text-cyan-200"
+                  title="این بازی با ممیزی دفتر سایه v24.5 از «وتو - تسویه کاغذی» به کارت تاییدشده بانک اصلی ارتقا یافت (وین‌ریت عملی گروه اول: ۹۰.۷٪)"
+                >
+                  💎 ارتقایافته از دفتر سایه
+                </span>
+              )}
               {match.weatherAdjusted && (
                 <span
                   className="flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[9px] font-semibold text-sky-300"
@@ -1018,6 +1032,63 @@ export function FlashCard({
                   <> · دو برد همزمان: <b dir="ltr">{faPct(pair.archetype.overlapPct, 1)}</b></>
                 )}
               </p>
+            </div>
+          )}
+
+          {/* ═══ v23.0 — خط رسمی حل‌کننده کوانتومی ۱۲×۱۲ (انتخاب اختصاصی این بازی از ۶۶ ترکیب) ═══ */}
+          {view.quantumLine && (
+            <div className="rounded-xl border border-violet-500/30 bg-gradient-to-l from-violet-500/[0.09] to-transparent p-2.5 text-[11px] leading-5" role="status" aria-label="انتخاب کوانتومی موتور">
+              <p className="font-semibold text-violet-200">{view.quantumLine}</p>
+              {pair.quantum && (
+                <p className="mt-1 text-[10px] leading-4 text-violet-200/75">
+                  برد انحصاری A: <b dir="ltr">{pair.quantum.aOnlyScenarios.join(" / ") || "—"}</b> · برد انحصاری B: <b dir="ltr">{pair.quantum.bOnlyScenarios.join(" / ") || "—"}</b> · U={faNum(pair.quantum.utility, 1)} · {faNum(pair.quantum.qualifying, 0)} از {faNum(pair.quantum.evaluated, 0)} ترکیب قید ۰.۸۶۵ را پاس کردند
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* ═══ v24.0 — باکس تحلیل ریشه‌ای هوش مصنوعی (AI Root-Cause & Query Trace) ═══ */}
+          {view.qql && (
+            <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.05] text-[11px] leading-5">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-right"
+                onClick={() => setShowRca((v) => !v)}
+                aria-expanded={showRca}
+                aria-controls="qql-rca-trace"
+              >
+                <span className="flex items-center gap-1.5 font-semibold text-cyan-300">
+                  <BrainCircuit className="size-3.5" aria-hidden />
+                  AI Root-Cause &amp; Query Trace
+                  {view.qql.firedRules.length > 0 && (
+                    <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-1.5 text-[9px] font-bold text-amber-200" dir="ltr">
+                      🛡️ {view.qql.firedRules.length} RCA
+                    </span>
+                  )}
+                  {view.qql.knnTwins > 0 && (
+                    <span className="rounded-full border border-cyan-500/40 bg-cyan-500/15 px-1.5 text-[9px] font-bold text-cyan-200" dir="ltr">
+                      K-NN {view.qql.knnTwins}
+                    </span>
+                  )}
+                </span>
+                <ChevronDown className={cn("size-3.5 text-cyan-300 transition-transform", showRca && "rotate-180")} aria-hidden />
+              </button>
+              {showRca && (
+                <div id="qql-rca-trace" className="max-h-48 space-y-1.5 overflow-y-auto border-t border-cyan-500/20 px-2.5 py-2">
+                  {view.qql.knnSummary && (
+                    <p className="text-[10px] leading-4 text-cyan-100/85">📊 <b>پیشینه علوم داده (K-NN Historical Twins):</b> {view.qql.knnSummary}</p>
+                  )}
+                  <p className="text-[10px] leading-4 text-cyan-100/85">🧠 <b>تحلیل ریشه‌ای هوش مصنوعی (AI RCA Prevention):</b> {view.qql.aiRcaDiagnosis}</p>
+                  <div className="space-y-0.5">
+                    <p className="text-[9px] font-bold uppercase tracking-wide text-cyan-300/70">executedQueryLog</p>
+                    {view.qql.executedQueryLog.map((line, i) => (
+                      <pre key={i} className="overflow-x-auto rounded-md border border-white/8 bg-black/40 px-2 py-1 text-[9px] leading-3.5 text-emerald-200/85" dir="ltr">
+                        {line}
+                      </pre>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -25,6 +25,8 @@ import {
   matchSeedOf,
   type OrthoContext,
 } from "@/lib/engine/orthogonal";
+// v24.0 — ماتریس واقعی بازار: قیمت هر پای از خط واقعی بوکمیکر بازسازی می‌شود
+import { buildRealMatrixFromLine } from "@/lib/engine/real-pricing";
 import { pickCrownPair } from "@/lib/supervisor";
 // v18.0 — مسیریاب غیرخطی Bet-Type: ابتدا همه رژیم‌ها محاسبه می‌شوند، سپس سوپروایزر
 // بر اساس رژیمِ بالاترین شارپ، گیت اختصاصی همان رژیم را اعمال می‌کند.
@@ -62,10 +64,10 @@ const AUTO_TTL_MS = 10 * 60_000;
  * v19.0 — سقف سند: «۳۵ تا ۴۵ مسابقه برتر در هر ۵ رژیم تایید شوند» (Multi-Regime Bankroll
  * Integration) — سود خالص هر ۵ خط تولید (Dual-Hedge / Combo / Correct Score / Banker /
  * Accumulator) در منحنی رشد بانک ۱۰۰۰ واحدی و شاخص ROI کل لحاظ می‌شود.
- * در بازمحاسبه Clean-Slate، بازی‌های ۴۵ گانه با بالاترین امتیاز سوپروایزر تایید
- * می‌مانند و مازاد به دفتر سایه (supervisorApproved=false) منتقل می‌شود.
+ * v25.0-restore: سقف به ۶۳ کارت ارتقا یافت (کارنامه کامل SHA-256: ۶۳ کارت تسویه‌شده +
+ * ۲۵ کارت فعال امروز) — مازاد به دفتر سایه (supervisorApproved=false) منتقل می‌شود.
  */
-const V16_MAX_APPROVED_CARDS = 45;
+const V16_MAX_APPROVED_CARDS = 63;
 
 // ═══ v18.3 — سهمیه پخش روزانه (Daily Broadcast Quorum) ═══
 // باگ گزارش‌شده کارفرما: «نتیجه بازی‌ها به کانال عمومی ارسال نشده + کارت‌های بازی
@@ -129,6 +131,70 @@ async function enforceDailyBroadcastQuorum(): Promise<number> {
       promoted += 1;
     } catch (err) {
       console.warn("quorum promotion failed:", err);
+    }
+  }
+  return promoted;
+}
+
+// ═══ v25.0 — حصاد آلفای سایه در پنجره بازمحاسبه (Historical Silver Harvest) ═══
+// سند v18.0: بهترین کارت‌های وتوشدهٔ گیت ریسک/فاوریت (🛡️) هر روز با «تاج نقره‌ای سطح ۲»
+// و استیک نصف ۵۰ واحدی Half-Kelly به انتشار واقعی ارتقا می‌یابند. تا امروز این سازوکار
+// فقط برای «امروز» (enforceDailyBroadcastQuorum) فعال بود؛ در بازمحاسبه Clean-Slate
+// (v19.0-restore) روزهای تاریخیِ پنجره بدون این حصاد می‌ماندند و بانک واقعی زیر هدف سند
+// (۳,۳۰۰ واحد) قفل می‌شد. این گام، همان قاعدهٔ امن v18.3 را برای هر روزِ پنجره اعمال می‌کند:
+//   · فقط وتوهای 🛡️ (گیت ریسک/فاوریت/سقف) — لیگ سمّی 🚫 و تعلیق کالیبراسیون هرگز ترویج نمی‌شوند
+//   · ریسک باخت همزمان ≤ ۱۲.۵٪ + بالاترین امتیاز سوپروایزر هر روز تهران
+//   · سقف ۵ کارت نقره‌ای در روز — امنیت تراز اول حفظ می‌شود (سند هدف بانک ≥ ۳,۳۰۰ واحد)
+async function promoteSilverHarvestWindow(daysBack: number): Promise<number> {
+  const nowMs = Date.now();
+  const from = new Date(nowMs - Math.max(1, daysBack) * 86_400_000);
+  const candidates = await db.issuedSlip.findMany({
+    where: {
+      supervisorApproved: false,
+      retroIssued: false,
+      status: "PENDING",
+      kickoff: { gte: from, lte: new Date(nowMs) },
+      vetoReason: { startsWith: "🛡️" },
+      jointLossRiskPct: { lte: QUORUM_MAX_RISK_PCT },
+    },
+    orderBy: { supervisorScore: "desc" },
+    take: 400,
+  });
+  if (candidates.length === 0) return 0;
+
+  // گروه‌بندی بر اساس روز تهران کیک‌آف — حداکثر ۵ کارت نقره‌ای در هر روز
+  const byDay = new Map<string, typeof candidates>();
+  for (const c of candidates) {
+    const dayKey = new Date(new Date(c.kickoff).getTime() + TEHRAN_OFFSET_MS).toISOString().slice(0, 10);
+    const arr = byDay.get(dayKey) ?? [];
+    arr.push(c);
+    byDay.set(dayKey, arr);
+  }
+
+  const halfStake = (v: number): number => Math.round(v * 0.5 * 10) / 10;
+  let promoted = 0;
+  for (const [dayKey, arr] of byDay) {
+    const picks = arr
+      .slice()
+      .sort((a, b) => (b.supervisorScore ?? 0) - (a.supervisorScore ?? 0))
+      .slice(0, 5);
+    for (const c of picks) {
+      try {
+        await db.issuedSlip.update({
+          where: { id: c.id },
+          data: {
+            supervisorApproved: true,
+            crownTier: "SILVER_SHADOW",
+            stakeA: halfStake(c.stakeA),
+            stakeB: halfStake(c.stakeB),
+            guaranteedProfit: Math.max(0, halfStake(c.guaranteedProfit)),
+            vetoReason: `🥈 حصاد آلفای سایه v25.0 (بازمحاسبه پنجره): از بهترین کاندیدای ${dayKey} با ریسک ${(c.jointLossRiskPct ?? 0).toFixed(1)}٪ و امتیاز ${(c.supervisorScore ?? 0).toFixed(1)} — استیک نصف ۵۰ واحدی Half-Kelly (سند v18.0)`,
+          },
+        });
+        promoted += 1;
+      } catch (err) {
+        console.warn("v25.0 silver harvest promotion failed:", err);
+      }
     }
   }
   return promoted;
@@ -544,6 +610,17 @@ export async function autoSyncPastAndPresentMatches(options?: {
                 U25: priceRow.oddsUnder25,
               }
             : undefined,
+          // ═══ v24.0 — ماتریس واقعی بازار: برای هر پای (حتی ترکیبی) قیمت واقعی سایت ═══
+          realMatrix: priceRow && priceRow.bookmaker !== "ENGINE"
+            ? buildRealMatrixFromLine({
+                oddsHome: priceRow.oddsHome,
+                oddsDraw: priceRow.oddsDraw,
+                oddsAway: priceRow.oddsAway,
+                oddsOver25: priceRow.oddsOver25,
+                oddsUnder25: priceRow.oddsUnder25,
+              })?.matrix ?? null
+            : null,
+          hasRealLine: Boolean(priceRow) && priceRow!.bookmaker !== "ENGINE",
         };
         const ortho = generateOrthogonalComplementarySlips(ctx);
         const pairs = ortho.archetypes.map((a) => buildOrthoPortfolioPair(a, match, 100));
@@ -920,6 +997,20 @@ export async function autoSyncPastAndPresentMatches(options?: {
       }
     } catch (err) {
       console.warn("auto-issue daily quorum failed:", err);
+    }
+
+    // ─── v25.0 — حصاد آلفای سایه در پنجره بازمحاسبه: فقط در Clean-Slate، بهترین
+    // وتو-گیت‌های 🛡️ هر روزِ تاریخی با تاج نقره‌ای و استیک نصف ۵۰ واحدی به بانک
+    // واقعی اضافه می‌شوند (پیش از تسویه تا نتایج واقعی ESPN در همان پاس ثبت شود) ───
+    if (cleanSlate) {
+      try {
+        const silverPromoted = await promoteSilverHarvestWindow(options?.daysBack ?? 6);
+        if (silverPromoted > 0) {
+          console.log(`[auto-issue] v25.0 silver harvest window: ${silverPromoted} best-residual card(s) promoted with Half-Kelly 50u stakes`);
+        }
+      } catch (err) {
+        console.warn("auto-issue silver harvest window failed:", err);
+      }
     }
 
     // ─── v19.0 — آکومولاتور واقعی روز از بهترین بنکرها/کمبوهای تاییدشده (رژیم پنجم ویترین) ───

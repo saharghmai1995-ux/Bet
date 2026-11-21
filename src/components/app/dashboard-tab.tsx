@@ -26,6 +26,7 @@ import { TacticalPitch } from "@/components/app/fx/tactical-pitch";
 import { PulseFlow, type FlowNode } from "@/components/app/fx/pulse-flow";
 import { AnimNum } from "@/components/app/fx/anim-num";
 import { RolloverLadder } from "@/components/app/autopilot/rollover-ladder";
+import { QqlConsole } from "@/components/app/qql-console";
 import { useQuantStore } from "@/lib/store";
 import {
   categoryForLeagueName,
@@ -140,6 +141,9 @@ export function DashboardTab({ loading, analyzedCount, onAnalyze, onRefresh, onG
 
       {/* 🪜 v11.0 — نردبان سود مرکب ۳ پله‌ای (کنار جریان فلش‌کارت‌ها) */}
       <RolloverLadder startBank={100} />
+
+      {/* 💻 v24.0 — کنسول تعاملی QQL / AI RCA (زبان پرس‌وجوی علوم داده) */}
+      <QqlConsole />
 
       {/* رادار اسکنر خودکار زنده (v3.0) */}
       {autopilotRadar}
